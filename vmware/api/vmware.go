@@ -5,13 +5,12 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
 
-	"github.com/go-kit/log"
-	"github.com/go-kit/log/level"
 	"github.com/prezhdarov/prometheus-exporter/collector"
 
 	"github.com/vmware/govmomi/performance"
@@ -26,7 +25,7 @@ var (
 	vmwPasswd     = flag.String("vmware.password", "", "Password for the user above")
 	vCenter       = flag.String("vmware.vcenter", "", "vCenter server address in host:port format. This is not the vCenter Management Console")
 	vmwSchema     = flag.String("vmware.schema", "https", "Use HTTP or HTTPS")
-	vmwSSL        = flag.Bool("vmware.ssl", false, "Verify vCenter SSL or trust")
+	vmwTLS        = flag.Bool("vmware.insecureTLS", false, "Trust insecure vCenter TLS (true) or verify (default)")
 	vmwInterval   = flag.Int("vmware.interval", 20, "How often data will be collected. Default is every 20s.")
 	vmGranularity = flag.Int("vmware.granularity", 20, "The frequency of the sampled data. Default is 20s")
 
@@ -48,13 +47,13 @@ func NewAPI() *VMware {
 	return &VMware{}
 }
 
-func Load(logger log.Logger) {
+func Load(logger *slog.Logger) {
 
-	level.Info(logger).Log("msg", "Loading VMware vSphere API")
+	logger.Info("msg", "Loading VMware vSphere API", nil)
 
 }
 
-func (vm *VMware) Login(target string, logger log.Logger) (map[string]interface{}, error) {
+func (vm *VMware) Login(target string, logger *slog.Logger) (map[string]interface{}, error) {
 
 	loginData := make(map[string]interface{}, 0)
 
@@ -88,7 +87,7 @@ func (vm *VMware) Login(target string, logger log.Logger) (map[string]interface{
 	return loginData, nil
 }
 
-func (vm *VMware) Logout(loginData map[string]interface{}, logger log.Logger) error {
+func (vm *VMware) Logout(loginData map[string]interface{}, logger *slog.Logger) error {
 
 	/*
 		url := fmt.Sprintf("%s://%s/api/session", *vmwSchema, loginData["target"].(string))
@@ -121,7 +120,7 @@ func (vm *VMware) Logout(loginData map[string]interface{}, logger log.Logger) er
 	return nil, fmt.Errorf("wrong or undefined target type")
 }*/
 
-func (vm *VMware) Get(loginData, extraConfig map[string]interface{}, logger log.Logger) (interface{}, error) {
+func (vm *VMware) Get(loginData, extraConfig map[string]interface{}, logger *slog.Logger) (interface{}, error) {
 
 	url := fmt.Sprintf("%s://%s%s", *vmwSchema, loginData["target"], extraConfig["api"])
 
@@ -137,7 +136,7 @@ func (vm *VMware) Get(loginData, extraConfig map[string]interface{}, logger log.
 func request(method, url string, headers map[string]string, login bool) (int, string, []byte, error) {
 
 	transport := http.DefaultTransport
-	transport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: !*vmwSSL}
+	transport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: *vmwTLS}
 	client := &http.Client{
 		Transport: transport,
 		Timeout:   time.Duration(*vmwInterval-2) * time.Second,
@@ -165,7 +164,7 @@ func request(method, url string, headers map[string]string, login bool) (int, st
 
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 
 	if err != nil {
 		return 0, "", nil, err
@@ -212,7 +211,7 @@ func govmomiLogin(loginData map[string]interface{}) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*vmwInterval-2)*time.Second)
 
-	session := &cache.Session{URL: urlx, Insecure: !*vmwSSL, Passthrough: true}
+	session := &cache.Session{URL: urlx, Insecure: *vmwTLS, Passthrough: true}
 
 	client := new(vim25.Client)
 

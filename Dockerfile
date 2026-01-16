@@ -1,14 +1,11 @@
-FROM golang:alpine as builder
+FROM golang:alpine AS builder
 
 # Add ca-certs
 RUN apk add --update --no-cache ca-certificates
 
 # Set necessary environmet variables needed for our image
 ENV GO111MODULE=on \
-    CGO_ENABLED=0 \
-    GOOS=linux \
-    GOARCH=amd64 \
-    GOAMD64=v2
+    CGO_ENABLED=0
 
 ADD . /build
 WORKDIR /build

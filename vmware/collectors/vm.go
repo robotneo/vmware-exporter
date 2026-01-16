@@ -4,11 +4,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/go-kit/log"
-	"github.com/go-kit/log/level"
 	"github.com/prezhdarov/prometheus-exporter/collector"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vmware/govmomi/performance"
@@ -36,7 +36,7 @@ var (
 )
 
 type vmCollector struct {
-	logger log.Logger
+	logger *slog.Logger
 }
 
 func init() {
@@ -44,7 +44,7 @@ func init() {
 }
 
 // NewMeminfoCollector returns a new Collector exposing memory stats.
-func NewvmCollector(logger log.Logger) (collector.Collector, error) {
+func NewvmCollector(logger *slog.Logger) (collector.Collector, error) {
 	return &vmCollector{logger}, nil
 }
 
@@ -60,7 +60,7 @@ func (c *vmCollector) Update(ch chan<- prometheus.Metric, namespace string, clie
 
 	err := fetchProperties(
 		loginData["ctx"].(context.Context), loginData["view"].(*view.Manager), loginData["client"].(*vim25.Client),
-		[]string{"VirtualMachine"}, []string{"summary", "runtime", "storage"}, &vms, c.logger,
+		[]string{"VirtualMachine"}, []string{"summary", "runtime", "storage", "snapshot", "snapshot.rootSnapshotList", "snapshot.currentSnapshot"}, &vms, c.logger,
 	)
 	if err != nil {
 		return err
@@ -112,39 +112,70 @@ func (c *vmCollector) Update(ch chan<- prometheus.Metric, namespace string, clie
 					), prometheus.GaugeValue, float64(datastore.Committed),
 				)
 			}
+			// Check if the VM has any snapshots, set value of metric to unix timestamp of snapshot creation time
+			if vm.Snapshot != nil {
+				c.logger.Debug("msg", fmt.Sprintf("VM %s has snapshots", vm.Summary.Config.Name), nil)
+				for _, rootSnap := range vm.Snapshot.RootSnapshotList {
+					snapDate := rootSnap.CreateTime.Format(time.RFC3339)
+					// Check snapshot name and description if it contains the string "[keep]". If yes, set keepSnap to true.
+					keepSnap := false
+					if rootSnap.Name != "" {
+						if strings.Contains(rootSnap.Name, "[keep]") {
+							keepSnap = true
+						}
+					}
+					if rootSnap.Description != "" {
+						if strings.Contains(rootSnap.Description, "[keep]") {
+							keepSnap = true
+						}
+					}
+					ch <- prometheus.MustNewConstMetric(
+						prometheus.NewDesc(
+							prometheus.BuildFQName(namespace, vmSubsystem, "snapshot_info"),
+							"Unix timestamp since snapshot creation", nil,
+							map[string]string{"vmmo": vm.Self.Value, "vm": vm.Summary.Config.Name,
+								"vcenter": loginData["target"].(string), "snapshot_create_time": snapDate, "snapshot_keep": fmt.Sprintf("%t", keepSnap)},
+						), prometheus.GaugeValue, float64(rootSnap.CreateTime.Unix()),
+					)
+				}
+			}
 		}
 
 	}
 
-	level.Debug(c.logger).Log("msg", fmt.Sprintf("Time to process PropColletor for VM: %f\n", time.Since(begin).Seconds()))
+	c.logger.Debug("msg", fmt.Sprintf("Time to process PropColletor for VM: %f\n", time.Since(begin).Seconds()), nil)
 
 	begin = time.Now()
 
-	wg.Add(2)
-	for i := 0; i < 2; i++ {
-		switch {
-		case i == 0:
-			go func(i int) {
-				scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), loginData["interval"].(int32), loginData["perf"].(*performance.Manager),
-					loginData["target"].(string), "VirtualMachine", namespace, vmSubsystem, "", cVMCounters,
-					loginData["counters"].(map[string]*types.PerfCounterInfo), vmRefs, vmNames)
-				wg.Done()
-			}(i)
+	if len(vmRefs) > 0 {
 
-		case i == 1:
-			go func(i int) {
-				scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), loginData["interval"].(int32), loginData["perf"].(*performance.Manager),
-					loginData["target"].(string), "VirtualMachine", namespace, vmSubsystem, "*", iVMCounters,
-					loginData["counters"].(map[string]*types.PerfCounterInfo), vmRefs, vmNames)
-				wg.Done()
-			}(i)
+		wg.Add(2)
+		for i := 0; i < 2; i++ {
+			switch {
+			case i == 0:
+				go func(i int) {
+					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), loginData["interval"].(int32), loginData["perf"].(*performance.Manager),
+						loginData["target"].(string), "VirtualMachine", namespace, vmSubsystem, "", cVMCounters,
+						loginData["counters"].(map[string]*types.PerfCounterInfo), vmRefs, vmNames)
+					wg.Done()
+				}(i)
+
+			case i == 1:
+				go func(i int) {
+					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), loginData["interval"].(int32), loginData["perf"].(*performance.Manager),
+						loginData["target"].(string), "VirtualMachine", namespace, vmSubsystem, "*", iVMCounters,
+						loginData["counters"].(map[string]*types.PerfCounterInfo), vmRefs, vmNames)
+					wg.Done()
+				}(i)
+			}
+
 		}
+
+		wg.Wait()
 
 	}
 
-	wg.Wait()
-
-	level.Debug(c.logger).Log("msg", fmt.Sprintf("Time to process PerfMan for VM: %f\n", time.Since(begin).Seconds()))
+	c.logger.Debug("msg", fmt.Sprintf("Time to process PerfMan for VM: %f\n", time.Since(begin).Seconds()), nil)
 
 	return nil
 }

@@ -4,11 +4,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
-	"github.com/go-kit/log"
-	"github.com/go-kit/log/level"
 	"github.com/prezhdarov/prometheus-exporter/collector"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vmware/govmomi/performance"
@@ -38,14 +37,14 @@ var (
 )
 
 type hostCollector struct {
-	logger log.Logger
+	logger *slog.Logger
 }
 
 func init() {
 	collector.RegisterCollector("host", hostCollectorFlag, NewhostCollector)
 }
 
-func NewhostCollector(logger log.Logger) (collector.Collector, error) {
+func NewhostCollector(logger *slog.Logger) (collector.Collector, error) {
 	return &hostCollector{logger}, nil
 }
 
@@ -78,7 +77,7 @@ func (c *hostCollector) Update(ch chan<- prometheus.Metric, namespace string, cl
 
 			hostNames[host.Self.Value] = host.Summary.Config.Name
 
-			level.Debug(c.logger).Log("msg", fmt.Sprintf("gathering metrics for host %s with moRef %s\n", host.Summary.Config.Name, host.Self.Value))
+			c.logger.Debug("msg", fmt.Sprintf("gathering metrics for host %s with moRef %s\n", host.Summary.Config.Name, host.Self.Value), nil)
 
 			ch <- prometheus.MustNewConstMetric(
 				prometheus.NewDesc(
@@ -141,37 +140,39 @@ func (c *hostCollector) Update(ch chan<- prometheus.Metric, namespace string, cl
 		}
 	}
 
-	level.Debug(c.logger).Log("msg", fmt.Sprintf("Time to process PropColletor for Host: %f\n", time.Since(begin).Seconds()))
+	c.logger.Debug("msg", fmt.Sprintf("Time to process PropColletor for Host: %f\n", time.Since(begin).Seconds()), nil)
 
-	level.Debug(c.logger).Log("msg", fmt.Sprintf("Max samples set to %d\n", loginData["samples"].(int32)))
+	c.logger.Debug("msg", fmt.Sprintf("Max samples set to %d\n", loginData["samples"].(int32)), nil)
 
 	begin = time.Now()
 
-	wg.Add(2)
-	for i := 0; i < 2; i++ {
-		switch {
-		case i == 0:
-			go func(i int) {
-				scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), loginData["interval"].(int32), loginData["perf"].(*performance.Manager),
-					loginData["target"].(string), "HostSystem", namespace, hostSubsystem, "", cHostCounters,
-					loginData["counters"].(map[string]*types.PerfCounterInfo), hostRefs, hostNames)
-				wg.Done()
-			}(i)
+	if len(hostRefs) > 0 {
 
-		case i == 1:
-			go func(i int) {
-				scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), loginData["interval"].(int32), loginData["perf"].(*performance.Manager),
-					loginData["target"].(string), "HostSystem", namespace, hostSubsystem, "*", iHostCounters,
-					loginData["counters"].(map[string]*types.PerfCounterInfo), hostRefs, hostNames)
-				wg.Done()
-			}(i)
+		wg.Add(2)
+		for i := 0; i < 2; i++ {
+			switch {
+			case i == 0:
+				go func(i int) {
+					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), loginData["interval"].(int32), loginData["perf"].(*performance.Manager),
+						loginData["target"].(string), "HostSystem", namespace, hostSubsystem, "", cHostCounters,
+						loginData["counters"].(map[string]*types.PerfCounterInfo), hostRefs, hostNames)
+					wg.Done()
+				}(i)
+
+			case i == 1:
+				go func(i int) {
+					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), loginData["interval"].(int32), loginData["perf"].(*performance.Manager),
+						loginData["target"].(string), "HostSystem", namespace, hostSubsystem, "*", iHostCounters,
+						loginData["counters"].(map[string]*types.PerfCounterInfo), hostRefs, hostNames)
+					wg.Done()
+				}(i)
+			}
+
 		}
 
+		wg.Wait()
 	}
-
-	wg.Wait()
-
-	level.Debug(c.logger).Log("msg", fmt.Sprintf("Time to process PerfMan for Host: %f\n", time.Since(begin).Seconds()))
+	c.logger.Debug("msg", fmt.Sprintf("Time to process PerfMan for Host: %f\n", time.Since(begin).Seconds()), nil)
 
 	return nil
 }
