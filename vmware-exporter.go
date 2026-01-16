@@ -31,7 +31,7 @@ var (
 )
 
 func usage() {
-	const s = `vmware-exporter collects metrics data from VMware vCenter. `
+	s := fmt.Sprintf("%s collects metrics data from VMware vCenter. ", exporterName)
 	config.Usage(s)
 }
 
@@ -64,16 +64,16 @@ func main() {
 	})
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`
-			<head><title>VMware vSphere Exporter</title></head>
+			<head><title>` + exporterName + `</title></head>
 			<body>
-			<h1>VMware vSphere Exporter</h1>
+			<h1>` + exporterName + `</h1>
 			<p><a href="/metrics">Metrics</a></p>
 			<p><a href="/probe">Probe</a></p>
 			</body>
 			</html>`))
 	})
 
-	logger.Info("msg", "listening on", "address", *listenAddress, nil)
+	logger.Info("Starting "+exporterName, "listening_on", *listenAddress)
 
 	server := &http.Server{}
 
