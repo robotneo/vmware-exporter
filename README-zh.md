@@ -20,7 +20,7 @@ cd /opt/vmware
 mv vmware-exporter /usr/bin
 
 # 把 vmware.conf 文件放入 /etc/vmware-exporter/ 目录中，vmware.conf 通过命令行选项加载参数
-ARGS="-vmware.username=administrator@vsphere.local -vmware.password=public@123 -vmware.vcenter=172.16.10.1:443"
+ARGS="-vmware.username=administrator@vsphere.local -vmware.password=public@123 -vmware.vcenter=172.16.10.1:443 -vmware.insecureTLS"
 # 更多参数 可通过空格进行添加 
 
 # 复制项目中 system 目录下的 vmware-exporter.service 文件到 /etc/systemd/system/ 目录中，实现 systemd 管理 vmware-exporter 服务。
@@ -43,7 +43,8 @@ docker run -d \
   -vmware.password=public@123 \
   -vmware.vcenter=172.16.10.1 \
   -vmware.granularity=20 \
-  -vmware.interval=20
+  -vmware.interval=20 \
+  -vmware.insecureTLS
 ```
 
 说明下：-vmware.granularity 和 -vmware.interval 不能低于 20s ，这是由于vCenter的限制。
@@ -73,42 +74,67 @@ scrape_configs:
 
 可以通过命令行选项、环境变量、yaml 配置文件或三者的组合来配置输出程序，设置的环境变量将被配置文件的内容覆盖，然后被启动时设置的任何命令行选项覆盖，可用的选项如下：
 
-> 通用参数
+# VMware Exporter 配置指南
 
-| Option      | Description |
-| ----------- | ----------- |
-| -envflag.enable   | 告诉导出器在配置中使用环境变量  |
-| -envflag.prefix	| 如果开启 -envflag.enable 可以设置环境变量的前缀    |
-| -file	            | 沿用命令行选项结构的 yaml 配置文件的路径  |
-| -http.address		| 导出器将绑定的地址和端口，格式为 host:端口（默认：":9169）  |
-| -log.format	    | 日志输出格式可以是 json 或 logfmt（默认值：logfmt）   |
-| -log.level	    | 日志输出级别可以是 debug、info、warn 或 error 之一（默认值：debug）  |
-| -prim.maxRequests	| 最大并行抓取请求数（默认值：20）  |
-| -disable.exporter.metrics	| 禁用 /metrics 路径中的导出器指标。如果 /metrics 目标被禁用，则始终启用（默认值为 true）   |
-| -disable.exporter.target	| 禁用 /metrics 路径的默认目标  |
-| -disable.default.collectors	| 如果设置此选项，则只有明确显示启用的采集器才会被启用  |
+本项目支持通过命令行参数进行详细配置。以下是各参数的分类说明与使用示例。
 
-> 指标参数
+## 参数列表
 
-| Option      | Description |
-| ----------- | ----------- |
-| -collector.datacenter | 启用或禁用 数据中心 指标收集（默认值：启用）  |
-| -collector.cluster    | 启用或禁用 集群 指标收集（默认：启用）  |
-| -collector.datastore	| 启用或禁用 存储 指标收集（默认：启用）  |
-| -collector.host		| 启用或禁用 主机 指标收集（默认：启用）  |
-| -collector.vm		    | 启用或禁用 虚拟机 指标收集（默认：已启用）  |
-| -collector.esxcli.host.nic    | 使用通过 vCenter 调用的 esxcli 收集 ESXi NIC 固件信息（默认：禁用）   |
-| -collector.esxcli.storage		| 使用通过 vCenter 调用的 esxcli 收集 ESXi 存储固件信息（默认：已禁用） |
+### 1. vCenter 连接配置
+| 参数 | 类型 | 说明 | 默认值 |
+| :--- | :--- | :--- | :--- |
+| `-vmware.vcenter` | string | vCenter 服务器地址 (格式 `host:port`)。注意：这不是管理控制台地址。 | - |
+| `-vmware.username` | string | 登录 vCenter 的用户名。 | - |
+| `-vmware.password` | string | 登录 vCenter 的密码。 | - |
+| `-vmware.insecureTLS` | bool | 是否信任不安全的 TLS 证书（连接自签名证书的 vCenter 时需开启）。 | `false` |
+| `-vmware.schema` | string | 使用 HTTP 或 HTTPS 协议。 | `https` |
 
-> vCenter 信息参数
+### 2. 采集器开关 (Collectors)
+通过以下参数可以精确控制需要采集的数据类型，以优化性能。
 
-| Option      | Description |
-| ----------- | ----------- |
-| -vmware.granularity   | 采样数据的频率。默认值为20秒（默认为20）  |
-| -vmware.interval      | 数据收集的频率。默认每20秒收集一次（默认值为20）  |
-| -vmware.vcenter       | vCenter 服务器地址，格式为 host:port  |
-| -vmware.username      | vCenter 用户名  |
-| -vmware.password		| vCenter 密码  |
-| -vmware.schema        | HTTP 或 HTTPS （默认：HTTPS）|
-| -vmware.ssl		    | 验证 vCenter 的 SSL 证书或信任 |
+| 参数 | 类型 | 说明 | 默认值 |
+| :--- | :--- | :--- | :--- |
+| `-collector.cluster` | bool | 开启集群 (Cluster) 数据采集。 | `true` |
+| `-collector.datacenter` | bool | 开启数据中心 (Datacenter) 数据采集。 | `true` |
+| `-collector.datastore` | bool | 开启存储 (Datastore) 数据采集。 | `true` |
+| `-collector.host` | bool | 开启 ESXi 主机 (Host) 数据采集。 | `true` |
+| `-collector.vm` | bool | 开启虚拟机 (VM) 数据采集。 | `true` |
+| `-collector.esxcli.host.nic` | bool | 开启基于 esxcli 的主机网卡采集。 | `false` |
+| `-collector.esxcli.storage` | bool | 开启基于 esxcli 的存储采集。 | `false` |
+| `-disable.default.collectors` | bool | 禁用所有默认采集器，仅运行显式开启的采集器。 | `false` |
 
+### 3. 性能与采样设置
+| 参数 | 类型 | 说明 | 默认值 |
+| :--- | :--- | :--- | :--- |
+| `-vmware.interval` | int | 采集频率（单位：秒）。 | `20` |
+| `-vmware.granularity` | int | 采样数据的时间粒度。 | `20` |
+| `-prom.maxRequests` | int | 最大并行采集请求数（设为 0 则不限制）。 | `20` |
+
+### 4. 服务与日志配置
+| 参数 | 类型 | 说明 | 默认值 |
+| :--- | :--- | :--- | :--- |
+| `-http.address` | string | Exporter 监听的 HTTP 地址和端口。 | `:9169` |
+| `-log.level` | string | 日志级别: `debug`, `info`, `warn`, `error`。 | `debug` |
+| `-log.format` | string | 日志格式: `logfmt` 或 `json`。 | `logfmt` |
+| `-file` | string | 指定配置文件的路径。 | - |
+
+### 5. 环境变量集成
+| 参数 | 类型 | 说明 | 默认值 |
+| :--- | :--- | :--- | :--- |
+| `-envflag.enable` | bool | 是否允许从环境变量中读取配置。 | `false` |
+| `-envflag.prefix` | string | 环境变量的前缀（需配合 `-envflag.enable` 使用）。 | - |
+
+---
+
+## 启动示例
+
+### 基础启动 (推荐)
+针对大多数带有自签名证书的 vCenter 环境，建议开启 `-vmware.insecureTLS`：
+
+```bash
+./vmware-exporter \
+  -vmware.vcenter="172.16.10.1:443" \
+  -vmware.username="administrator@vsphere.local" \
+  -vmware.password="your_password" \
+  -vmware.insecureTLS \
+  -log.level="info"
