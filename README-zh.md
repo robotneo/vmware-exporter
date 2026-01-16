@@ -74,12 +74,6 @@ scrape_configs:
 
 可以通过命令行选项、环境变量、yaml 配置文件或三者的组合来配置输出程序，设置的环境变量将被配置文件的内容覆盖，然后被启动时设置的任何命令行选项覆盖，可用的选项如下：
 
-# VMware Exporter 配置指南
-
-本项目支持通过命令行参数进行详细配置。以下是各参数的分类说明与使用示例。
-
-## 参数列表
-
 ### 1. vCenter 连接配置
 | 参数 | 类型 | 说明 | 默认值 |
 | :--- | :--- | :--- | :--- |
@@ -138,3 +132,4 @@ scrape_configs:
   -vmware.password="your_password" \
   -vmware.insecureTLS \
   -log.level="info"
+```
