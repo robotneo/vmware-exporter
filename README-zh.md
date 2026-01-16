@@ -70,6 +70,82 @@ scrape_configs:
         replacement: 172.16.10.100:9169
 ```
 
+多凭证支持：
+
+- 可以在 `/probe` 路径上使用 `target` 参数指定要抓取的 vCenter 主机。
+- 所有指定的 vCenter 主机可不共享相同的用户名和密码。
+
+```yaml
+scrape_configs:
+  - job_name: 'vmware-vcenter'
+    scrape_interval: 60s
+    scrape_timeout: 55s
+    metrics_path: /probe
+    file_sd_configs:
+      - files:
+        - /etc/victoriametrics/vmagent/vmware_targets.yml
+        # refresh_interval: 5m
+    # 默认参数（可选）
+    params:
+      schema: ['https']
+      insecure: ['true']
+      collect[]: ['all'] # 启用所有 collectors
+      # collect[]: ['datacenter', 'host', 'vm']  # 只监控主要指标
+    relabel_configs:
+      # 从标签中提取 username 并设置为 URL 参数
+      - source_labels: [__meta_username]
+        target_label: __param_username
+      # 从标签中提取 password 并设置为 URL 参数
+      - source_labels: [__meta_password]
+        target_label: __param_password
+      # 可选：从标签中提取 schema
+      - source_labels: [__meta_schema]
+        target_label: __param_schema
+      # 可选：从标签中提取 insecure
+      - source_labels: [__meta_insecure]
+        target_label: __param_insecure
+      # 将 target 设置为 vCenter 地址
+      - source_labels: [__address__]
+        target_label: __param_target
+      # 设置 instance 标签
+      - source_labels: [__param_target]
+        target_label: instance
+      # 将实际抓取地址设置为 exporter 地址
+      - target_label: __address__
+        replacement: 172.17.40.25:9169
+      # 保留其他有用的标签（移除 __meta_ 前缀）
+      - source_labels: [__meta_env]
+        target_label: env
+      - source_labels: [__meta_datacenter]
+        target_label: datacenter
+```
+
+vmware_targets.yml 示例：
+
+```yaml
+- targets:
+  - 172.16.10.10
+  # - vcenter1.example.com
+  labels:
+    __meta_username: 'administrator@vsphere.local'
+    __meta_password: 'public@12345'
+    __meta_schema: 'https'
+    __meta_insecure: 'true'
+    __meta_env: 'prod'  # 可删除
+    __meta_datacenter: 'dc01' # 可删除
+
+- targets:
+  - 192.168.10.10
+  # vcenter2.example.com
+  labels:
+    __meta_username: 'administrator@vsphere.local'
+    __meta_password: 'public@54321'
+    __meta_schema: 'https'
+    __meta_insecure: 'true'
+    __meta_env: 'prod'  # 可删除
+    __meta_datacenter: 'dc02' # 可删除
+```
+
 ## 参数设置
 
 可以通过命令行选项、环境变量、yaml 配置文件或三者的组合来配置输出程序，设置的环境变量将被配置文件的内容覆盖，然后被启动时设置的任何命令行选项覆盖，可用的选项如下：

@@ -21,6 +21,7 @@ import (
 )
 
 var (
+	// 全局默认凭证（用于默认 /metrics 端点）
 	vmwUser       = flag.String("vmware.username", "", "Username to login to vCenter server")
 	vmwPasswd     = flag.String("vmware.password", "", "Password for the user above")
 	vCenter       = flag.String("vmware.vcenter", "", "vCenter server address in host:port format. This is not the vCenter Management Console")
@@ -28,103 +29,139 @@ var (
 	vmwTLS        = flag.Bool("vmware.insecureTLS", false, "Trust insecure vCenter TLS (true) or verify (default)")
 	vmwInterval   = flag.Int("vmware.interval", 20, "How often data will be collected. Default is every 20s.")
 	vmGranularity = flag.Int("vmware.granularity", 20, "The frequency of the sampled data. Default is 20s")
-
-	//ldWriteMtx = sync.Mutex{}
 )
 
 type VMware struct {
 	//logger log.Logger
 }
 
+// Credentials 存储每个 target 的凭证
+type Credentials struct {
+	Username string
+	Password string
+	Target   string
+	Schema   string
+	Insecure bool
+}
+
 func init() {
-
 	collector.RegisterAPI(NewAPI())
-
 }
 
 func NewAPI() *VMware {
-
 	return &VMware{}
 }
 
 func Load(logger *slog.Logger) {
-
 	logger.Info("msg", "Loading VMware vSphere API", nil)
-
 }
 
+// Login 使用全局 flag 配置的默认凭证登录（默认模式）
 func (vm *VMware) Login(target string, logger *slog.Logger) (map[string]interface{}, error) {
-
 	loginData := make(map[string]interface{}, 0)
 
+	// 如果没有指定 target，使用全局配置
 	if target == "" {
-
 		target = *vCenter
+	}
 
+	// 检查是否配置了默认凭证
+	if *vmwUser == "" || *vmwPasswd == "" {
+		return nil, fmt.Errorf("default credentials not configured. Please set -vmware.username and -vmware.password flags")
+	}
+
+	if target == "" {
+		return nil, fmt.Errorf("target not specified and -vmware.vcenter flag not set")
 	}
 
 	loginData["target"] = target
 
-	//Login into REST API (get session key) - this is getting parked for now
-	//if err := restLogin(loginData); err != nil {
-	//	return nil, err
-	//}
+	// 使用全局凭证
+	creds := Credentials{
+		Username: *vmwUser,
+		Password: *vmwPasswd,
+		Target:   target,
+		Schema:   *vmwSchema,
+		Insecure: *vmwTLS,
+	}
 
-	//Login into REST API (get session key)
-	if err := govmomiLogin(loginData); err != nil {
+	loginData["credentials"] = creds
+
+	// 登录
+	if err := govmomiLoginWithCreds(loginData, creds); err != nil {
 		return nil, err
 	}
 
-	//Fill in the REST inventory
-	//if err := vm.inventory(loginData); err != nil {
-
-	//	return nil, err
-
-	//}
-
-	//Here we login using govmomi (I guess)
+	logger.Info("logged in to vCenter using default credentials", "target", target)
 
 	return loginData, nil
 }
 
-func (vm *VMware) Logout(loginData map[string]interface{}, logger *slog.Logger) error {
+// LoginWithCredentials 使用指定凭证登录到指定 target（Probe 模式）
+func (vm *VMware) LoginWithCredentials(creds Credentials, logger *slog.Logger) (map[string]interface{}, error) {
+	loginData := make(map[string]interface{}, 0)
 
-	/*
-		url := fmt.Sprintf("%s://%s/api/session", *vmwSchema, loginData["target"].(string))
-
-		statusCode, _, body, err := request("DELETE", url, loginData["headers"].(map[string]string), true)
-		if err != nil {
-			return err
-		}
-
-		if statusCode != 204 {
-			return fmt.Errorf("Login failed with status code: %d, and body %s", statusCode, body)
-		}
-	*/
-
-	return nil
-
-}
-
-/*func (vm *VMware) Get(loginData, extraConfig map[string]interface{}) (interface{}, error) {
-
-	if extraConfig["type"].(string) == "manager" {
-
-		return vm.restGet(loginData["target"].(string), loginData["session"].(string), loginData["headers"].(map[string]string))
-
-	} else if extraConfig["type"].(string) == "gateway" {
-
-		return f.GetGateway(loginData["target"].(string), loginData["session"].(string), extraConfig["api"].(string), extraConfig["gateways"].(string))
+	if creds.Target == "" {
+		return nil, fmt.Errorf("target is required")
 	}
 
-	return nil, fmt.Errorf("wrong or undefined target type")
-}*/
+	if creds.Username == "" || creds.Password == "" {
+		return nil, fmt.Errorf("username and password are required")
+	}
+
+	// 使用传入的凭证，如果未指定则使用默认值
+	if creds.Schema == "" {
+		creds.Schema = *vmwSchema
+	}
+
+	loginData["target"] = creds.Target
+	loginData["credentials"] = creds
+
+	// 使用提供的凭证登录
+	if err := govmomiLoginWithCreds(loginData, creds); err != nil {
+		return nil, err
+	}
+
+	logger.Info("logged in to vCenter using probe credentials", "target", creds.Target, "username", creds.Username)
+
+	return loginData, nil
+}
+
+// Logout 清理资源，通过 context cancel 自动清理连接
+func (vm *VMware) Logout(loginData map[string]interface{}, logger *slog.Logger) error {
+	target := "unknown"
+	if t, ok := loginData["target"].(string); ok {
+		target = t
+	}
+
+	// 清理 context - 这会自动关闭连接和清理资源
+	if cancel, ok := loginData["cancel"].(context.CancelFunc); ok {
+		cancel()
+		logger.Debug("logged out and cleaned up resources for vCenter", "target", target)
+	}
+
+	return nil
+}
 
 func (vm *VMware) Get(loginData, extraConfig map[string]interface{}, logger *slog.Logger) (interface{}, error) {
+	creds, ok := loginData["credentials"].(Credentials)
+	if !ok {
+		return nil, fmt.Errorf("credentials not found in loginData")
+	}
 
-	url := fmt.Sprintf("%s://%s%s", *vmwSchema, loginData["target"], extraConfig["api"])
+	apiPath := extraConfig["api"]
+	if apiPath == nil {
+		return nil, fmt.Errorf("api path not specified")
+	}
 
-	_, _, body, err := request("GET", url, loginData["headers"].(map[string]string), false)
+	urlStr := fmt.Sprintf("%s://%s%s", creds.Schema, loginData["target"], apiPath)
+
+	headers := make(map[string]string)
+	if h, ok := loginData["headers"].(map[string]string); ok {
+		headers = h
+	}
+
+	_, _, body, err := requestWithCreds("GET", urlStr, headers, creds, false)
 	if err != nil {
 		return nil, err
 	}
@@ -132,23 +169,23 @@ func (vm *VMware) Get(loginData, extraConfig map[string]interface{}, logger *slo
 	return &body, nil
 }
 
-// request is where the http magic happens
-func request(method, url string, headers map[string]string, login bool) (int, string, []byte, error) {
+// requestWithCreds 使用指定凭证发送 HTTP 请求
+func requestWithCreds(method, urlStr string, headers map[string]string, creds Credentials, login bool) (int, string, []byte, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: creds.Insecure}
 
-	transport := http.DefaultTransport
-	transport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: *vmwTLS}
 	client := &http.Client{
 		Transport: transport,
 		Timeout:   time.Duration(*vmwInterval-2) * time.Second,
 	}
 
-	req, err := http.NewRequest(method, url, nil)
+	req, err := http.NewRequest(method, urlStr, nil)
 	if err != nil {
 		return 0, "", nil, err
 	}
 
 	if login {
-		req.SetBasicAuth(*vmwUser, *vmwPasswd)
+		req.SetBasicAuth(creds.Username, creds.Password)
 	}
 
 	for header := range headers {
@@ -161,11 +198,9 @@ func request(method, url string, headers map[string]string, login bool) (int, st
 	}
 
 	responseHeaders := resp.Header.Get("cookie")
-
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
-
 	if err != nil {
 		return 0, "", nil, err
 	}
@@ -173,45 +208,23 @@ func request(method, url string, headers map[string]string, login bool) (int, st
 	return resp.StatusCode, responseHeaders, body, nil
 }
 
-/*
-func restLogin(loginData map[string]interface{}) error {
-
-	url := fmt.Sprintf("%s://%s/api/session", *vmwSchema, loginData["target"].(string))
-	headers := map[string]string{"Content-type": "application/json"}
-
-	statusCode, _, body, err := request("POST", url, headers, true)
-	if err != nil {
-
-		return err
-
-	}
-
-	if statusCode != 201 {
-
-		return fmt.Errorf("Login failed with status code: %d, and body %s", statusCode, body)
-
-	}
-
-	headers["vmware-api-session-id"] = string(body)[1:(len(body) - 1)]
-	loginData["headers"] = headers
-
-	return nil
-}
-*/
-
-func govmomiLogin(loginData map[string]interface{}) error {
-
-	//Prep the url for SOAP login
-	urlx, err := soap.ParseURL(fmt.Sprintf("%s://%s%s", *vmwSchema, loginData["target"].(string), vim25.Path))
+// govmomiLoginWithCreds 使用指定凭证登录
+func govmomiLoginWithCreds(loginData map[string]interface{}, creds Credentials) error {
+	// 准备 SOAP 登录 URL
+	urlx, err := soap.ParseURL(fmt.Sprintf("%s://%s%s", creds.Schema, creds.Target, vim25.Path))
 	if err != nil {
 		return fmt.Errorf("soap url err: %s", err)
 	}
 
-	urlx.User = url.UserPassword(*vmwUser, *vmwPasswd)
+	urlx.User = url.UserPassword(creds.Username, creds.Password)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*vmwInterval-2)*time.Second)
 
-	session := &cache.Session{URL: urlx, Insecure: *vmwTLS, Passthrough: true}
+	session := &cache.Session{
+		URL:         urlx,
+		Insecure:    creds.Insecure,
+		Passthrough: true,
+	}
 
 	client := new(vim25.Client)
 
@@ -221,10 +234,10 @@ func govmomiLogin(loginData map[string]interface{}) error {
 		return fmt.Errorf("login err: %s", err)
 	}
 
-	//Property spec Manager
+	// Property spec Manager
 	loginData["view"] = view.NewManager(client)
 
-	//Performance Manager and performance counters
+	// Performance Manager and performance counters
 	loginData["perf"] = performance.NewManager(client)
 	loginData["counters"], err = loginData["perf"].(*performance.Manager).CounterInfoByName(ctx)
 	if err != nil {
@@ -234,7 +247,7 @@ func govmomiLogin(loginData map[string]interface{}) error {
 
 	loginData["cancel"] = cancel
 
-	//Finally add the context and the govmomi client itself
+	// 添加 context 和 govmomi client
 	loginData["ctx"] = ctx
 	loginData["client"] = client
 	loginData["interval"] = int32(*vmwInterval)
