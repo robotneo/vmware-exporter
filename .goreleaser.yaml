@@ -4,52 +4,39 @@ project_name: vmware-exporter
 
 before:
   hooks:
-    # You may remove this if you don't use go modules.
     - go mod tidy
-    # you may remove this if you don't need go generate
     - go generate ./...
 
 builds:
-  - id: linux
-    main: ./
+  - main: ./
     binary: vmware-exporter
     env:
       - CGO_ENABLED=0
     goos:
       - linux
-    goarch:
-      - arm64
-      - amd64
-  - id: windows
-    main: ./
-    binary: vmware-exporter
-    env:
-      - CGO_ENABLED=0
-    goos:
       - windows
     goarch:
-      - arm64
       - amd64
+      - arm64
 
 archives:
-  - id: vmware-exporter
-    builds:
-      - linux
-      - windows
-      - macos
-    format: tar.gz
+  - format: tar.gz
+    # 生成格式如: vmware-exporter-v0.1.16-linux-amd64.tar.gz
+    name_template: "{{ .ProjectName }}-{{ .Tag }}-{{ .Os }}-{{ .Arch }}"
     format_overrides:
       - goos: windows
         format: zip
-    name_template: "{{ .ProjectName }}-{{ .Tag }}-{{ .Os }}-{{ .Arch }}"
+    files:
+      - LICENSE*
+      - README*
 
-# checksum:
-#   name_template: "{{ .ProjectName }}_checksums.txt"
-# snapshot:
-#   version_template: "{{ .Tag }}-SNAPSHOT-{{.ShortCommit}}"
-# changelog:
-#   sort: asc
-#   filters:
-#     exclude:
-#       - "^docs:"
-#       - "^test:"
+checksum:
+  name_template: "{{ .ProjectName }}_checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
