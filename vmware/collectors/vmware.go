@@ -15,7 +15,7 @@ import (
 )
 
 func Load(logger *slog.Logger) {
-	logger.Info("msg", "Loading VMware vSphere collector set", nil)
+	logger.Info("Loading VMware vSphere collector set")
 }
 
 func inSlice(slice []string, val *string) bool {
@@ -57,7 +57,11 @@ func fetchProperties(ctx context.Context, viewManager *view.Manager, vmwClient *
 
 	}
 
-	defer view.Destroy(ctx)
+	defer func() {
+		if err := view.Destroy(ctx); err != nil {
+			logger.Error("failed to destroy container view", "error", err)
+		}
+	}()
 
 	begin := time.Now()
 
@@ -66,20 +70,119 @@ func fetchProperties(ctx context.Context, viewManager *view.Manager, vmwClient *
 		return err
 	}
 
-	logger.Debug("msg", fmt.Sprintf("Time to fetch PropColletor for %s: %f\n", moTypes, time.Since(begin).Seconds()), nil)
+	logger.Debug("time to fetch property collector", "types", moTypes, "duration_seconds", time.Since(begin).Seconds())
 
 	return nil
 
+}
+
+func emitPerformanceMetrics(
+	ch chan<- prometheus.Metric,
+	vcenter, moType, namespace, subsystem, instance string,
+	countersSpec map[string]*types.PerfCounterInfo,
+	targetNames map[string]string,
+	metrics []performance.EntityMetric,
+) {
+	for _, metric := range metrics {
+		labelMap := map[string]string{"vcenter": vcenter}
+
+		switch moType {
+		case "HostSystem":
+			labelMap["host"] = targetNames[metric.Entity.Value]
+			labelMap["hostmo"] = metric.Entity.Value
+		case "VirtualMachine":
+			labelMap["vm"] = targetNames[metric.Entity.Value]
+			labelMap["vmmo"] = metric.Entity.Value
+		case "Datastore":
+			labelMap["ds"] = targetNames[metric.Entity.Value]
+			labelMap["dsmo"] = metric.Entity.Value
+		}
+
+		for _, value := range metric.Value {
+			if value.Instance != "" {
+				labelMap["pfinstance"] = value.Instance
+			} else if instance != "" {
+				continue
+			}
+
+			if len(value.Value) == 0 {
+				continue
+			}
+
+			if len(value.Value) != len(metric.SampleInfo) {
+				continue
+			}
+
+			counterInfo, ok := countersSpec[value.Name]
+			if !ok {
+				continue
+			}
+
+			if len(value.Value) == 0 {
+				continue
+			}
+
+			var avg int64
+			for _, subvalue := range value.Value {
+				avg += subvalue
+			}
+			avg = avg / int64(len(value.Value))
+
+			ch <- prometheus.MustNewConstMetric(
+				prometheus.NewDesc(
+					prometheus.BuildFQName(
+						namespace,
+						subsystem,
+						strings.ReplaceAll(value.Name, ".", "_"),
+					),
+					fmt.Sprintf(
+						"%s in %s ",
+						counterInfo.UnitInfo.GetElementDescription().Label,
+						counterInfo.NameInfo.GetElementDescription().Summary,
+					),
+					nil,
+					labelMap,
+				),
+				prometheus.GaugeValue,
+				float64(avg),
+			)
+		}
+	}
 }
 
 func scrapePerformance(ctx context.Context, ch chan<- prometheus.Metric, logger *slog.Logger, sampleCount, sampleInterval int32,
 	perfManager *performance.Manager, vcenter, moType, namespace, subsystem, instance string,
 	counters []string, countersSpec map[string]*types.PerfCounterInfo,
 	targetRefs []types.ManagedObjectReference, targetNames map[string]string) {
+	if len(targetRefs) == 0 {
+		logger.Debug("no targets for perfman scrape", "type", moType)
+		return
+	}
 
-	logger.Debug("msg", fmt.Sprintf("gathering perfman metrics for hostRef %s\n", targetRefs[0]), nil)
+	if perfManager == nil {
+		logger.Error("nil performance manager", "type", moType)
+		return
+	}
+
+	logger.Debug("gathering perfman metrics", "target_ref", targetRefs[0], "type", moType)
 
 	begin := time.Now()
+
+	requestedCounters := len(counters)
+	supportedCounters := make([]string, 0, requestedCounters)
+	for _, counter := range counters {
+		if _, ok := countersSpec[counter]; ok {
+			supportedCounters = append(supportedCounters, counter)
+			continue
+		}
+
+		logger.Debug("performance counter not available, skipping", "counter", counter, "type", moType)
+	}
+
+	if len(supportedCounters) == 0 {
+		logger.Debug("no supported performance counters for scrape", "type", moType, "requested_counters", requestedCounters)
+		return
+	}
 
 	spec := types.PerfQuerySpec{
 		MaxSample:  sampleCount,                                // Number of samples to fetch - if samples are fetched every 20s only one is needed.
@@ -87,74 +190,33 @@ func scrapePerformance(ctx context.Context, ch chan<- prometheus.Metric, logger 
 		IntervalId: sampleInterval,                             // 20 seconds
 	}
 
-	sample, err := perfManager.SampleByName(ctx, spec, counters, targetRefs)
+	sample, err := perfManager.SampleByName(ctx, spec, supportedCounters, targetRefs)
 	if err != nil {
-		logger.Error("msg", "error sampling the metrics and targtes", fmt.Sprintf("error: %s", err))
+		logger.Error("error sampling metrics and targets", "error", err, "type", moType)
+		return
 	}
 
 	metrics, err := perfManager.ToMetricSeries(ctx, sample)
 	if err != nil {
-		logger.Error("msg", "error fetching metrics", fmt.Sprintf("error: %s", err))
+		logger.Error("error converting perf samples to metric series", "error", err, "type", moType)
+		return
 	}
 
-	logger.Debug("msg", fmt.Sprintf("Time to fetch Perfman for %s: %f\n", moType, time.Since(begin).Seconds()), nil)
+	logger.Debug("time to fetch perfman samples", "type", moType, "duration_seconds", time.Since(begin).Seconds())
 
 	begin = time.Now()
 
-	for _, metric := range metrics {
+	emitPerformanceMetrics(
+		ch,
+		vcenter,
+		moType,
+		namespace,
+		subsystem,
+		instance,
+		countersSpec,
+		targetNames,
+		metrics,
+	)
 
-		labelMap := map[string]string{"vcenter": vcenter}
-
-		switch {
-		case moType == "HostSystem":
-			labelMap["host"] = targetNames[metric.Entity.Value]
-			labelMap["hostmo"] = metric.Entity.Value
-		case moType == "VirtualMachine":
-			labelMap["vm"] = targetNames[metric.Entity.Value]
-			labelMap["vmmo"] = metric.Entity.Value
-		case moType == "Datastore":
-			labelMap["ds"] = targetNames[metric.Entity.Value]
-			labelMap["dsmo"] = metric.Entity.Value
-		}
-
-		for _, value := range metric.Value {
-
-			if value.Instance != "" {
-
-				labelMap["pfinstance"] = value.Instance
-
-			} else if instance != "" {
-				continue //labels["instance"] = "-"
-			}
-
-			if len(value.Value) != 0 {
-
-				if len(value.Value) == len(metric.SampleInfo) {
-
-					avg := 0
-
-					for _, subvalue := range value.Value {
-
-						avg += int(subvalue)
-
-					}
-
-					avg = avg / len(value.Value)
-
-					ch <- prometheus.MustNewConstMetric(
-						prometheus.NewDesc(
-							prometheus.BuildFQName(namespace, subsystem, strings.Replace(value.Name, ".", "_", -1)),
-							fmt.Sprintf("%s in %s ", countersSpec[value.Name].UnitInfo.GetElementDescription().Label, countersSpec[value.Name].NameInfo.GetElementDescription().Summary),
-							nil, labelMap,
-						), prometheus.GaugeValue, float64(avg),
-					)
-
-				}
-			}
-
-		}
-	}
-
-	logger.Debug("msg", fmt.Sprintf("Time to process Perfman for %s: %f\n", moType, time.Since(begin).Seconds()), nil)
-
+	logger.Debug("time to process perfman metrics", "type", moType, "duration_seconds", time.Since(begin).Seconds())
 }

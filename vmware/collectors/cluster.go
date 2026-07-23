@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/prezhdarov/prometheus-exporter/collector"
+	"github.com/prezhdarov/prometheus-exporter/pkg/collector"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vmware/govmomi/view"
 	"github.com/vmware/govmomi/vim25"
@@ -50,7 +50,7 @@ func (c *clusterCollector) Update(ch chan<- prometheus.Metric, namespace string,
 			prometheus.NewDesc(
 				prometheus.BuildFQName(namespace, clusterSubsystem, "info"),
 				"This is basic cluster info to be used for parent reference", nil,
-				map[string]string{"cmo": cluster.ComputeResource.Self.Value, "vmwcluster": cluster.Name, "foldermo": cluster.Parent.Value,
+				map[string]string{"cmo": cluster.Self.Value, "vmwcluster": cluster.Name, "foldermo": cluster.Parent.Value,
 					"vcenter": loginData["target"].(string)},
 			), prometheus.GaugeValue, 1.0,
 		)
@@ -59,7 +59,7 @@ func (c *clusterCollector) Update(ch chan<- prometheus.Metric, namespace string,
 			prometheus.NewDesc(
 				prometheus.BuildFQName(namespace, clusterSubsystem, "datastores"),
 				"This is basic cluster info to be used for parent reference", nil,
-				map[string]string{"cmo": cluster.ComputeResource.Self.Value, "vmwcluster": cluster.Name, "datastores": *moSliceToString(cluster.ComputeResource.Datastore),
+				map[string]string{"cmo": cluster.Self.Value, "vmwcluster": cluster.Name, "datastores": *moSliceToString(cluster.Datastore),
 					"vcenter": loginData["target"].(string)},
 			), prometheus.GaugeValue, 1.0,
 		)

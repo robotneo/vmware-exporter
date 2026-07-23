@@ -5,11 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/prezhdarov/prometheus-exporter/collector"
+	"github.com/prezhdarov/prometheus-exporter/pkg/collector"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vmware/govmomi/performance"
 	"github.com/vmware/govmomi/view"
@@ -23,7 +22,6 @@ const (
 )
 
 var vmCollectorFlag = flag.Bool(fmt.Sprintf("collector.%s", vmSubsystem), collector.DefaultEnabled, fmt.Sprintf("Enable the %s collector (default: %v)", vmSubsystem, collector.DefaultEnabled))
-
 var (
 	cVMCounters = []string{"cpu.usagemhz.average", "cpu.demand.average", "cpu.latency.average", "cpu.entitlement.latest",
 		"cpu.ready.summation", "cpu.readiness.average", "cpu.costop.summation", "cpu.maxlimited.summation",
@@ -114,27 +112,17 @@ func (c *vmCollector) Update(ch chan<- prometheus.Metric, namespace string, clie
 			}
 			// Check if the VM has any snapshots, set value of metric to unix timestamp of snapshot creation time
 			if vm.Snapshot != nil {
-				c.logger.Debug("msg", fmt.Sprintf("VM %s has snapshots", vm.Summary.Config.Name), nil)
+				c.logger.Debug("vm has snapshots", "vm", vm.Summary.Config.Name, "vm_moref", vm.Self.Value)
 				for _, rootSnap := range vm.Snapshot.RootSnapshotList {
+
 					snapDate := rootSnap.CreateTime.Format(time.RFC3339)
-					// Check snapshot name and description if it contains the string "[keep]". If yes, set keepSnap to true.
-					keepSnap := false
-					if rootSnap.Name != "" {
-						if strings.Contains(rootSnap.Name, "[keep]") {
-							keepSnap = true
-						}
-					}
-					if rootSnap.Description != "" {
-						if strings.Contains(rootSnap.Description, "[keep]") {
-							keepSnap = true
-						}
-					}
+
 					ch <- prometheus.MustNewConstMetric(
 						prometheus.NewDesc(
 							prometheus.BuildFQName(namespace, vmSubsystem, "snapshot_info"),
 							"Unix timestamp since snapshot creation", nil,
 							map[string]string{"vmmo": vm.Self.Value, "vm": vm.Summary.Config.Name,
-								"vcenter": loginData["target"].(string), "snapshot_create_time": snapDate, "snapshot_keep": fmt.Sprintf("%t", keepSnap)},
+								"vcenter": loginData["target"].(string), "name": rootSnap.Name, "created": snapDate},
 						), prometheus.GaugeValue, float64(rootSnap.CreateTime.Unix()),
 					)
 				}
@@ -143,7 +131,7 @@ func (c *vmCollector) Update(ch chan<- prometheus.Metric, namespace string, clie
 
 	}
 
-	c.logger.Debug("msg", fmt.Sprintf("Time to process PropColletor for VM: %f\n", time.Since(begin).Seconds()), nil)
+	c.logger.Debug("time to process property collector for vm", "duration_seconds", time.Since(begin).Seconds())
 
 	begin = time.Now()
 
@@ -151,22 +139,22 @@ func (c *vmCollector) Update(ch chan<- prometheus.Metric, namespace string, clie
 
 		wg.Add(2)
 		for i := 0; i < 2; i++ {
-			switch {
-			case i == 0:
-				go func(i int) {
+			switch i {
+			case 0:
+				go func() {
 					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), loginData["interval"].(int32), loginData["perf"].(*performance.Manager),
 						loginData["target"].(string), "VirtualMachine", namespace, vmSubsystem, "", cVMCounters,
 						loginData["counters"].(map[string]*types.PerfCounterInfo), vmRefs, vmNames)
 					wg.Done()
-				}(i)
+				}()
 
-			case i == 1:
-				go func(i int) {
+			case 1:
+				go func() {
 					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), loginData["interval"].(int32), loginData["perf"].(*performance.Manager),
 						loginData["target"].(string), "VirtualMachine", namespace, vmSubsystem, "*", iVMCounters,
 						loginData["counters"].(map[string]*types.PerfCounterInfo), vmRefs, vmNames)
 					wg.Done()
-				}(i)
+				}()
 			}
 
 		}
@@ -175,7 +163,7 @@ func (c *vmCollector) Update(ch chan<- prometheus.Metric, namespace string, clie
 
 	}
 
-	c.logger.Debug("msg", fmt.Sprintf("Time to process PerfMan for VM: %f\n", time.Since(begin).Seconds()), nil)
+	c.logger.Debug("time to process perfman for vm", "duration_seconds", time.Since(begin).Seconds())
 
 	return nil
 }

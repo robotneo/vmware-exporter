@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"regexp"
 
-	"github.com/prezhdarov/prometheus-exporter/collector"
+	"github.com/prezhdarov/prometheus-exporter/pkg/collector"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vmware/govmomi/performance"
 	"github.com/vmware/govmomi/view"
@@ -84,6 +84,21 @@ func (c *datastoreCollector) Update(ch chan<- prometheus.Metric, namespace strin
 				map[string]string{"dsmo": datastore.Summary.Datastore.Value, "ds": datastore.Summary.Name,
 					"vcenter": loginData["target"].(string)},
 			), prometheus.GaugeValue, float64(datastore.Summary.FreeSpace),
+		)
+
+		ch <- prometheus.MustNewConstMetric(
+			prometheus.NewDesc(
+				prometheus.BuildFQName(namespace, datastoreSubsystem, "accessible"),
+				"Whether the datastore is accessible", nil,
+				map[string]string{"dsmo": datastore.Summary.Datastore.Value, "ds": datastore.Summary.Name,
+					"vcenter": loginData["target"].(string)},
+			), prometheus.GaugeValue,
+			func(accessible bool) float64 {
+				if accessible {
+					return 1
+				}
+				return 0
+			}(datastore.Summary.Accessible),
 		)
 	}
 

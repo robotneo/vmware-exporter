@@ -3,6 +3,7 @@ package vmware
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,7 +12,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/prezhdarov/prometheus-exporter/collector"
+	"github.com/prezhdarov/prometheus-exporter/pkg/collector"
 
 	"github.com/vmware/govmomi/performance"
 	"github.com/vmware/govmomi/session/cache"
@@ -53,7 +54,7 @@ func NewAPI() *VMware {
 }
 
 func Load(logger *slog.Logger) {
-	logger.Info("msg", "Loading VMware vSphere API", nil)
+	logger.Info("Loading VMware vSphere API")
 }
 
 // Login 使用全局 flag 配置的默认凭证登录（默认模式）
@@ -89,7 +90,7 @@ func (vm *VMware) Login(target string, logger *slog.Logger) (map[string]interfac
 
 	// 登录
 	if err := govmomiLoginWithCreds(loginData, creds); err != nil {
-		return nil, err
+		return loginData, err
 	}
 
 	logger.Info("logged in to vCenter using default credentials", "target", target)
@@ -198,11 +199,20 @@ func requestWithCreds(method, urlStr string, headers map[string]string, creds Cr
 	}
 
 	responseHeaders := resp.Header.Get("cookie")
-	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, "", nil, err
+	// Handle read and close errors explicitly to avoid losing late I/O failures.
+	body, readErr := io.ReadAll(resp.Body)
+	closeErr := resp.Body.Close()
+
+	if readErr != nil {
+		if closeErr != nil {
+			return 0, "", nil, errors.Join(readErr, closeErr)
+		}
+		return 0, "", nil, readErr
+	}
+
+	if closeErr != nil {
+		return 0, "", nil, closeErr
 	}
 
 	return resp.StatusCode, responseHeaders, body, nil
