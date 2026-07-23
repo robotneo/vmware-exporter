@@ -8,9 +8,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/prezhdarov/prometheus-exporter/collector"
-	"github.com/prezhdarov/prometheus-exporter/config"
-	"github.com/prezhdarov/prometheus-exporter/exporter"
+	"github.com/prezhdarov/prometheus-exporter/pkg/collector"
+	"github.com/prezhdarov/prometheus-exporter/pkg/config"
+	"github.com/prezhdarov/prometheus-exporter/pkg/exporter"
 	vmware "github.com/prezhdarov/vmware-exporter/vmware/api"
 	vmwareCollectors "github.com/prezhdarov/vmware-exporter/vmware/collectors"
 
@@ -319,7 +319,7 @@ func main() {
 
 	logger := promslog.New(config.SetLogger(logFormat, logLevel))
 
-	logger.Debug("disable exporter target is", fmt.Sprintf("%t", *disableExporterTarget), nil)
+	logger.Debug("exporter target setting", "disabled", *disableExporterTarget)
 
 	vmware.Load(logger)
 	vmwareCollectors.Load(logger)
@@ -331,10 +331,8 @@ func main() {
 	http.HandleFunc("/probe", func(w http.ResponseWriter, r *http.Request) {
 		probeHandler(w, r, logger)
 	})
-
-	// 首页
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`
+	http.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		if _, err := w.Write([]byte(`
 			<head><title>` + exporterName + `</title></head>
 			<body>
 			<h1>` + exporterName + `</h1>
@@ -452,7 +450,9 @@ scrape_configs:
         replacement: localhost:9169
 			</pre>
 			</body>
-			</html>`))
+			</html>`)); err != nil {
+			logger.Error("failed to write index response", "error", err)
+		}
 	})
 
 	logger.Info("Starting "+exporterName, "listening_on", *listenAddress)
@@ -460,7 +460,7 @@ scrape_configs:
 	server := &http.Server{}
 
 	if err := web.ListenAndServe(server, webConfig(listenAddress), logger); err != nil {
-		logger.Error(fmt.Sprintf("error: %s", err))
+		logger.Error("listen and serve failed", "error", err)
 		os.Exit(1)
 	}
 }
