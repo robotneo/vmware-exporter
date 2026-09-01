@@ -163,6 +163,9 @@ func SetLogger(format, level *string) (*promslog.Config, error) {
 // 往返只是麻烦。所以这里无条件打全。
 func Usage(s string) {
 	out := flag.CommandLine.Output()
-	fmt.Fprintf(out, "%s\n", s)
+	// 错误显式丢弃：这是往 usage 输出写字，写失败时也无处可报 ——
+	// 报错本身就得往同一个已经坏掉的流里写。flag.PrintDefaults 出于
+	// 同样的理由也不返回 error。
+	_, _ = fmt.Fprintf(out, "%s\n", s)
 	flag.PrintDefaults()
 }
