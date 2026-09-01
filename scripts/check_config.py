@@ -38,6 +38,12 @@ documentation check:
    first of which defaults to *true*, so the exporter's own `go_*` metrics are
    absent by default and nothing said so.
 
+5. **Dependency ecosystems nobody is watching.** dependabot.yml declared only
+   `gomod`, so the GitHub Actions had quietly drifted a major version behind --
+   twice, because checking them by hand is exactly as reliable as it sounds.
+   Every ecosystem the repository actually contains must be declared, so drift
+   arrives as a pull request rather than as a broken release.
+
 Exit code is 0 when clean, 1 when any check fails, 2 on a missing dependency.
 """
 
@@ -235,6 +241,58 @@ def check_readme_flags(failures: list[str], flags: set[str], source: str) -> Non
             )
 
 
+def check_dependabot(failures: list[str]) -> None:
+    """Every ecosystem present in the repository must be declared to dependabot.
+
+    Version drift is not caught by any of the checks above, and checking it by
+    hand does not work: the GitHub Actions in this repository fell a major
+    version behind twice, and both times a manual review had just declared them
+    current. The fix is not to review harder, it is to make sure something is
+    subscribed to each ecosystem -- which is a property of this file and can be
+    verified offline.
+
+    Deliberately does not query the network for latest versions. That belongs to
+    dependabot, which has the credentials and the rate limits for it; duplicating
+    it here would make the check flaky and the failure uninformative.
+    """
+    path = os.path.join(REPO, ".github", "dependabot.yml")
+    if not os.path.exists(path):
+        failures.append(
+            ".github/dependabot.yml is missing, so no dependency updates are "
+            "being proposed at all"
+        )
+        return
+
+    try:
+        doc = yaml.safe_load(open(path, encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        failures.append(f".github/dependabot.yml is not valid YAML: {exc}")
+        return
+
+    declared = {
+        str(u.get("package-ecosystem"))
+        for u in (doc.get("updates") or [])
+        if isinstance(u, dict)
+    }
+
+    # What the repository actually contains, and the marker that proves it.
+    present = {}
+    if os.path.exists(os.path.join(REPO, "go.mod")):
+        present["gomod"] = "go.mod"
+    workflows = os.path.join(REPO, ".github", "workflows")
+    if os.path.isdir(workflows) and os.listdir(workflows):
+        present["github-actions"] = ".github/workflows/"
+    if os.path.exists(os.path.join(REPO, "Dockerfile")):
+        present["docker"] = "Dockerfile"
+
+    for eco, marker in sorted(present.items()):
+        if eco not in declared:
+            failures.append(
+                f".github/dependabot.yml: no `{eco}` entry, but {marker} exists; "
+                "nothing is watching that ecosystem for updates"
+            )
+
+
 def check_compose(failures: list[str], flags: set[str]) -> None:
     text = open(COMPOSE, encoding="utf-8").read()
     try:
@@ -367,6 +425,7 @@ def main() -> int:
     check_compose(failures, flags)
     check_conf(failures, flags)
     check_readme_flags(failures, flags, source)
+    check_dependabot(failures)
 
     if failures:
         print("config check FAILED:\n")

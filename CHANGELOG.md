@@ -158,7 +158,12 @@ class of breaking change.
   collector flags are constructed at registration time
   (`fmt.Sprintf("collector.%s", ...)`) and a literal grep of the source reports
   a valid `VMWARE_collector_vm` as unmatched. It also fails when a registered
-  flag has no row in either README's reference table.
+  flag has no row in either README's reference table, and when an ecosystem
+  present in the repository has no `dependabot.yml` entry watching it — that
+  last check was added after the GitHub Actions were found a major version
+  behind for the second time, both times shortly after a manual review had
+  pronounced them current. It found a third undeclared ecosystem immediately
+  (`docker`, for the `Dockerfile`).
 - Documentation for `-disable.exporter.metrics` and `-disable.exporter.target`
   in README-zh.md, where both were missing entirely. The first **defaults to
   `true`**, so the exporter's own `go_*` and `process_*` metrics are absent
@@ -242,10 +247,18 @@ class of breaking change.
   a hardcoded `>=1.22.1` that had fallen below go.mod's own `1.26`),
   `goreleaser/goreleaser-action` v4 → v7 — v4 predates the goreleaser v2 that
   `version: latest` installs, against a `version: 2` config file.
-- `dependabot.yml` watches `github-actions` in addition to `gomod`. Only Go
-  modules were configured, which is why the action versions above had been left
-  behind: nothing was tracking them. Grouped into a single PR so the weekly bump
-  stays reviewable.
+  A second pass caught the rest: `golangci/golangci-lint-action` v8 → v9,
+  `actions/setup-python` v5 → v7, `docker/build-push-action` v6 → v7,
+  `docker/login-action` and `docker/setup-buildx-action` v3 → v4. Every one of
+  those majors is the same change — node20 to node24 as the action runtime,
+  which GitHub has announced the deprecation of — so they are not optional, and
+  none of them touches an input this repository passes.
+- `dependabot.yml` watches `github-actions` and `docker` in addition to `gomod`.
+  Only Go modules were configured, which is why the action versions above had
+  been left behind: nothing was tracking them. Actions are grouped into a single
+  PR so the weekly bump stays reviewable. `scripts/check_config.py` now fails if
+  an ecosystem present in the tree has no entry here, since finding this by hand
+  demonstrably does not work.
 - Removed dead code: `inSlice`, `moSliceToString`, five entirely
   commented-out files under `vmware/api/` (`clusters.go`, `datastores.go`,
   `host.go`, `vm.go`, `inventory.go` — remnants of a REST `/api/vcenter/...`
