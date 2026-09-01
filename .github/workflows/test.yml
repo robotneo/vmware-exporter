@@ -50,6 +50,10 @@ jobs:
           set -euo pipefail
           cp go.mod go.mod.bak
           cp go.sum go.sum.bak
+          # Clean up on every exit path, including the failure ones below. CI
+          # throws the workspace away either way, but this step is copy-pasted
+          # to run locally and leaving *.bak behind there is just litter.
+          trap 'rm -f go.mod.bak go.sum.bak' EXIT
           # `go mod tidy` reaches out to the module proxy and can fail for
           # reasons that have nothing to do with this repository. Let it fail the
           # step explicitly rather than comparing files afterwards -- a partial
@@ -62,7 +66,6 @@ jobs:
             diff -u go.sum.bak go.sum || true
             exit 1
           fi
-          rm go.mod.bak go.sum.bak
 
       - name: Build
         run: go build ./...
@@ -127,3 +130,23 @@ jobs:
       # a Grafana instance that predates the change.
       - name: Check dashboards
         run: python scripts/patch_dashboards.py --check
+
+  release-config:
+    name: Release config
+    runs-on: ubuntu-latest
+
+    # The release workflow only runs on tags, which means a broken
+    # .goreleaser.yaml stays invisible until someone cuts a release and it
+    # fails there. `goreleaser check` is cheap; run it on every push instead.
+    # It caught archives.format, deprecated in v2.6, while release_build.yaml
+    # pins `version: latest` -- so the eventual removal would have broken a
+    # release with no prior warning.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Check goreleaser config
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: latest
+          args: check

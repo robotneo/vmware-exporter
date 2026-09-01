@@ -4,3 +4,18 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+
+  # Only gomod was configured, which is why the workflows had drifted to
+  # checkout@v3 and goreleaser-action@v4 -- the latter predating the goreleaser
+  # v2 that `version: latest` actually installs. Nothing was watching them.
+  #
+  # Grouped into one PR: these move together and reviewing six separate
+  # version-bump PRs a week is how they end up ignored.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns:
+          - "*"
