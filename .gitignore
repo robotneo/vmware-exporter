@@ -12,3 +12,6 @@ env.bak/
 venv.bak/
 vendor/
 dist/
+
+# Agent workspace (not a build cache, but session-local)
+.workbuddy/
