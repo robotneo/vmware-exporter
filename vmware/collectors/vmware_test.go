@@ -17,86 +17,6 @@ import (
 	"github.com/vmware/govmomi/vim25/types"
 )
 
-func TestInSlice(t *testing.T) {
-	tests := []struct {
-		name  string
-		slice []string
-		value string
-		want  bool
-	}{
-		{
-			name:  "value exists",
-			slice: []string{"Datacenter", "HostSystem", "VirtualMachine"},
-			value: "HostSystem",
-			want:  true,
-		},
-		{
-			name:  "value does not exist",
-			slice: []string{"Datacenter", "HostSystem"},
-			value: "Datastore",
-			want:  false,
-		},
-		{
-			name:  "empty slice",
-			slice: []string{},
-			value: "HostSystem",
-			want:  false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := inSlice(tt.slice, &tt.value)
-			if got != tt.want {
-				t.Fatalf("inSlice() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestMoSliceToString(t *testing.T) {
-	tests := []struct {
-		name string
-		in   []types.ManagedObjectReference
-		want string
-	}{
-		{
-			name: "empty slice",
-			in:   []types.ManagedObjectReference{},
-			want: "",
-		},
-		{
-			name: "single managed object reference",
-			in: []types.ManagedObjectReference{
-				{Value: "datastore-1"},
-			},
-			want: "datastore-1",
-		},
-		{
-			name: "multiple managed object references",
-			in: []types.ManagedObjectReference{
-				{Value: "datastore-1"},
-				{Value: "datastore-2"},
-				{Value: "datastore-3"},
-			},
-			want: "datastore-1,datastore-2,datastore-3",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := moSliceToString(tt.in)
-			if got == nil {
-				t.Fatal("moSliceToString() returned nil")
-			}
-
-			if *got != tt.want {
-				t.Fatalf("moSliceToString() = %q, want %q", *got, tt.want)
-			}
-		})
-	}
-}
-
 func TestFetchPropertiesDatacenter(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -196,6 +116,7 @@ func TestEmitPerformanceMetricsHostSystem(t *testing.T) {
 		countersSpec,
 		targetNames,
 		metrics,
+		testLogger(),
 	)
 
 	select {
@@ -265,6 +186,7 @@ func TestEmitPerformanceMetricsSkipsMetricWhenInstanceIsMissingButRequired(t *te
 		countersSpec,
 		map[string]string{"vm-123": "my-vm"},
 		metrics,
+		testLogger(),
 	)
 
 	select {

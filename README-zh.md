@@ -295,3 +295,57 @@ scrape_configs:
   -vmware.insecureTLS \
   -log.level="info"
 ```
+---
+
+## 指标变更与迁移指引
+
+下一个版本改了两个指标名、删了一个 label、并把三个指标标记为废弃。
+完整清单见 `CHANGELOG.md`，这里是需要动手的部分。
+
+### 必须处理
+
+| 变更 | 需要做什么 |
+| :--- | :--- |
+| `vmware_cluster_datastores` → `vmware_cluster_datastore` | 改掉自建的告警规则和面板。同时 label 语义也变了：现在每个 datastore 一条独立序列，不再是把 moid 列表用逗号拼进 `dsmo` |
+| `vmware_compute_datastores` → `vmware_compute_datastore` | 同上 |
+| `vmware_vm_snapshot_info` 移除了 `created` label | 改从指标 **value** 读创建时间 —— 它就是同一时刻的 Unix 时间戳 |
+
+这三项在本仓库自带的 dashboard 里引用数都是 0，所以自带面板不需要改动。
+但指标改名是静默失效的（查询语法合法、指标不存在、图就是空的，没有任何报错），
+如果你有自建的告警规则或面板，升级前务必先改。
+
+原来的 `*_datastores` 把整个 moid 列表拼成一个 label 值，有两个问题：
+查询侧无法用 `dsmo` 做 join（只能做子串匹配），且集群增删任一 datastore
+都会改变 label 值 —— 产生一条全新序列，旧序列则变成僵尸留在 TSDB 里。
+
+`created` label 被删的理由是它与 value 冗余：label 里是 RFC3339 字符串，
+value 是同一时刻的 Unix 秒数。用时间戳做 label 是 Prometheus 反模式，
+每个快照会占一条独立序列，快照删除后序列仍会滞留直到过期。
+
+```promql
+# 迁移前
+vmware_vm_snapshot_info{created="2026-08-30T11:04:12Z"}
+
+# 迁移后：value 就是 Unix 时间戳
+time() - vmware_vm_snapshot_info > 7 * 86400   # 找出超过一周的快照
+```
+
+### 可以慢慢迁移
+
+三个指标被带单位后缀的新名字取代。过渡期内**新旧指标同时输出、数值完全相同**，
+旧指标的 help 里带 `DEPRECATED:` 标记，会在未来某个版本移除：
+
+| 废弃指标 | 替代指标 |
+| :--- | :--- |
+| `vmware_host_cpu_capacity` | `vmware_host_cpu_capacity_mhz` |
+| `vmware_host_mem_capacity` | `vmware_host_mem_capacity_bytes` |
+| `vmware_vm_datastore_capacity_used` | `vmware_vm_datastore_capacity_used_bytes` |
+
+**数值没有任何变化。** 这三个指标的数值一直是对的，错的是 help 文案 ——
+`vmware_host_mem_capacity` 尤其典型：help 一直写着 MB，但它输出的从来是字节。
+所以新指标不做任何单位换算。如果你之前在查询里按 help 描述的单位做过补偿换算，
+现在要把那个换算去掉。
+
+`vmware_vm_mem_capacity` **不在废弃列表里**，也不会有 `_bytes` 版本：
+它的数据源 `Summary.Config.MemorySizeMB` 确实是 MB，help 本来就是对的。
+给它换算单位会改变数值，那属于另一类破坏性变更，不该混进这次的文案修正。

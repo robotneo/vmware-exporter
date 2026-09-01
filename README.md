@@ -145,3 +145,40 @@ Unknown collector names passed via `collect[]` are rejected with HTTP 400 rather
 than silently ignored.
 
 The esxcli collectors are a very specific use case that probably is not going to be needed by anyone. Left the code in here as an example on how custom information can be collected using esxcli command tool remotely via the SOAP API (`vim.EsxCLI.*`) — no SSH involved. 
+
+## Metric changes and migration
+
+The upcoming release renames two metrics, drops one label and deprecates three
+metric names. `CHANGELOG.md` has the full list; this is the short version.
+
+### You must act on these
+
+| Change | Action |
+| --- | --- |
+| `vmware_cluster_datastores` → `vmware_cluster_datastore` | Update your own rules/panels. Also emits one series per datastore now, instead of a comma-joined list in `dsmo` |
+| `vmware_compute_datastores` → `vmware_compute_datastore` | Same as above |
+| `vmware_vm_snapshot_info` lost its `created` label | Read the creation time from the metric value — it is the same instant as a Unix timestamp |
+
+None of the three is referenced by the dashboards in this repository, so the
+bundled dashboards need no changes. A renamed metric fails silently, though, so
+check your own alerting rules before upgrading.
+
+### You can migrate at your own pace
+
+Three metrics are deprecated in favour of unit-suffixed names. **Both names are
+emitted with identical values** for one release cycle:
+
+| Deprecated | Replacement |
+| --- | --- |
+| `vmware_host_cpu_capacity` | `vmware_host_cpu_capacity_mhz` |
+| `vmware_host_mem_capacity` | `vmware_host_mem_capacity_bytes` |
+| `vmware_vm_datastore_capacity_used` | `vmware_vm_datastore_capacity_used_bytes` |
+
+No value changed. In all three cases the number was already correct and only the
+help text was wrong — `vmware_host_mem_capacity` in particular has always
+reported bytes despite its help claiming MB. If you were compensating for the
+documented unit anywhere, drop the correction.
+
+`vmware_vm_mem_capacity` is **not** deprecated and has no `_bytes` variant: its
+value really is megabytes, so its help was correct. Converting it would change
+the number, which is a different kind of breaking change.
