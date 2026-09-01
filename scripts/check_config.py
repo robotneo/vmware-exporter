@@ -156,7 +156,11 @@ def flags_from_binary() -> set[str] | None:
         out = subprocess.run(
             [binary, "--help"], capture_output=True, text=True, check=False
         )
-        names = set(re.findall(r"^\s+-([a-zA-Z][\w.]*)", out.stdout + out.stderr, re.M))
+        # `-` belongs in the character class: `-collector.max-concurrency` was
+        # being captured as `collector.max`, which then failed to match its own
+        # README row and silently mismatched every other check keyed on flag
+        # names. Flags with hyphens are normal in this codebase.
+        names = set(re.findall(r"^\s+-([a-zA-Z][\w.-]*)", out.stdout + out.stderr, re.M))
         return names or None
     except (OSError, subprocess.SubprocessError):
         return None
@@ -234,10 +238,30 @@ def check_readme_flags(failures: list[str], flags: set[str], source: str) -> Non
         # A table row starts with `|`, then the flag, optionally in backticks:
         #   | -disable.exporter.metrics | ... |     (README.md)
         #   | `-vmware.vcenter` | string | ... |    (README-zh.md)
-        documented = set(re.findall(r"^\|\s*`?-([a-zA-Z][\w.]*)", text, re.M))
+        #
+        # The character class must include `-`: `-collector.max-concurrency`
+        # was being truncated to `collector.max` by an earlier `[\w.]*`, so the
+        # flag counted as undocumented no matter what the table said. Any flag
+        # with a hyphen in its name had the same problem.
+        documented = set(re.findall(r"^\|\s*`?-([a-zA-Z][\w.-]*)", text, re.M))
         for flag in sorted(flags - documented):
             failures.append(
                 f"{doc}: flag -{flag} is registered but not documented"
+            )
+
+        # The reverse direction. Without it a renamed flag leaves its old name
+        # in the table forever: the check above only notices the new name being
+        # absent, and once you add that row the stale one stops being visible to
+        # any check at all. `-prom.maxRequests` survived exactly this way -- it
+        # had not existed in the binary for a while and both READMEs still
+        # listed it with a default value.
+        #
+        # Stale documentation is worse than missing documentation: somebody
+        # copies the flag into a systemd unit, the exporter refuses to start,
+        # and the table they copied it from still says it is valid.
+        for flag in sorted(documented - flags):
+            failures.append(
+                f"{doc}: flag -{flag} is documented but not registered"
             )
 
 

@@ -6,15 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 
 	"github.com/prezhdarov/vmware-exporter/vmware/esxcli"
 
-	"github.com/prezhdarov/prometheus-exporter/pkg/collector"
+	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/vmware/govmomi/view"
-	"github.com/vmware/govmomi/vim25"
 	"github.com/vmware/govmomi/vim25/mo"
+	"golang.org/x/sync/errgroup"
 )
 
 type StorageInfo struct {
@@ -38,23 +36,17 @@ type esxclistoragelistCollector struct {
 }
 
 func init() {
-	collector.RegisterCollector("esxcli.storage", esxclistoragelistCollectorFlag, NewesxcliStorageListCCollector)
+	collector.RegisterFlag("esxcli.storage", esxclistoragelistCollectorFlag)
 }
 
 func NewesxcliStorageListCCollector(logger *slog.Logger) (collector.Collector, error) {
 	return &esxclistoragelistCollector{logger}, nil
 }
 
-func (c *esxclistoragelistCollector) Update(ch chan<- prometheus.Metric, namespace string, clientAPI collector.ClientAPI, loginData map[string]interface{}, params map[string]string) error {
+func (c *esxclistoragelistCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s *collector.Scrape) error {
 
-	var (
-		hosts []mo.HostSystem
-	)
-
-	err := fetchProperties(
-		loginData["ctx"].(context.Context), loginData["view"].(*view.Manager), loginData["client"].(*vim25.Client),
-		[]string{"HostSystem"}, []string{"runtime", "name"}, &hosts, c.logger,
-	)
+	// 与 host / esxcli.host.nic 共享同一份 HostSystem 检索结果。
+	hosts, err := s.Hosts(ctx, fetchHosts(c.logger))
 	if err != nil {
 		return err
 
@@ -62,34 +54,36 @@ func (c *esxclistoragelistCollector) Update(ch chan<- prometheus.Metric, namespa
 
 	dCounter := 0
 
-	wg := sync.WaitGroup{}
+	// 与 esxcli.host.nic 同理：per-host fan-out 必须有上限，
+	// 否则并发 goroutine 数直接等于 vCenter 里的主机数。
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(s.HostConcurrency())
 
 	for _, host := range hosts {
 
 		if host.Runtime.PowerState == "poweredOn" && host.Runtime.ConnectionState == "connected" && !host.Runtime.InMaintenanceMode {
 
 			dCounter++
-			wg.Add(1)
 
-			go func(host mo.HostSystem) {
-
-				defer wg.Done()
-				esxcliStorageDriverInfo(ch, c.logger, loginData["ctx"].(context.Context), loginData["client"].(*vim25.Client),
-					host, &namespace, &esxclistoragelistSubsystem)
-			}(host)
+			g.Go(func() error {
+				esxcliStorageDriverInfo(gctx, ch, c.logger, s, host, &esxclistoragelistSubsystem)
+				return nil
+			})
 
 		}
 	}
 
-	c.logger.Debug("dispatched storage driver routines", "count", dCounter)
+	c.logger.Debug("dispatched storage driver routines", "count", dCounter,
+		"max_concurrency", s.HostConcurrency())
 
-	wg.Wait()
+	// 单台主机失败不中断其他主机，同 esxcli.host.nic。
+	_ = g.Wait()
 
 	return nil
 }
 
-func esxcliStorageDriverInfo(ch chan<- prometheus.Metric, logger *slog.Logger, ctx context.Context, client *vim25.Client,
-	host mo.HostSystem, namespace, subsystem *string) {
+func esxcliStorageDriverInfo(ctx context.Context, ch chan<- prometheus.Metric, logger *slog.Logger,
+	s *collector.Scrape, host mo.HostSystem, subsystem *string) {
 
 	var (
 		data StorageResponse
@@ -99,7 +93,7 @@ func esxcliStorageDriverInfo(ch chan<- prometheus.Metric, logger *slog.Logger, c
 		revisions = newVersionSet()
 	)
 
-	mme, err := esxcli.GetHostMME(ctx, client, &host.Self)
+	mme, err := esxcli.GetHostMME(ctx, s.Client, &host.Self)
 	if err != nil {
 		logger.Error("error retrieving host MME", "error", err, "host", host.Name)
 		return
@@ -112,7 +106,7 @@ func esxcliStorageDriverInfo(ch chan<- prometheus.Metric, logger *slog.Logger, c
 		Version: "urn:vim25/5.0",
 	}
 
-	err = esxcli.GetSOAP(ctx, client, &request, &data)
+	err = esxcli.GetSOAP(ctx, s.Client, &request, &data)
 	if err != nil {
 		logger.Error("error fetching soap data", "error", err, "host", host.Name)
 		return
@@ -127,7 +121,7 @@ func esxcliStorageDriverInfo(ch chan<- prometheus.Metric, logger *slog.Logger, c
 
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
-				prometheus.BuildFQName(*namespace, *subsystem, "driver"),
+				prometheus.BuildFQName(s.Namespace, *subsystem, "driver"),
 				"Storage device driver info", nil, map[string]string{"mo": host.Self.Value, "host": host.Name, "vendor": strings.TrimSpace(storage.Vendor), "model": strings.TrimSpace(storage.Model), "revision": strings.TrimSpace(storage.Revision)},
 			), prometheus.GaugeValue, float64(1),
 		)

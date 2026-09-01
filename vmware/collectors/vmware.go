@@ -5,15 +5,30 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vmware/govmomi/performance"
 	"github.com/vmware/govmomi/view"
 	"github.com/vmware/govmomi/vim25"
+	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/types"
 )
 
 func Load(logger *slog.Logger) {
 	logger.Info("Loading VMware vSphere collector set")
+}
+
+// fetchHosts 是注入给 Scrape.Hosts 的属性检索实现。
+//
+// 这个函数存在的唯一理由是打破包依赖环：属性检索要用 fetchProperties，
+// 它在本包；而 Scrape 在 internal/collector，本包已经 import 了它。
+// 于是把实现以函数值的形式传进去，方向就只有一条。
+//
+// logger 从闭包捕获而非参数传入，是为了让 Scrape.Hosts 的签名保持最小。
+func fetchHosts(logger *slog.Logger) collector.HostFetcher {
+	return func(ctx context.Context, s *collector.Scrape, props []string, out *[]mo.HostSystem) error {
+		return fetchProperties(ctx, s.View, s.Client, []string{"HostSystem"}, props, out, logger)
+	}
 }
 
 func fetchProperties(ctx context.Context, viewManager *view.Manager, vmwClient *vim25.Client, moTypes, propSpec []string, dataContainer interface{}, logger *slog.Logger) error {

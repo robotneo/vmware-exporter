@@ -247,7 +247,14 @@ scrape_configs:
 | `-collector.vm` | bool | 开启虚拟机 (VM) 数据采集。 | `true` |
 | `-collector.esxcli.host.nic` | bool | 开启基于 esxcli 的主机网卡采集。 | `false` |
 | `-collector.esxcli.storage` | bool | 开启基于 esxcli 的存储采集。 | `false` |
-| `-disable.default.collectors` | bool | 禁用所有默认采集器，仅运行显式开启的采集器。 | `false` |
+
+> **`-disable.default.collectors` 从未存在。** 本表此前列出过它，但二进制
+> 从来没有注册这个 flag —— 传它会让 exporter 直接以
+> `flag provided but not defined` 退出。要只跑一个子集，请逐个显式关闭默认项：
+> `-collector.datacenter=false -collector.cluster=false -collector.datastore=false -collector.host=false -collector.vm=false`。
+>
+> `scripts/check_config.py` 现在会对「出现在参考表里但代码未注册」的 flag
+> 报错，所以这类文档漂移不会再回来。
 
 ### 3. 性能与采样设置
 | 参数 | 类型 | 说明 | 默认值 |
@@ -255,7 +262,13 @@ scrape_configs:
 | `-vmware.timeout` | int | 单次抓取的整体超时（秒），覆盖登录、属性检索与性能采样全过程。 | `60` |
 | `-vmware.interval` | int | PerfManager 采样窗口（秒）。**不再参与超时计算。** | `20` |
 | `-vmware.granularity` | int | 采样数据的时间粒度（秒）。必须大于 0，且不大于 `-vmware.interval`。 | `20` |
-| `-prom.maxRequests` | int | 最大并行采集请求数（设为 0 则不限制）。 | `20` |
+| `-collector.max-concurrency` | int | 并发上限，同时约束两处：`CollectorSet` 层同时运行的 collector 数，以及 esxcli collector 内部按主机 fan-out 的宽度。设为 0 则不限制 collector 层，但 per-host fan-out 仍有内建下限。 | `8` |
+
+> **取代了 `-prom.maxRequests`**：那个参数是死参数 —— 上游框架把它存进
+> `eHandler.maxRequests` 之后就再没读过，设成任何值都没有效果。现在这个值
+> 真的限制并发，其中 per-host fan-out 是真正危险的那一处：改动前 500 台主机
+> 就是 500 个并发 SOAP 请求，每台主机的网卡再各起一个 goroutine，实测能到
+> 2500 个并发请求同时打同一个 vCenter。
 
 > **关于 `-vmware.interval`**：它表达的是期望值。真实采样间隔由服务端的
 > `PerfProviderSummary.RefreshRate` 决定 —— 传一个服务端不支持的间隔只会

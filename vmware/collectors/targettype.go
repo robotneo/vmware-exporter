@@ -4,16 +4,16 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	"github.com/vmware/govmomi/performance"
 	"github.com/vmware/govmomi/vim25/types"
 )
 
-// 目标类型常量。与 vmware/api 包中的定义保持一致，此处重复声明是为了
-// 避免 collectors 包反向依赖 api 包（api 包已经通过 RegisterAPI 依赖了
-// collector 框架，形成环会编译失败）。
+// 目标类型常量。定义在 internal/collector 里，此处以常量别名转发，
+// 让本包内既有的 targetTypeVCenter / targetTypeESXi 引用不必逐个改写。
 const (
-	targetTypeVCenter = "vcenter"
-	targetTypeESXi    = "esxi"
+	targetTypeVCenter = collector.TargetTypeVCenter
+	targetTypeESXi    = collector.TargetTypeESXi
 )
 
 // ESXi 上的隐式伪对象 moid。ESXi 没有真实的 Datacenter / ComputeResource，
@@ -34,20 +34,22 @@ const historicIntervalID int32 = 300
 // 采样周期长期固定为 20s，但这是经验值而非契约，因此只在兜底时使用。
 const realtimeFallbackInterval int32 = 20
 
-// targetType 从 loginData 读出目标类型，缺失时按 vCenter 处理。
+// targetType 返回本次抓取的目标类型。
 //
-// 用带 ok 的断言而不是裸断言：Update() 可能被尚未适配的调用方触发，
-// 缺一个键不该让整个抓取 panic。
-func targetType(loginData map[string]interface{}) string {
-	if t, ok := loginData["targetType"].(string); ok && t != "" {
-		return t
+// 改动前它从 map[string]interface{} 里取 loginData["targetType"]，并且必须
+// 用带 ok 的断言兜底 —— 键可能不存在、类型可能不对，两种失败都只在运行期
+// 暴露。现在 TargetType 是 Scrape 的字段，缺失即空字符串，仍然回退到
+// vCenter，但「类型不对」这种可能性从此不存在。
+func targetType(s *collector.Scrape) string {
+	if s != nil && s.TargetType != "" {
+		return s.TargetType
 	}
 	return targetTypeVCenter
 }
 
 // isESXi 是 targetType 的便捷形式。
-func isESXi(loginData map[string]interface{}) bool {
-	return targetType(loginData) == targetTypeESXi
+func isESXi(s *collector.Scrape) bool {
+	return targetType(s) == targetTypeESXi
 }
 
 // syntheticLabels 在 ESXi 模式下给伪对象指标追加 synthetic="true"。

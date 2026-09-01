@@ -7,11 +7,8 @@ import (
 	"log/slog"
 	"regexp"
 
-	"github.com/prezhdarov/prometheus-exporter/pkg/collector"
+	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/vmware/govmomi/performance"
-	"github.com/vmware/govmomi/view"
-	"github.com/vmware/govmomi/vim25"
 	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/types"
 )
@@ -29,14 +26,14 @@ type datastoreCollector struct {
 }
 
 func init() {
-	collector.RegisterCollector("datastore", datastoreCollectorFlag, NewdatastoreCollector)
+	collector.RegisterFlag("datastore", datastoreCollectorFlag)
 }
 
 func NewdatastoreCollector(logger *slog.Logger) (collector.Collector, error) {
 	return &datastoreCollector{logger}, nil
 }
 
-func (c *datastoreCollector) Update(ch chan<- prometheus.Metric, namespace string, clientAPI collector.ClientAPI, loginData map[string]interface{}, params map[string]string) error {
+func (c *datastoreCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s *collector.Scrape) error {
 
 	var (
 		datastores     []mo.Datastore
@@ -44,7 +41,7 @@ func (c *datastoreCollector) Update(ch chan<- prometheus.Metric, namespace strin
 		datastoreNames = make(map[string]string)
 	)
 	err := fetchProperties(
-		loginData["ctx"].(context.Context), loginData["view"].(*view.Manager), loginData["client"].(*vim25.Client),
+		ctx, s.View, s.Client,
 		[]string{"Datastore"}, []string{"summary", "host", "vm", "parent"}, &datastores, c.logger,
 	)
 	if err != nil {
@@ -61,37 +58,37 @@ func (c *datastoreCollector) Update(ch chan<- prometheus.Metric, namespace strin
 
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
-				prometheus.BuildFQName(namespace, datastoreSubsystem, "info"),
+				prometheus.BuildFQName(s.Namespace, datastoreSubsystem, "info"),
 				"This is datastore info to be used for parent reference", nil,
 				map[string]string{"dsmo": datastore.Summary.Datastore.Value, "ds": datastore.Summary.Name, "type": datastore.Summary.Type,
-					"pfinstance": re.ReplaceAllString(datastore.Summary.Url, ""), "foldermo": datastore.Parent.Value, "vcenter": loginData["target"].(string)},
+					"pfinstance": re.ReplaceAllString(datastore.Summary.Url, ""), "foldermo": datastore.Parent.Value, "vcenter": s.Target},
 			), prometheus.GaugeValue, 1.0,
 		)
 
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
-				prometheus.BuildFQName(namespace, datastoreSubsystem, "capacity"),
+				prometheus.BuildFQName(s.Namespace, datastoreSubsystem, "capacity"),
 				"Datastore capacity in bytes", nil,
 				map[string]string{"dsmo": datastore.Summary.Datastore.Value, "ds": datastore.Summary.Name,
-					"vcenter": loginData["target"].(string)},
+					"vcenter": s.Target},
 			), prometheus.GaugeValue, float64(datastore.Summary.Capacity),
 		)
 
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
-				prometheus.BuildFQName(namespace, datastoreSubsystem, "free"),
+				prometheus.BuildFQName(s.Namespace, datastoreSubsystem, "free"),
 				"Datastore available space in bytes", nil,
 				map[string]string{"dsmo": datastore.Summary.Datastore.Value, "ds": datastore.Summary.Name,
-					"vcenter": loginData["target"].(string)},
+					"vcenter": s.Target},
 			), prometheus.GaugeValue, float64(datastore.Summary.FreeSpace),
 		)
 
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
-				prometheus.BuildFQName(namespace, datastoreSubsystem, "accessible"),
+				prometheus.BuildFQName(s.Namespace, datastoreSubsystem, "accessible"),
 				"Whether the datastore is accessible", nil,
 				map[string]string{"dsmo": datastore.Summary.Datastore.Value, "ds": datastore.Summary.Name,
-					"vcenter": loginData["target"].(string)},
+					"vcenter": s.Target},
 			), prometheus.GaugeValue,
 			func(accessible bool) float64 {
 				if accessible {
@@ -113,19 +110,19 @@ func (c *datastoreCollector) Update(ch chan<- prometheus.Metric, namespace strin
 	interval := historicIntervalID
 	if len(datastoreRefs) > 0 {
 		interval = resolvePerfIntervalForTarget(
-			loginData["ctx"].(context.Context),
-			loginData["perf"].(*performance.Manager),
+			ctx,
+			s.Perf,
 			datastoreRefs[0],
-			loginData["interval"].(int32),
+			s.Interval,
 			historicIntervalID,
-			targetType(loginData),
+			targetType(s),
 			c.logger,
 		)
 	}
 
-	scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), interval, loginData["perf"].(*performance.Manager),
-		loginData["target"].(string), "Datastore", namespace, datastoreSubsystem, "", datastoreCounters,
-		loginData["counters"].(map[string]*types.PerfCounterInfo), datastoreRefs, datastoreNames)
+	scrapePerformance(ctx, ch, c.logger, s.Samples, interval, s.Perf,
+		s.Target, "Datastore", s.Namespace, datastoreSubsystem, "", datastoreCounters,
+		s.Counters, datastoreRefs, datastoreNames)
 
 	return nil
 }

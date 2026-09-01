@@ -1,24 +1,23 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"html"
 	"log/slog"
 	"net/http"
 	"os"
-	"sort"
 	"strings"
-	"sync"
-	"time"
 
-	"github.com/prezhdarov/prometheus-exporter/pkg/collector"
-	"github.com/prezhdarov/prometheus-exporter/pkg/config"
-	"github.com/prezhdarov/prometheus-exporter/pkg/exporter"
+	"github.com/prezhdarov/vmware-exporter/internal/collector"
+	"github.com/prezhdarov/vmware-exporter/internal/config"
 	vmware "github.com/prezhdarov/vmware-exporter/vmware/api"
 	vmwareCollectors "github.com/prezhdarov/vmware-exporter/vmware/collectors"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	versioncollector "github.com/prometheus/client_golang/prometheus/collectors/version"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/promslog"
 	"github.com/prometheus/exporter-toolkit/web"
@@ -30,8 +29,26 @@ const (
 )
 
 var (
-	listenAddress          = flag.String("http.address", ":9169", "Address and port to listen for http connections")
-	maxRequests            = flag.Int("prom.maxRequests", 20, "Maximum number of parallel scrape requests. Use 0 to disable.")
+	listenAddress = flag.String("http.address", ":9169", "Address and port to listen for http connections")
+
+	// maxConcurrency 取代了 -prom.maxRequests。
+	//
+	// 那个 flag 是个死参数：框架把它存进 eHandler.maxRequests 之后就再没
+	// 读过（prometheus-exporter/pkg/exporter/exporter.go:20 与
+	// handler.go:16），设成任何值都没有效果。
+	//
+	// 现在这个值真的限制并发。它同时约束两处：CollectorSet 层同时运行的
+	// collector 数，以及 esxcli collector 内部按主机 fan-out 的宽度。
+	// 后者是真正危险的那个 —— 改动前 500 台主机就是 500 个并发 SOAP 请求，
+	// 每台主机的网卡再各起一个 goroutine，实测能到 2500 个并发请求同时打
+	// 同一个 vCenter。
+	//
+	// 默认 8 是个保守值：足以让属性检索与性能采样重叠起来，又不至于让
+	// vCenter 的连接池成为瓶颈。0 或负数表示不限制 collector 层，但
+	// per-host fan-out 仍有内建下限（见 internal/collector.HostConcurrency）。
+	maxConcurrency = flag.Int("collector.max-concurrency", 8,
+		"Maximum number of collectors running in parallel, and the fan-out width used inside the esxcli collectors. Use 0 to leave the collector layer unlimited.")
+
 	disableExporterTarget  = flag.Bool("disable.exporter.target", false, "Disable default target for /metrics path.")
 	disableExporterMetrics = flag.Bool("disable.exporter.metrics", true, "Disable exporter metrics in /metrics path. Always enabled if /metrics target disabled")
 
@@ -72,7 +89,13 @@ Timing flags:
 Available collectors: %s
 
 `, exporterName, strings.Join(vmwareCollectors.Names(), ", "))
-	config.Usage(s)
+
+	// 改动前这里调框架的 config.Usage，它只在带 -h/-help 时才打印
+	// flag 默认值，其他情况打一行「跑 -help 看说明」。既然自己实现，
+	// 就直接把 flag 列表打全 —— usage 被调用时用户就是想看它。
+	out := flag.CommandLine.Output()
+	fmt.Fprintf(out, "%s\n", s)
+	flag.PrintDefaults()
 }
 
 func webConfig(listenAddress *string) *web.FlagConfig {
@@ -84,138 +107,6 @@ func webConfig(listenAddress *string) *web.FlagConfig {
 		WebSystemdSocket:   &systemSocket,
 		WebConfigFile:      webConfigFile,
 	}
-}
-
-// scrapeMetrics 是 /probe 路径的自监控指标描述符。
-//
-// 名称与标签必须与框架 /metrics 路径产出的完全一致
-// （见 prometheus-exporter/pkg/collector/collector.go:84-96），
-// 否则同一套 Prometheus 查询无法同时覆盖两个端点。
-type scrapeMetrics struct {
-	duration *prometheus.Desc
-	success  *prometheus.Desc
-}
-
-func newScrapeMetrics(namespace string) scrapeMetrics {
-	return scrapeMetrics{
-		duration: prometheus.NewDesc(
-			prometheus.BuildFQName(namespace, "scrape", "collector_duration_seconds"),
-			"Duration of a collector scrape.",
-			[]string{"collector"},
-			nil,
-		),
-		success: prometheus.NewDesc(
-			prometheus.BuildFQName(namespace, "scrape", "collector_success"),
-			"Whether a collector succeeded.",
-			[]string{"collector"},
-			nil,
-		),
-	}
-}
-
-// vmwareCollector 包装 VMware collectors 以符合 prometheus.Collector 接口
-type vmwareCollector struct {
-	loginData         map[string]interface{}
-	namespace         string
-	logger            *slog.Logger
-	clientAPI         collector.ClientAPI
-	enabledCollectors map[string]bool
-	scrapeMetrics     scrapeMetrics
-}
-
-func newVMwareCollector(loginData map[string]interface{}, namespace string, logger *slog.Logger, enabledCollectors map[string]bool) (*vmwareCollector, error) {
-	return &vmwareCollector{
-		loginData:         loginData,
-		namespace:         namespace,
-		logger:            logger,
-		clientAPI:         vmware.NewAPI(),
-		enabledCollectors: enabledCollectors,
-		scrapeMetrics:     newScrapeMetrics(namespace),
-	}, nil
-}
-
-// Describe 实现 prometheus.Collector 接口。
-//
-// 业务指标的 Desc 在各 collector 内部按采集结果动态构造，无法预先枚举，
-// 因此这里只描述两个固定的自监控指标。空实现会让 registry 把本 collector
-// 视为「unchecked collector」，从而跳过重复注册检测。
-func (c *vmwareCollector) Describe(ch chan<- *prometheus.Desc) {
-	ch <- c.scrapeMetrics.duration
-	ch <- c.scrapeMetrics.success
-}
-
-// isEnabled 判断某个 collector 本次是否应该运行。
-// 未显式指定时回退到该 collector 的默认状态。
-func (c *vmwareCollector) isEnabled(def vmwareCollectors.Definition) bool {
-	if enabled, exists := c.enabledCollectors[def.Name]; exists {
-		return enabled
-	}
-
-	return def.DefaultEnabled
-}
-
-// Collect 实现 prometheus.Collector 接口。
-//
-// 并发调度所有启用的 collector，并为每个 collector 产出
-// _duration_seconds 与 _success 两个自监控指标。
-//
-// 这里刻意复刻框架 CollectorSet.Collect 的行为
-// （prometheus-exporter/pkg/collector/collect.go:28-73），使 /probe 与
-// /metrics 两条路径在并发性与可观测性上完全对齐。此前 /probe 是串行执行
-// 且完全没有自监控指标，同一份告警规则在两个端点上表现不同。
-//
-// 注意：登录/登出由调用方 probeHandler 负责，不在此处，所以本函数只产出
-// 各 collector 的耗时与 all_collectors 汇总，不产出 login/logout 计时。
-func (c *vmwareCollector) Collect(ch chan<- prometheus.Metric) {
-	begin := time.Now()
-
-	params := make(map[string]string)
-
-	wg := sync.WaitGroup{}
-
-	for _, def := range vmwareCollectors.Definitions() {
-		if !c.isEnabled(def) {
-			c.logger.Debug("skipping disabled collector", "name", def.Name)
-			continue
-		}
-
-		instance, err := def.Creator(c.logger.With("collector", def.Name))
-		if err != nil {
-			// 构造失败也要产出 success=0，否则这个 collector 在监控上
-			// 表现为「静默消失」而非「失败」，无法告警。
-			c.logger.Error("failed to create collector", "collector", def.Name, "error", err)
-			ch <- prometheus.MustNewConstMetric(c.scrapeMetrics.success, prometheus.GaugeValue, 0, def.Name)
-			continue
-		}
-
-		wg.Add(1)
-
-		go func(name string, instance collector.Collector) {
-			defer wg.Done()
-
-			collectorBegin := time.Now()
-
-			err := instance.Update(ch, c.namespace, c.clientAPI, c.loginData, params)
-
-			duration := time.Since(collectorBegin)
-
-			success := float64(1)
-			if err != nil {
-				success = 0
-				c.logger.Error("collector failed", "collector", name, "duration_seconds", duration.Seconds(), "error", err)
-			} else {
-				c.logger.Debug("collector scraped successfully", "collector", name, "duration_seconds", duration.Seconds())
-			}
-
-			ch <- prometheus.MustNewConstMetric(c.scrapeMetrics.duration, prometheus.GaugeValue, duration.Seconds(), name)
-			ch <- prometheus.MustNewConstMetric(c.scrapeMetrics.success, prometheus.GaugeValue, success, name)
-		}(def.Name, instance)
-	}
-
-	wg.Wait()
-
-	// 与框架保持一致的汇总计时，标签值同样用 "all_collectors"。
-	ch <- prometheus.MustNewConstMetric(c.scrapeMetrics.duration, prometheus.GaugeValue, time.Since(begin).Seconds(), "all_collectors")
 }
 
 // parseCollectors 解析 collectors 参数
@@ -298,11 +189,84 @@ func parseCollectors(params map[string][]string, logger *slog.Logger) (map[strin
 	return enabledCollectors, unknown
 }
 
-// probeHandler 处理 probe 请求，支持多 target 和独立凭证
+// newRegistry 组装一次抓取用的 registry。
+//
+// /metrics 与 /probe 走的是同一个函数，这是本次重构的要点之一：改动前
+// /metrics 用框架的 exporter.CreateHandler，/probe 用根包手写的
+// vmwareCollector，两份实现的并发行为与自监控指标各不相同，同一份告警规则
+// 在两个端点上表现不一样。
+func newRegistry(cs *collector.CollectorSet, includeExporterMetrics bool) (*prometheus.Registry, error) {
+	registry := prometheus.NewRegistry()
+
+	// build_info 指标。exporter 的版本信息本身就是运维要查的东西
+	// （「这台还没升级？」），两个端点都应该有。
+	registry.MustRegister(versioncollector.NewCollector(fmt.Sprintf("%s_exporter", namespace)))
+
+	if includeExporterMetrics {
+		registry.MustRegister(
+			collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+			collectors.NewGoCollector(),
+		)
+	}
+
+	if err := registry.Register(cs); err != nil {
+		return nil, fmt.Errorf("could not register the %s collector: %w", namespace, err)
+	}
+
+	return registry, nil
+}
+
+// serveScrape 跑一轮抓取并把结果写进响应。
+func serveScrape(w http.ResponseWriter, r *http.Request, cs *collector.CollectorSet,
+	includeExporterMetrics bool, logger *slog.Logger) {
+
+	registry, err := newRegistry(cs, includeExporterMetrics)
+	if err != nil {
+		logger.Error("could not build the metrics registry", "error", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	promhttp.HandlerFor(registry, promhttp.HandlerOpts{
+		ErrorLog:      slog.NewLogLogger(logger.Handler(), slog.LevelError),
+		ErrorHandling: promhttp.ContinueOnError,
+	}).ServeHTTP(w, r)
+}
+
+// metricsHandler 服务 /metrics：单 vCenter 模式，凭证来自全局 flag。
+func metricsHandler(logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// -disable.exporter.target 时只输出 exporter 自身的指标，
+		// 不去连 vCenter。
+		if *disableExporterTarget {
+			promhttp.Handler().ServeHTTP(w, r)
+			return
+		}
+
+		// ctx 派生自请求：客户端断连或 Prometheus 抓取超时会真正取消上游的
+		// vCenter 调用。改动前这条路径上的 context 由 api 层用
+		// context.Background() 独立派生，请求侧的取消传不进来。
+		cs, err := collector.NewCollectorSet(r.Context(), vmwareCollectors.Definitions(), collector.Options{
+			Namespace:      namespace,
+			Target:         "", // 空表示用 -vmware.vcenter
+			Login:          vmware.NewAPI(),
+			Logger:         logger,
+			MaxConcurrency: *maxConcurrency,
+		})
+		if err != nil {
+			logger.Error("could not create the collector set", "error", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		serveScrape(w, r, cs, !*disableExporterMetrics, logger)
+	}
+}
+
+// probeHandler 处理 probe 请求，支持多 target 和独立凭证。
 func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 	params := r.URL.Query()
 
-	// 获取 target 参数
 	target := params.Get("target")
 	if target == "" {
 		http.Error(w, "target parameter is required", http.StatusBadRequest)
@@ -310,11 +274,10 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 		return
 	}
 
-	// 获取认证参数（从 URL 参数或 HTTP headers）
+	// 认证参数可来自 URL 参数或 HTTP Basic Auth。
 	username := params.Get("username")
 	password := params.Get("password")
 
-	// 也支持从 Basic Auth 获取凭证
 	if username == "" || password == "" {
 		if user, pass, ok := r.BasicAuth(); ok {
 			username = user
@@ -322,14 +285,12 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 		}
 	}
 
-	// 验证凭证
 	if username == "" || password == "" {
 		http.Error(w, "username and password are required (via URL params or Basic Auth)", http.StatusBadRequest)
 		logger.Error("probe request missing credentials", "target", target)
 		return
 	}
 
-	// 获取可选参数
 	schema := params.Get("schema")
 	if schema == "" {
 		schema = "https"
@@ -337,7 +298,6 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 
 	insecure := params.Get("insecure") == "true"
 
-	// 解析 collectors 配置
 	enabledCollectors, unknownCollectors := parseCollectors(params, logger)
 
 	// 拼错的 collector 名此前被静默忽略，会得到一份空指标集且毫无提示。
@@ -354,77 +314,58 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 		return
 	}
 
-	collectorList := []string{}
-	for name, enabled := range enabledCollectors {
-		if enabled {
-			collectorList = append(collectorList, name)
-		}
+	// 凭证与 target 走 probeLogin，它把 Credentials 绑进 collector.Login 接口。
+	cs, err := collector.NewCollectorSet(r.Context(), vmwareCollectors.Definitions(), collector.Options{
+		Namespace: namespace,
+		Target:    target,
+		Login: &probeLogin{
+			api: vmware.NewAPI(),
+			creds: vmware.Credentials{
+				Target:   target,
+				Username: username,
+				Password: password,
+				Schema:   schema,
+				Insecure: insecure,
+			},
+			logger: logger,
+		},
+		Logger:         logger,
+		Enabled:        enabledCollectors,
+		MaxConcurrency: *maxConcurrency,
+	})
+	if err != nil {
+		logger.Error("could not create the collector set", "target", target, "error", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
-
-	sort.Strings(collectorList)
 
 	logger.Debug("probe request received",
 		"target", target,
-		"username", username,
 		"schema", schema,
 		"insecure", insecure,
-		"collectors", strings.Join(collectorList, ","))
+		"collectors", strings.Join(cs.Names(), ","))
 
-	// 创建凭证对象
-	creds := vmware.Credentials{
-		Target:   target,
-		Username: username,
-		Password: password,
-		Schema:   schema,
-		Insecure: insecure,
-	}
+	// 登录失败不再返回 401。改动前 probeHandler 先登录、失败就 http.Error，
+	// 于是 Prometheus 收到一个 HTTP 错误、拿不到任何指标 —— 无法区分
+	// 「vCenter 拒绝了凭证」和「exporter 自己挂了」。现在登录发生在
+	// CollectorSet.Collect 内部，失败会产出 vmware_up 0 加上每个 collector 的
+	// success 0，凭证错误于是变成一条可告警的时间序列。
+	serveScrape(w, r, cs, false, logger)
+}
 
-	// 创建临时 registry
-	registry := prometheus.NewRegistry()
+// probeLogin 把一组显式凭证绑进 collector.Login 接口。
+//
+// 需要这个适配器是因为 Login(ctx, target) 的签名里没有凭证位置 ——
+// /metrics 用的是全局 flag，凭证不必传；/probe 的凭证每个请求都不同。
+// 把它们捕获在结构体里，两条路径就能共用同一个 CollectorSet。
+type probeLogin struct {
+	api    *vmware.VMware
+	creds  vmware.Credentials
+	logger *slog.Logger
+}
 
-	// 创建 VMware API 实例并登录
-	vm := vmware.NewAPI()
-	loginData, err := vm.LoginWithCredentials(creds, logger)
-	if err != nil {
-		logger.Error("failed to login to vCenter", "target", target, "error", err)
-		http.Error(w, fmt.Sprintf("Login failed: %v", err), http.StatusUnauthorized)
-		return
-	}
-
-	// 确保在函数结束时登出
-	defer func() {
-		if err := vm.Logout(loginData, logger); err != nil {
-			logger.Error("failed to logout from vCenter", "target", target, "error", err)
-		}
-	}()
-
-	logger.Info("successfully logged in to vCenter", "target", target)
-
-	// 创建 VMware collector（带 collectors 配置）
-	vmwareCol, err := newVMwareCollector(loginData, namespace, logger, enabledCollectors)
-	if err != nil {
-		logger.Error("failed to create vmware collector", "target", target, "error", err)
-		http.Error(w, fmt.Sprintf("Failed to create collector: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// 注册 collector
-	if err := registry.Register(vmwareCol); err != nil {
-		logger.Error("failed to register vmware collector", "target", target, "error", err)
-		http.Error(w, fmt.Sprintf("Failed to register collector: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	logger.Debug("collector registered, starting metric collection", "target", target)
-
-	// 收集并返回指标
-	h := promhttp.HandlerFor(registry, promhttp.HandlerOpts{
-		ErrorHandling: promhttp.ContinueOnError,
-	})
-
-	h.ServeHTTP(w, r)
-
-	logger.Info("probe request completed successfully", "target", target)
+func (p *probeLogin) Login(ctx context.Context, _ string) (*collector.Scrape, func(), error) {
+	return p.api.LoginWithCredentials(ctx, p.creds, p.logger)
 }
 
 // collectorDescriptions 给首页文档提供人类可读的说明。
@@ -472,9 +413,22 @@ func collectorListHTML() string {
 func main() {
 	flag.CommandLine.SetOutput(os.Stdout)
 	flag.Usage = usage
-	config.Parse()
 
-	logger := promslog.New(config.SetLogger(logFormat, logLevel))
+	// Parse 现在返回 error 而不是在库里 log.Fatalf 掉进程。区别在于失败信息
+	// 走的是同一个 logger、格式与其他启动错误一致，而且这条分支现在可测。
+	if err := config.Parse(); err != nil {
+		fmt.Fprintf(os.Stderr, "configuration error: %s\n", err)
+		os.Exit(1)
+	}
+
+	// logger 还没建好，所以这里的错误只能往 stderr 写 —— 而错误本身正是
+	// 「logger 参数不合法」。框架版本会静默降级成默认等级，见 config.SetLogger。
+	promslogConfig, err := config.SetLogger(logFormat, logLevel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "configuration error: %s\n", err)
+		os.Exit(1)
+	}
+	logger := promslog.New(promslogConfig)
 
 	// fail-fast：非法的 vmware.* 参数组合会在运行期引发除零 panic 或让采样
 	// 永远拿不到数据，必须在监听端口之前就拒绝启动。
@@ -489,7 +443,11 @@ func main() {
 	vmwareCollectors.Load(logger)
 
 	// /metrics 端点 - 使用全局 flag 配置的默认凭证（单 vCenter 模式）
-	http.Handle("/metrics", exporter.CreateHandler(!*disableExporterMetrics, *disableExporterTarget, *maxRequests, namespace, logger))
+	//
+	// 改动前这里是 exporter.CreateHandler(...)，由框架内部去查它自己的
+	// collector 注册表。现在两条路径（/metrics 与 /probe）都走
+	// internal/collector.CollectorSet，调度逻辑只有一份。
+	http.Handle("/metrics", metricsHandler(logger))
 
 	// /probe 端点 - 支持多 target 和独立凭证（多 vCenter 模式）
 	http.HandleFunc("/probe", func(w http.ResponseWriter, r *http.Request) {

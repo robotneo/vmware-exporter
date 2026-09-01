@@ -104,10 +104,9 @@ The options available are:
 | -log.format | Can be either json or logfmt (default: logfmt) |
 | -log.level | One of debug,info,warn or error (default: debug) - Don't expect much..|
 | -web.config.file | Path to a web configuration file enabling TLS and/or HTTP basic auth on the exporter's own listener - see [Securing the exporter](#securing-the-exporter) |
-| -prom.maxRequests | Max concurrent scrape requests (default: 20) |
+| -collector.max-concurrency | Maximum number of collectors running in parallel, and the fan-out width used inside the esxcli collectors (default: 8). Use 0 to leave the collector layer unlimited; the per-host fan-out keeps a built-in floor. Replaces `-prom.maxRequests`, which was accepted but never had any effect |
 | -disable.exporter.metrics | Disables the exporter's own `go_*` and `process_*` metrics (default: **true**, so they are absent unless you pass `=false`) |
 | -disable.exporter.target | Disables exporter default target - /metrics will only return exporter data - use /probe. `/metrics` then serves client_golang's default registry, which carries the Go and process collectors regardless of the flag above |
-| -disable.default.collectors | Disables all collectors enabled by default |
 | -collector.datacenter | Enables or disables DataCenter metrics collection (default: enabled) |
 | -collector.cluster | Enables or disables Cluster metrics collection (default: enabled) |
 | -collector.datastore | Enables or disables Datastore metrics collection (default: enabled) |
@@ -115,6 +114,15 @@ The options available are:
 | -collector.vm | Enables or disables Virtual Machine metrics collection (default: enabled) |
 | -collector.esxcli.host.nic | Collects ESXi NIC firmware information using esxcli over the SOAP API (proxied by vCenter, or direct when connected to an ESXi host) (default: disabled) |
 | -collector.esxcli.storage | Collects ESXi storage firmware information using esxcli over the SOAP API (proxied by vCenter, or direct when connected to an ESXi host) (default: disabled) |
+
+> **`-disable.default.collectors` never existed.** Earlier revisions of this
+> table listed it, but the binary has never registered such a flag — passing it
+> makes the exporter exit with `flag provided but not defined`. To run only a
+> chosen subset, disable the defaults explicitly:
+> `-collector.datacenter=false -collector.cluster=false -collector.datastore=false -collector.host=false -collector.vm=false`.
+>
+> `scripts/check_config.py` now fails on any flag that appears in these tables
+> without being registered, so this class of drift cannot come back.
 | -vmware.granularity | Time granularity of the sampled data in seconds. Must be > 0 and no greater than -vmware.interval (default 20) |
 | -vmware.insecureTLS | Trust insecure TLS certificates (true) or verify them (default). ESXi hosts ship self-signed certificates, so this is usually needed for direct collection |
 | -vmware.interval | PerfManager sampling window in seconds. This is a *request* - the effective interval is decided by the server's PerfProviderSummary.RefreshRate. No longer used for timeout calculation (default 20) |

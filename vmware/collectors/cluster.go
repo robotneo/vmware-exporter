@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/prezhdarov/prometheus-exporter/pkg/collector"
+	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/vmware/govmomi/view"
-	"github.com/vmware/govmomi/vim25"
 	"github.com/vmware/govmomi/vim25/mo"
 )
 
@@ -24,19 +22,19 @@ type clusterCollector struct {
 }
 
 func init() {
-	collector.RegisterCollector("cluster", clusterCollectorFlag, NewClusterCollector)
+	collector.RegisterFlag("cluster", clusterCollectorFlag)
 }
 
 func NewClusterCollector(logger *slog.Logger) (collector.Collector, error) {
 	return &clusterCollector{logger}, nil
 }
 
-func (c *clusterCollector) Update(ch chan<- prometheus.Metric, namespace string, clientAPI collector.ClientAPI, loginData map[string]interface{}, params map[string]string) error {
+func (c *clusterCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s *collector.Scrape) error {
 
 	var clusters []mo.ClusterComputeResource
 
 	err := fetchProperties(
-		loginData["ctx"].(context.Context), loginData["view"].(*view.Manager), loginData["client"].(*vim25.Client),
+		ctx, s.View, s.Client,
 		[]string{"ClusterComputeResource"}, []string{"name", "summary", "datastore", "parent"}, &clusters, c.logger,
 	)
 	if err != nil {
@@ -48,10 +46,10 @@ func (c *clusterCollector) Update(ch chan<- prometheus.Metric, namespace string,
 
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
-				prometheus.BuildFQName(namespace, clusterSubsystem, "info"),
+				prometheus.BuildFQName(s.Namespace, clusterSubsystem, "info"),
 				"Basic cluster info, for joining on parent references.", nil,
 				map[string]string{"cmo": cluster.Self.Value, "vmwcluster": cluster.Name, "foldermo": cluster.Parent.Value,
-					"vcenter": loginData["target"].(string)},
+					"vcenter": s.Target},
 			), prometheus.GaugeValue, 1.0,
 		)
 
@@ -62,10 +60,10 @@ func (c *clusterCollector) Update(ch chan<- prometheus.Metric, namespace string,
 		for _, ds := range cluster.Datastore {
 			ch <- prometheus.MustNewConstMetric(
 				prometheus.NewDesc(
-					prometheus.BuildFQName(namespace, clusterSubsystem, "datastore"),
+					prometheus.BuildFQName(s.Namespace, clusterSubsystem, "datastore"),
 					"Cluster to datastore mapping, one series per datastore.", nil,
 					map[string]string{"cmo": cluster.Self.Value, "vmwcluster": cluster.Name,
-						"dsmo": ds.Value, "vcenter": loginData["target"].(string)},
+						"dsmo": ds.Value, "vcenter": s.Target},
 				), prometheus.GaugeValue, 1.0,
 			)
 		}
@@ -77,7 +75,7 @@ func (c *clusterCollector) Update(ch chan<- prometheus.Metric, namespace string,
 		// ha-compute-res。原实现靠 len(clusters)==0 意外兜到这条路径，
 		// 现在把它变成显式分支：既服务 ESXi，也覆盖 vCenter 下主机不在
 		// 任何集群里的情况（独立主机会有一个自动生成的 ComputeResource）。
-		esxi := isESXi(loginData)
+		esxi := isESXi(s)
 
 		if esxi {
 			c.logger.Debug("no cluster found, falling back to ComputeResource",
@@ -87,7 +85,7 @@ func (c *clusterCollector) Update(ch chan<- prometheus.Metric, namespace string,
 		var compute []mo.ComputeResource
 
 		err = fetchProperties(
-			loginData["ctx"].(context.Context), loginData["view"].(*view.Manager), loginData["client"].(*vim25.Client),
+			ctx, s.View, s.Client,
 			[]string{"ComputeResource"}, []string{"name", "summary", "datastore", "parent"}, &compute, c.logger,
 		)
 		if err != nil {
@@ -98,7 +96,7 @@ func (c *clusterCollector) Update(ch chan<- prometheus.Metric, namespace string,
 		for _, cr := range compute {
 
 			infoLabels := map[string]string{"cmo": cr.Self.Value, "host": cr.Name, "foldermo": cr.Parent.Value,
-				"vcenter": loginData["target"].(string)}
+				"vcenter": s.Target}
 
 			// 只有 ESXi 的 ha-compute-res 才是伪对象。vCenter 下的独立主机
 			// ComputeResource 是真实存在的托管对象，不该被标成 synthetic。
@@ -109,7 +107,7 @@ func (c *clusterCollector) Update(ch chan<- prometheus.Metric, namespace string,
 
 			ch <- prometheus.MustNewConstMetric(
 				prometheus.NewDesc(
-					prometheus.BuildFQName(namespace, "compute", "info"),
+					prometheus.BuildFQName(s.Namespace, "compute", "info"),
 					"Basic compute resource info, for hosts that are not in a cluster.", nil,
 					infoLabels,
 				), prometheus.GaugeValue, 1.0,
@@ -118,14 +116,14 @@ func (c *clusterCollector) Update(ch chan<- prometheus.Metric, namespace string,
 			// 与 cluster_datastore 同理：一个 datastore 一条序列。
 			for _, ds := range cr.Datastore {
 				dsLabels := map[string]string{"cmo": cr.Self.Value, "host": cr.Name,
-					"dsmo": ds.Value, "vcenter": loginData["target"].(string)}
+					"dsmo": ds.Value, "vcenter": s.Target}
 				if synthetic {
 					dsLabels = syntheticLabels(dsLabels)
 				}
 
 				ch <- prometheus.MustNewConstMetric(
 					prometheus.NewDesc(
-						prometheus.BuildFQName(namespace, "compute", "datastore"),
+						prometheus.BuildFQName(s.Namespace, "compute", "datastore"),
 						"Compute resource to datastore mapping, one series per datastore.", nil,
 						dsLabels,
 					), prometheus.GaugeValue, 1.0,
