@@ -105,8 +105,8 @@ The options available are:
 | -log.level | One of debug,info,warn or error (default: debug) - Don't expect much..|
 | -web.config.file | Path to a web configuration file enabling TLS and/or HTTP basic auth on the exporter's own listener - see [Securing the exporter](#securing-the-exporter) |
 | -prom.maxRequests | Max concurrent scrape requests (default: 20) |
-| -disable.exporter.metrics | Disables exporter process metrics |
-| -disable.exporter.target | Disables exporter default target - /metrics will only return exporter data - use /probe |
+| -disable.exporter.metrics | Disables the exporter's own `go_*` and `process_*` metrics (default: **true**, so they are absent unless you pass `=false`) |
+| -disable.exporter.target | Disables exporter default target - /metrics will only return exporter data - use /probe. `/metrics` then serves client_golang's default registry, which carries the Go and process collectors regardless of the flag above |
 | -disable.default.collectors | Disables all collectors enabled by default |
 | -collector.datacenter | Enables or disables DataCenter metrics collection (default: enabled) |
 | -collector.cluster | Enables or disables Cluster metrics collection (default: enabled) |

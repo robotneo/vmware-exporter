@@ -272,6 +272,20 @@ scrape_configs:
 | `-log.format` | string | 日志格式: `logfmt` 或 `json`。 | `logfmt` |
 | `-file` | string | 指定配置文件的路径。 | - |
 | `-web.config.file` | string | Web 配置文件路径，用于给 exporter 自身的监听端口启用 TLS 与 HTTP Basic Auth。详见[安全加固](#安全加固)。 | - |
+| `-disable.exporter.metrics` | bool | 是否**不**在 `/metrics` 中导出 exporter 自身的运行指标（`go_*`、`process_*`）。 | `true` |
+| `-disable.exporter.target` | bool | 是否禁用 `/metrics` 的默认采集目标。开启后 `/metrics` 只返回 exporter 自身指标，vCenter 数据改由 `/probe` 提供。 | `false` |
+
+> **注意 `-disable.exporter.metrics` 默认就是 `true`**，也就是默认**不会**有
+> `go_goroutines`、`process_resident_memory_bytes` 这类指标。实测默认配置下
+> `/metrics` 里 `go_*` 与 `process_*` 均为 0 条；显式设为 `false` 后分别出现
+> 35 条与 5 条。如果你在排查 exporter 自身的资源占用却找不到这些指标，就是
+> 这个开关。
+>
+> 两者存在联动：`-disable.exporter.target=true` 时 `/metrics` 走的是
+> client_golang 的默认 registry，它自带 Go 与 process collector，所以无论
+> `-disable.exporter.metrics` 取什么值，exporter 自身指标都会出现 —— 但
+> `vmware_*` 指标会**完全消失**（实测 0 条），vCenter 数据必须改从 `/probe`
+> 获取。
 
 ### 5. 环境变量集成
 | 参数 | 类型 | 说明 | 默认值 |

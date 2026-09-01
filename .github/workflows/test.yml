@@ -116,6 +116,17 @@ jobs:
         with:
           python-version: '3.x'
 
+      # check_config.py builds the exporter to read the authoritative flag list
+      # from `--help`. The collector flags are constructed at registration time
+      # (`fmt.Sprintf("collector.%s", ...)`), so grepping the source misses them
+      # and would report a valid VMWARE_collector_* variable as unmatched.
+      # Without Go the script warns and falls back to that weaker mode.
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Install dependencies
         run: pip install pyyaml
 
