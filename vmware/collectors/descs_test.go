@@ -277,18 +277,6 @@ func collectSeries(t *testing.T, ch <-chan prometheus.Metric) map[string][]map[s
 	return out
 }
 
-// collectValues 同 collectSeries，但保留 metric value。
-func collectValues(t *testing.T, ch <-chan prometheus.Metric) map[string][]float64 {
-	t.Helper()
-
-	out := map[string][]float64{}
-	for _, m := range drainMetrics(ch) {
-		name, _, v := labelsOf(t, m)
-		out[name] = append(out[name], v)
-	}
-	return out
-}
-
 // requireSeries 取指定指标的全部序列，一条都没有就直接失败 —— 指标压根没产出
 // 时，后面的 label 断言会全部跳过而测试照样通过，那是最糟的假通过。
 func requireSeries(t *testing.T, series map[string][]map[string]string, name string) []map[string]string {

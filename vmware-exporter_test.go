@@ -806,7 +806,9 @@ func TestWebConfigFileAcceptsGeneratedTLSConfig(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ping", func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, "pong")
+		if _, err := fmt.Fprint(w, "pong"); err != nil {
+			t.Errorf("write response body: %v", err)
+		}
 	})
 	srv := &http.Server{Handler: mux}
 	t.Cleanup(func() { _ = srv.Close() })
@@ -849,7 +851,11 @@ func TestWebConfigFileAcceptsGeneratedTLSConfig(t *testing.T) {
 		t.Fatalf("HTTPS request failed after retries: %v\n"+
 			"  the web config file was not applied, so the listener is plain HTTP", lastErr)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("close response body: %v", err)
+		}
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

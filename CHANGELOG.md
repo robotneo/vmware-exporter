@@ -200,4 +200,18 @@ class of breaking change.
 - `vmware.conf` now documents that it holds a password in plain text, and
   suggests `chmod 600`, a read-only service account, and passing the password via
   an `EnvironmentFile` instead.
-- Removed dead code: `inSlice` and `moSliceToString`.
+- The Docker image builds with `go build -o vmware-exporter .` instead of naming
+  `vmware-exporter.go` explicitly. The file-list form compiles only the files
+  listed, so adding a second file to package `main` would have dropped it from
+  the image without any error — verified with a second file whose `init()` never
+  ran in the resulting binary.
+- CI now runs `gofmt`, `go vet`, `go test -race`, `golangci-lint` (the
+  `.golangci.yml` in the repository had never been executed by any workflow),
+  `scripts/check_config.py` and `scripts/patch_dashboards.py --check`. The
+  `paths-ignore: '*.md'` filter was dropped: the config check scans the READMEs
+  for credentials, so a docs-only change is precisely when it needs to run.
+- Removed dead code: `inSlice`, `moSliceToString`, five entirely
+  commented-out files under `vmware/api/` (`clusters.go`, `datastores.go`,
+  `host.go`, `vm.go`, `inventory.go` — remnants of a REST `/api/vcenter/...`
+  implementation superseded by the SOAP path), and a commented-out manual SOAP
+  block in `esxclistoragelist.go` that `esxcli.GetSOAP` replaced.

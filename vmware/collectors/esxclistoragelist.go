@@ -111,34 +111,12 @@ func esxcliStorageDriverInfo(ch chan<- prometheus.Metric, logger *slog.Logger, c
 		Method:  "vim.EsxCLI.storage.core.device.list",
 		Version: "urn:vim25/5.0",
 	}
-	/*
-		res, err := esxcli.ExecuteSoap(ctx, client, &request)
-		if err != nil {
-			//errchan <- err
-			return
-		}
 
-		if res.Returnval != nil {
-			if res.Returnval.Fault != nil {
-				level.Error(logger).Log("msg", "error retrieving host nic info", "err", err)
-				return
-			}
-
-		}
-
-		err = xml.Unmarshal([]byte(res.Returnval.Response), &data)
-		if err != nil {
-			level.Error(logger).Log("msg", "error unmarshalling host nic info", "err", err)
-			return
-		}
-	*/
 	err = esxcli.GetSOAP(ctx, client, &request, &data)
 	if err != nil {
 		logger.Error("error fetching soap data", "error", err, "host", host.Name)
 		return
 	}
-
-	// level.Debug(logger).Log("msg", fmt.Sprintf("we have SOAP from %s", request.This))
 
 	for _, storage := range data.DataObject {
 

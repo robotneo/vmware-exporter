@@ -736,7 +736,14 @@ func TestDetectTargetTypeAgainstSimulators(t *testing.T) {
 			if err := govmomiLoginWithCreds(loginData, creds, discardLogger()); err != nil {
 				t.Fatalf("login failed: %v", err)
 			}
-			defer NewAPI().Logout(loginData, discardLogger())
+			// Logout 失败不该让测试失败 —— 它是清理动作，被测的东西已经
+			// 验证完了。但也不能直接丢掉错误：会话泄漏正是 Stage 1 修的那个
+			// bug，真出问题时日志里得有痕迹。
+			defer func() {
+				if err := NewAPI().Logout(loginData, discardLogger()); err != nil {
+					t.Logf("logout failed during cleanup: %v", err)
+				}
+			}()
 
 			got, ok := loginData["targetType"].(string)
 			if !ok {
