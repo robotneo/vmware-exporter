@@ -319,6 +319,13 @@ func main() {
 
 	logger := promslog.New(config.SetLogger(logFormat, logLevel))
 
+	// fail-fast：非法的 vmware.* 参数组合会在运行期引发除零 panic 或让采样
+	// 永远拿不到数据，必须在监听端口之前就拒绝启动。
+	if err := vmware.ValidateFlags(); err != nil {
+		logger.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
+
 	logger.Debug("exporter target setting", "disabled", *disableExporterTarget)
 
 	vmware.Load(logger)
