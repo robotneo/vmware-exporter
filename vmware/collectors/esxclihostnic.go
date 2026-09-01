@@ -5,15 +5,13 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"sync"
 
 	"github.com/prezhdarov/vmware-exporter/vmware/esxcli"
 
-	"github.com/prezhdarov/prometheus-exporter/pkg/collector"
+	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/vmware/govmomi/view"
-	"github.com/vmware/govmomi/vim25"
 	"github.com/vmware/govmomi/vim25/mo"
+	"golang.org/x/sync/errgroup"
 )
 
 type DriverInfo struct {
@@ -46,54 +44,54 @@ type esxclihostnicCollector struct {
 }
 
 func init() {
-	collector.RegisterCollector("esxcli.host.nic", esxclihostnicCollectorFlag, NewesxcliHostNICCollector)
+	collector.RegisterFlag("esxcli.host.nic", esxclihostnicCollectorFlag)
 }
 
 func NewesxcliHostNICCollector(logger *slog.Logger) (collector.Collector, error) {
 	return &esxclihostnicCollector{logger}, nil
 }
 
-func (c *esxclihostnicCollector) Update(ch chan<- prometheus.Metric, namespace string, clientAPI collector.ClientAPI, loginData map[string]interface{}, params map[string]string) error {
+func (c *esxclihostnicCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s *collector.Scrape) error {
 
-	var (
-		hosts []mo.HostSystem
-	)
-
-	err := fetchProperties(
-		loginData["ctx"].(context.Context), loginData["view"].(*view.Manager), loginData["client"].(*vim25.Client),
-		[]string{"HostSystem"}, []string{"runtime", "name", "config", "hardware"}, &hosts, c.logger,
-	)
+	// 与 host collector 共享同一份 HostSystem 检索结果。改动前这里自己
+	// 又拉一遍（属性集是 runtime/name/config/hardware），三个主机相关的
+	// collector 全开时同一份清单被检索三次。
+	hosts, err := s.Hosts(ctx, fetchHosts(c.logger))
 	if err != nil {
 		return err
 
 	}
 
-	wg := sync.WaitGroup{}
+	// 每主机一个 goroutine，每张网卡再一个 —— 这是无界 fan-out 的第二和
+	// 第三层。500 主机 × 4 网卡 = 2500 个 goroutine 同时打同一个 vCenter。
+	//
+	// errgroup.SetLimit 给这两层都加了上限。用 s.MaxConcurrency 而非一个
+	// 新参数：并发预算是整轮抓取的属性，不该每层各配一个旋钮。
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(s.HostConcurrency())
 
 	for _, host := range hosts {
 
 		if host.Runtime.PowerState == "poweredOn" && host.Runtime.ConnectionState == "connected" && !host.Runtime.InMaintenanceMode {
 
-			wg.Add(1)
-
-			go func(host mo.HostSystem) {
-
-				esxcliHostNicInfo(ch, c.logger, loginData["ctx"].(context.Context), loginData["client"].(*vim25.Client),
-					host, &namespace, &esxclihostnicSubsystem)
-				wg.Done()
-			}(host)
+			g.Go(func() error {
+				esxcliHostNicInfo(gctx, ch, c.logger, s, host, &esxclihostnicSubsystem)
+				return nil
+			})
 
 		}
 
 	}
 
-	wg.Wait()
+	// 闭包永远返回 nil：单台主机的 esxcli 失败不该让其他主机的采集也中断。
+	// 失败已经通过日志暴露，且整个 collector 的成败由上层的 success 指标表达。
+	_ = g.Wait()
 
 	return nil
 }
 
-func esxcliHostNicInfo(ch chan<- prometheus.Metric, logger *slog.Logger, ctx context.Context, client *vim25.Client,
-	host mo.HostSystem, namespace, subsystem *string) {
+func esxcliHostNicInfo(ctx context.Context, ch chan<- prometheus.Metric, logger *slog.Logger,
+	s *collector.Scrape, host mo.HostSystem, subsystem *string) {
 
 	var (
 		data     NicListResponse
@@ -101,7 +99,7 @@ func esxcliHostNicInfo(ch chan<- prometheus.Metric, logger *slog.Logger, ctx con
 		firmware = newVersionSet()
 	)
 
-	mme, err := esxcli.GetHostMME(ctx, client, &host.Self)
+	mme, err := esxcli.GetHostMME(ctx, s.Client, &host.Self)
 	if err != nil {
 		logger.Error("error retrieving host MME", "error", err, "host", host.Name)
 		return
@@ -114,7 +112,7 @@ func esxcliHostNicInfo(ch chan<- prometheus.Metric, logger *slog.Logger, ctx con
 		Version: "urn:vim25/5.0",
 	}
 
-	err = esxcli.GetSOAP(ctx, client, &request, &data)
+	err = esxcli.GetSOAP(ctx, s.Client, &request, &data)
 	if err != nil {
 		logger.Error("error retrieving nic list", "error", err, "host", host.Name)
 		return
@@ -125,31 +123,35 @@ func esxcliHostNicInfo(ch chan<- prometheus.Metric, logger *slog.Logger, ctx con
 	// 每张网卡一次 SOAP 往返，串行会让网卡多的主机显著拖慢整轮抓取。
 	// 并发是安全的：versionSet 内部读写在同一把锁内完成，
 	// 且 prometheus.Metric channel 本身支持多 goroutine 写入。
-	wg := sync.WaitGroup{}
+	//
+	// 这一层同样受 HostConcurrency 限制。注意上层已经占用了并发预算，
+	// 所以这里是「每台主机内部再限流」而非全局限流 —— 全局精确限流需要
+	// 一个跨层共享的 semaphore，那是 Stage 13 批量化 nic.get 时要做的事，
+	// 届时这一层会整体消失。
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(s.HostConcurrency())
 
 	for _, nic := range data.DataObject {
-		wg.Add(1)
-
-		go func(nic NicListInfo) {
-			defer wg.Done()
-
-			esxcliGetNicInfo(ch, logger, ctx, client, request,
-				&host.Self.Value, &host.Name, namespace, subsystem, &nic,
+		g.Go(func() error {
+			esxcliGetNicInfo(gctx, ch, logger, s, request,
+				&host.Self.Value, &host.Name, &s.Namespace, subsystem, &nic,
 				drivers, firmware)
-		}(nic)
+			return nil
+		})
 	}
 
-	wg.Wait()
+	_ = g.Wait()
 }
 
-func esxcliGetNicInfo(ch chan<- prometheus.Metric, logger *slog.Logger, ctx context.Context, client *vim25.Client, request esxcli.ExecuteSoapRequest,
+func esxcliGetNicInfo(ctx context.Context, ch chan<- prometheus.Metric, logger *slog.Logger,
+	s *collector.Scrape, request esxcli.ExecuteSoapRequest,
 	hostRef, hostName, namespace, subsystem *string, nic *NicListInfo, drivers, firmware *versionSet) {
 
 	var data NicResponse
 
 	request.Argument = esxcli.ConfigArguments(map[string]string{"nicname": nic.Name})
 
-	err := esxcli.GetSOAP(ctx, client, &request, &data)
+	err := esxcli.GetSOAP(ctx, s.Client, &request, &data)
 	if err != nil {
 		logger.Error("error fetching soap data", "error", err, "host", *hostName)
 		return

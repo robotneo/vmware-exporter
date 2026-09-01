@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -21,7 +22,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prezhdarov/prometheus-exporter/pkg/exporter"
+	"github.com/prezhdarov/vmware-exporter/internal/collector"
+	vmware "github.com/prezhdarov/vmware-exporter/vmware/api"
 	vmwareCollectors "github.com/prezhdarov/vmware-exporter/vmware/collectors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/exporter-toolkit/web"
@@ -108,8 +110,13 @@ func TestProbeHandlerReturnsBadRequestWithoutCredentials(t *testing.T) {
 // TestProbeHandlerAcceptsBasicAuthCredentials 覆盖凭证回退路径：
 // URL 未带 username/password 时应从 Basic Auth 取。
 //
-// target 指向一个必然连不通的地址，因此预期是 401（登录失败）而不是 400
-// （缺凭证）—— 能走到登录说明凭证已被正确解析。
+// 断言的信号换了。改动前用 401 区分「凭证解析成功但登录失败」与 400
+// 「缺凭证」；现在登录失败不再返回 401（见
+// TestProbeHandlerEmitsUpZeroOnLoginFailure），401 这个信号消失了。
+//
+// 换成 `vmware_up 0`：它只在真的尝试过登录之后才会产出。若凭证没被解析出来，
+// probeHandler 会在登录之前就 400 掉，响应里根本不会有任何 vmware_ 指标。
+// 所以这个断言与原来一样能分辨两种情况，而且更贴近实际行为。
 func TestProbeHandlerAcceptsBasicAuthCredentials(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	req := httptest.NewRequest(http.MethodGet, "/probe?target=127.0.0.1:1&schema=http", nil)
@@ -118,9 +125,15 @@ func TestProbeHandlerAcceptsBasicAuthCredentials(t *testing.T) {
 
 	probeHandler(rec, req, logger)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status code = %d, want %d (credentials parsed but login must fail against an unreachable target); body=%q",
-			rec.Code, http.StatusUnauthorized, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	// up=0 的存在本身就证明登录被尝试过 —— 也就证明 Basic Auth 里的凭证
+	// 被解析出来了。凭证缺失会在登录之前 400，不会有任何 vmware_ 指标。
+	if !strings.Contains(rec.Body.String(), "vmware_up 0") {
+		t.Fatalf("response has no `vmware_up 0`, so login was never attempted; "+
+			"the Basic Auth credentials were not parsed. body=%q", rec.Body.String())
 	}
 }
 
@@ -148,9 +161,22 @@ func TestProbeHandlerRejectsUnknownCollector(t *testing.T) {
 	}
 }
 
-// TestProbeHandlerReturnsUnauthorizedOnLoginFailure 覆盖登录失败分支。
-// 127.0.0.1:1 上不会有服务监听，登录必然失败。
-func TestProbeHandlerReturnsUnauthorizedOnLoginFailure(t *testing.T) {
+// TestProbeHandlerEmitsUpZeroOnLoginFailure 锁住登录失败的新行为。
+//
+// **这是一次刻意的行为变更。** 改动前 probeHandler 先登录、失败就
+// http.Error(401)，于是 Prometheus 收到一个 HTTP 错误、拿不到任何指标 ——
+// 「vCenter 拒绝了凭证」和「exporter 自己挂了」在监控上完全无法区分，
+// 两者都只表现为抓取失败。
+//
+// 现在登录发生在 CollectorSet.Collect 内部，失败会产出 vmware_up 0 加上
+// 每个 collector 的 vmware_scrape_collector_success 0。凭证错误于是变成
+// 一条可告警的时间序列，而 HTTP 状态码保持 200 —— 抓取本身是成功的，
+// 失败的是目标。
+//
+// 只发 up=0 不够：那样 collector_success 序列会凭空消失，依赖它的告警从
+// 「触发」变成「无数据」，这两种状态在 Alertmanager 里行为完全不同。
+// 所以下面同时断言两者。
+func TestProbeHandlerEmitsUpZeroOnLoginFailure(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	req := httptest.NewRequest(http.MethodGet,
 		"/probe?target=127.0.0.1:1&username=u&password=p&schema=http", nil)
@@ -158,29 +184,50 @@ func TestProbeHandlerReturnsUnauthorizedOnLoginFailure(t *testing.T) {
 
 	probeHandler(rec, req, logger)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status code = %d, want %d; body=%q", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; the scrape succeeded, it is the target that failed. body=%q",
+			rec.Code, http.StatusOK, rec.Body.String())
 	}
 
-	if !strings.Contains(rec.Body.String(), "Login failed") {
-		t.Fatalf("response body = %q, want it to contain %q", rec.Body.String(), "Login failed")
+	body := rec.Body.String()
+
+	if !strings.Contains(body, "vmware_up 0") {
+		t.Fatalf("response is missing `vmware_up 0`; without it a credential error is "+
+			"indistinguishable from a dead exporter. body=%q", body)
+	}
+
+	// 每个启用的 collector 都要有 success 0，一个都不能少。
+	for _, def := range vmwareCollectors.Definitions() {
+		if !def.DefaultEnabled {
+			continue
+		}
+		want := `vmware_scrape_collector_success{collector="` + def.Name + `"} 0`
+		if !strings.Contains(body, want) {
+			t.Errorf("response is missing %s; a vanished series turns an alert from "+
+				"`firing` into `no data`, which Alertmanager treats differently", want)
+		}
 	}
 }
 
-// TestExporterMetricsHandlerServesBuildInfo 保留对框架 handler 的冒烟检查。
-// 原测试名为 TestProbeHandlerWithTargetReturnsMetricsPayload，但它调的是
-// exporter.CreateHandleFunc（框架实现），与本项目的 probeHandler 无关，
-// 名字属于误导。真正的 probe 覆盖见上面几个直连 probeHandler 的测试
-// 以及 TestProbeHandlerAgainstSimulator。
+// TestMetricsHandlerServesBuildInfo 是 /metrics 的冒烟检查。
 //
-// 框架 handler 要求 target 参数，127.0.0.1:1 连不通，但 build_info 属于
-// exporter 自身指标，即便目标登录失败也会照常产出。
-func TestExporterMetricsHandlerServesBuildInfo(t *testing.T) {
+// 改动前这个测试调的是框架的 exporter.CreateHandleFunc，测的是依赖库而不是
+// 本仓库的代码。现在它走 metricsHandler —— 也就是生产环境真正挂在
+// /metrics 上的那个 handler。
+//
+// 127.0.0.1:1 连不通，但 build_info 属于 exporter 自身指标，即便目标登录
+// 失败也会照常产出。这一点本身就是个断言：自监控指标不能因为目标故障而消失。
+func TestMetricsHandlerServesBuildInfo(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	req := httptest.NewRequest(http.MethodGet, "/metrics?target=127.0.0.1:1", nil)
+
+	restoreExporterFlags(t)
+	*disableExporterMetrics = false
+	*disableExporterTarget = false
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
 
-	exporter.CreateHandleFunc(rec, req, namespace, "", logger)
+	metricsHandler(logger)(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%q", rec.Code, http.StatusOK, rec.Body.String())
@@ -189,6 +236,22 @@ func TestExporterMetricsHandlerServesBuildInfo(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "vmware_exporter_build_info") {
 		t.Fatalf("response body = %q, want it to contain %q", rec.Body.String(), "vmware_exporter_build_info")
 	}
+}
+
+// restoreExporterFlags 存取根包 flag，避免测试之间互相污染。
+// 与 api 包的 restoreVMwareFlags 同一模式。
+func restoreExporterFlags(t *testing.T) {
+	t.Helper()
+
+	oldMetrics := *disableExporterMetrics
+	oldTarget := *disableExporterTarget
+	oldConcurrency := *maxConcurrency
+
+	t.Cleanup(func() {
+		*disableExporterMetrics = oldMetrics
+		*disableExporterTarget = oldTarget
+		*maxConcurrency = oldConcurrency
+	})
 }
 
 // TestProbeHandlerAgainstSimulator 端到端跑通一次 probe，对着内存版 vCenter。
@@ -337,18 +400,33 @@ func TestParseCollectors(t *testing.T) {
 	}
 }
 
-// TestVMwareCollectorDescribeExposesScrapeMetrics 验证 Describe 不再是空实现。
+// TestCollectorSetDescribeExposesScrapeMetrics 验证 Describe 不是空实现。
 // 空 Describe 会让 registry 把 collector 当作 unchecked，从而跳过重复注册检测。
-func TestVMwareCollectorDescribeExposesScrapeMetrics(t *testing.T) {
+//
+// 期望数量从 2 变成 4：Stage 9 新增了 vmware_up 与
+// vmware_scrape_duration_seconds 两个无标签指标。
+//   - vmware_up：不是 Prometheus 自己生成的那个 up（那个只表示 HTTP 请求
+//     成功）。对多 target exporter 来说 HTTP 成功而 vCenter 登录失败是常态，
+//     没有这个指标就写不出「目标不可达」的告警。
+//   - vmware_scrape_duration_seconds：通用 exporter 告警规则查的是这个无标签
+//     版本，框架只有带 collector="all_collectors" 标签的那个。
+func TestCollectorSetDescribeExposesScrapeMetrics(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	col, err := newVMwareCollector(map[string]interface{}{}, namespace, logger, map[string]bool{})
+	cs, err := collector.NewCollectorSet(context.Background(), vmwareCollectors.Definitions(), collector.Options{
+		Namespace: namespace,
+		Login:     vmware.NewAPI(),
+		Logger:    logger,
+		// Enabled 为 nil 时按各 collector 的默认开关走，这里只关心 Describe，
+		// 不需要真的启用任何 collector。
+		Enabled: map[string]bool{},
+	})
 	if err != nil {
-		t.Fatalf("newVMwareCollector() returned error: %v", err)
+		t.Fatalf("NewCollectorSet() returned error: %v", err)
 	}
 
-	ch := make(chan *prometheus.Desc, 8)
-	col.Describe(ch)
+	ch := make(chan *prometheus.Desc, 16)
+	cs.Describe(ch)
 	close(ch)
 
 	var descs []string
@@ -356,15 +434,22 @@ func TestVMwareCollectorDescribeExposesScrapeMetrics(t *testing.T) {
 		descs = append(descs, d.String())
 	}
 
-	if len(descs) != 2 {
-		t.Fatalf("Describe() emitted %d descriptors, want 2 (duration and success)", len(descs))
+	want := []string{
+		"vmware_up",
+		"vmware_scrape_duration_seconds",
+		"vmware_scrape_collector_duration_seconds",
+		"vmware_scrape_collector_success",
+	}
+
+	if len(descs) != len(want) {
+		t.Fatalf("Describe() emitted %d descriptors, want %d:\n%s",
+			len(descs), len(want), strings.Join(descs, "\n"))
 	}
 
 	joined := strings.Join(descs, "\n")
-
-	for _, want := range []string{"vmware_scrape_collector_duration_seconds", "vmware_scrape_collector_success"} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("Describe() output is missing %q, got:\n%s", want, joined)
+	for _, w := range want {
+		if !strings.Contains(joined, `fqName: "`+w+`"`) {
+			t.Fatalf("Describe() output is missing %q, got:\n%s", w, joined)
 		}
 	}
 }

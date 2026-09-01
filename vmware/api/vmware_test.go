@@ -5,254 +5,19 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
+	"net"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/vmware/govmomi"
-	"github.com/vmware/govmomi/performance"
 	"github.com/vmware/govmomi/property"
-	"github.com/vmware/govmomi/session/cache"
 	"github.com/vmware/govmomi/simulator"
-	"github.com/vmware/govmomi/view"
 	"github.com/vmware/govmomi/vim25"
 	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/soap"
-	"github.com/vmware/govmomi/vim25/types"
 )
-
-func TestRequestGETWithHeaders(t *testing.T) {
-	restoreVMwareFlags(t)
-
-	*vmwTLS = false
-	*vmwInterval = 20
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Fatalf("method = %q, want %q", r.Method, http.MethodGet)
-		}
-
-		if got := r.Header.Get("X-Test-Header"); got != "test-value" {
-			t.Fatalf("X-Test-Header = %q, want %q", got, "test-value")
-		}
-
-		w.Header().Set("Cookie", "vmware-session=fake-session")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	}))
-	defer server.Close()
-
-	statusCode, cookie, body, err := requestWithCreds(
-		http.MethodGet,
-		server.URL,
-		map[string]string{"X-Test-Header": "test-value"},
-		testCredentials(),
-		false,
-	)
-	if err != nil {
-		t.Fatalf("request() returned error: %v", err)
-	}
-
-	if statusCode != http.StatusOK {
-		t.Fatalf("statusCode = %d, want %d", statusCode, http.StatusOK)
-	}
-
-	if cookie != "vmware-session=fake-session" {
-		t.Fatalf("cookie = %q, want %q", cookie, "vmware-session=fake-session")
-	}
-
-	if string(body) != "ok" {
-		t.Fatalf("body = %q, want %q", string(body), "ok")
-	}
-}
-
-func TestRequestPOSTWithBasicAuthWhenLoginIsTrue(t *testing.T) {
-	restoreVMwareFlags(t)
-
-	*vmwUser = "test-user"
-	*vmwPasswd = "test-password"
-	*vmwTLS = false
-	*vmwInterval = 20
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Fatalf("method = %q, want %q", r.Method, http.MethodPost)
-		}
-
-		username, password, ok := r.BasicAuth()
-		if !ok {
-			t.Fatal("expected BasicAuth to be set")
-		}
-
-		if username != "test-user" {
-			t.Fatalf("username = %q, want %q", username, "test-user")
-		}
-
-		if password != "test-password" {
-			t.Fatalf("password = %q, want %q", password, "test-password")
-		}
-
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte("created"))
-	}))
-	defer server.Close()
-
-	statusCode, _, body, err := requestWithCreds(
-		http.MethodPost,
-		server.URL,
-		map[string]string{},
-		testCredentials(),
-		true,
-	)
-	if err != nil {
-		t.Fatalf("request() returned error: %v", err)
-	}
-
-	if statusCode != http.StatusCreated {
-		t.Fatalf("statusCode = %d, want %d", statusCode, http.StatusCreated)
-	}
-
-	if string(body) != "created" {
-		t.Fatalf("body = %q, want %q", string(body), "created")
-	}
-}
-
-func TestRequestReturnsErrorForInvalidURL(t *testing.T) {
-	restoreVMwareFlags(t)
-
-	*vmwTLS = false
-	*vmwInterval = 20
-
-	statusCode, cookie, body, err := requestWithCreds(
-		http.MethodGet,
-		":// invalid-url",
-		map[string]string{},
-		testCredentials(),
-		false,
-	)
-
-	if err == nil {
-		t.Fatal("expected request() to return an error")
-	}
-
-	if statusCode != 0 {
-		t.Fatalf("statusCode = %d, want 0", statusCode)
-	}
-
-	if cookie != "" {
-		t.Fatalf("cookie = %q, want empty string", cookie)
-	}
-
-	if body != nil {
-		t.Fatalf("body = %q, want nil", string(body))
-	}
-}
-
-func TestVMwareGetReturnsResponseBody(t *testing.T) {
-	restoreVMwareFlags(t)
-
-	*vmwSchema = "http"
-	*vmwTLS = false
-	*vmwInterval = 20
-
-	logger := discardLogger()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/test" {
-			t.Fatalf("path = %q, want %q", r.URL.Path, "/api/test")
-		}
-
-		if got := r.Header.Get("X-Session"); got != "fake-session" {
-			t.Fatalf("X-Session = %q, want %q", got, "fake-session")
-		}
-
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	}))
-	defer server.Close()
-
-	target := strings.TrimPrefix(server.URL, "http://")
-
-	loginData := map[string]interface{}{
-		"target": target,
-		"headers": map[string]string{
-			"X-Session": "fake-session",
-		},
-		"credentials": testCredentials(),
-	}
-
-	extraConfig := map[string]interface{}{
-		"api": "/api/test",
-	}
-
-	vm := NewAPI()
-
-	got, err := vm.Get(loginData, extraConfig, logger)
-	if err != nil {
-		t.Fatalf("Get() returned error: %v", err)
-	}
-
-	body, ok := got.(*[]byte)
-	if !ok {
-		t.Fatalf("Get() returned %T, want *[]byte", got)
-	}
-
-	if string(*body) != `{"status":"ok"}` {
-		t.Fatalf("body = %q, want %q", string(*body), `{"status":"ok"}`)
-	}
-}
-
-// TestLogoutToleratesIncompleteLoginData 覆盖登录中途失败的场景：
-// loginData 里可能缺 session / client / cancel，也可能键上挂着错误类型，
-// Logout() 必须容忍而不是 panic。
-//
-// 本测试取代旧的 TestLogoutDoesNothingAndReturnsNil —— 那个名字断言的正是
-// P0-1 的错误行为（Logout 什么都不做），现在 Logout 会真的发 SOAP 登出。
-func TestLogoutToleratesIncompleteLoginData(t *testing.T) {
-	logger := discardLogger()
-	vm := NewAPI()
-
-	cases := []struct {
-		name      string
-		loginData map[string]interface{}
-	}{
-		{name: "empty map", loginData: map[string]interface{}{}},
-		{name: "target only", loginData: map[string]interface{}{"target": "vcenter.example.com"}},
-		{
-			name: "cancel without session",
-			loginData: func() map[string]interface{} {
-				_, cancel := context.WithCancel(context.Background())
-				return map[string]interface{}{"target": "vcenter.example.com", "cancel": cancel}
-			}(),
-		},
-		{
-			// 类型不匹配时也不能裸断言 panic。
-			name: "session and client keys hold wrong types",
-			loginData: map[string]interface{}{
-				"target":  "vcenter.example.com",
-				"session": "not-a-session",
-				"client":  42,
-			},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			defer func() {
-				if r := recover(); r != nil {
-					t.Fatalf("Logout() panicked on incomplete loginData: %v", r)
-				}
-			}()
-
-			if err := vm.Logout(tc.loginData, logger); err != nil {
-				t.Fatalf("Logout() returned error: %v", err)
-			}
-		})
-	}
-}
 
 func restoreVMwareFlags(t *testing.T) {
 	t.Helper()
@@ -278,76 +43,13 @@ func restoreVMwareFlags(t *testing.T) {
 	})
 }
 
-func TestRequestReturnsErrorWhenConnectionFails(t *testing.T) {
-	restoreVMwareFlags(t)
-
-	*vmwTLS = false
-	*vmwInterval = 20
-
-	statusCode, cookie, body, err := requestWithCreds(
-		http.MethodGet,
-		"http://127.0.0.1:1",
-		map[string]string{},
-		testCredentials(),
-		false,
-	)
-
-	if err == nil {
-		t.Fatal("expected request() to return an error")
-	}
-
-	if statusCode != 0 {
-		t.Fatalf("statusCode = %d, want 0", statusCode)
-	}
-
-	if cookie != "" {
-		t.Fatalf("cookie = %q, want empty string", cookie)
-	}
-
-	if body != nil {
-		t.Fatalf("body = %q, want nil", string(body))
-	}
-}
-
-func TestRequestReturnsErrorOnTimeout(t *testing.T) {
-	restoreVMwareFlags(t)
-
-	*vmwTLS = false
-	// HTTP 客户端超时现在由 -vmware.timeout 控制，不再从 -vmware.interval 推导。
-	*vmwTimeout = 1
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(2 * time.Second)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	}))
-	defer server.Close()
-
-	statusCode, cookie, body, err := requestWithCreds(
-		http.MethodGet,
-		server.URL,
-		map[string]string{},
-		testCredentials(),
-		false,
-	)
-
-	if err == nil {
-		t.Fatal("expected request() to return an error")
-	}
-
-	if statusCode != 0 {
-		t.Fatalf("statusCode = %d, want 0", statusCode)
-	}
-
-	if cookie != "" {
-		t.Fatalf("cookie = %q, want empty string", cookie)
-	}
-
-	if body != nil {
-		t.Fatalf("body = %q, want nil", string(body))
-	}
-}
-
+// TestLoginUsesDefaultVCenterWhenTargetEmpty 验证 target 为空时回落到
+// -vmware.vcenter。
+//
+// 断言方式换了：改动前 Login 返回 map，失败时 map 里仍有 target 键可查。
+// 现在失败返回 nil Scrape —— 没有可查的字段了，所以改为断言错误信息里
+// 出现那个默认地址。这不是退化：连不上 127.0.0.1:1 的错误必然带上它实际
+// 尝试连的地址，若回落没生效，错误里就不会有这个地址。
 func TestLoginUsesDefaultVCenterWhenTargetEmpty(t *testing.T) {
 	restoreVMwareFlags(t)
 
@@ -357,20 +59,33 @@ func TestLoginUsesDefaultVCenterWhenTargetEmpty(t *testing.T) {
 	*vmwSchema = "https"
 	*vmwTLS = true
 	*vmwInterval = 20
+	*vmwTimeout = 2
 
-	logger := discardLogger()
 	vm := NewAPI()
 
-	loginData, err := vm.Login("", logger)
+	s, cleanup, err := vm.Login(context.Background(), "")
 	if err == nil {
 		t.Fatal("expected Login() to return an error")
 	}
 
-	if got := loginData["target"]; got != *vCenter {
-		t.Fatalf("target = %v, want %q", got, *vCenter)
+	// cleanup 必须永不为 nil，调用方才能无条件 defer。这一点比返回值本身
+	// 重要：CollectorSet.Collect 里就是无条件 defer cleanup()。
+	if cleanup == nil {
+		t.Fatal("Login() returned a nil cleanup on failure; callers defer it unconditionally")
+	}
+	cleanup()
+
+	if s != nil {
+		t.Fatalf("Login() returned a non-nil Scrape alongside an error: %+v", s)
+	}
+
+	if !strings.Contains(err.Error(), *vCenter) {
+		t.Fatalf("error %q does not mention the default vCenter %q; the fallback did not take effect",
+			err, *vCenter)
 	}
 }
 
+// TestLoginReturnsErrorWhenGovmomiLoginFails 覆盖显式 target 连不上的情形。
 func TestLoginReturnsErrorWhenGovmomiLoginFails(t *testing.T) {
 	restoreVMwareFlags(t)
 
@@ -379,114 +94,118 @@ func TestLoginReturnsErrorWhenGovmomiLoginFails(t *testing.T) {
 	*vmwSchema = "https"
 	*vmwTLS = true
 	*vmwInterval = 20
+	*vmwTimeout = 2
 
-	logger := discardLogger()
+	// 显式清空默认值：若实现错误地忽略了传入的 target 而用默认值，
+	// 空字符串会让它走进「target 未指定」分支，与这里期望的连接失败
+	// 是两种不同的错误 —— 断言就能分辨出来。
+	*vCenter = ""
+
 	vm := NewAPI()
 
-	loginData, err := vm.Login("127.0.0.1:1", logger)
+	s, cleanup, err := vm.Login(context.Background(), "127.0.0.1:1")
 	if err == nil {
 		t.Fatal("expected Login() to return an error")
 	}
+	if cleanup == nil {
+		t.Fatal("Login() returned a nil cleanup on failure")
+	}
+	cleanup()
 
-	if got := loginData["target"]; got != "127.0.0.1:1" {
-		t.Fatalf("target = %v, want %q", got, "127.0.0.1:1")
+	if s != nil {
+		t.Fatalf("Login() returned a non-nil Scrape alongside an error: %+v", s)
+	}
+
+	if !strings.Contains(err.Error(), "127.0.0.1:1") {
+		t.Fatalf("error %q does not mention the requested target", err)
 	}
 }
 
-func TestGovmomiLoginSetsRequiredFields(t *testing.T) {
+// TestLoginRespectsCallerContext 是 Stage 9 的核心验收之一。
+//
+// 框架时代 scrape context 由 govmomiLoginWithCreds 内部用
+// context.Background() 派生，请求侧的取消完全传不进来：客户端早就断开了，
+// exporter 还在等 vCenter 回话，一直等到 -vmware.timeout 自然到期。
+//
+// 关键在于「让请求真正挂住」。第一版这个测试连的是 127.0.0.1:1，
+// 反向验证时发现它是个假测试 —— 把实现改回 context.Background() 仍然通过，
+// 因为连一个没人监听的端口会立刻 ECONNREFUSED，压根走不到 context 检查。
+//
+// 所以这里起一个 accept 之后什么都不做的 listener：TCP 握手成功、TLS
+// 握手挂住，唯一能让调用返回的就是 context 被取消。若实现忽略调用方的
+// ctx，这个调用会一直等到 -vmware.timeout（这里设成 60s）到期，
+// 而测试只给 5 秒容忍。
+func TestLoginRespectsCallerContext(t *testing.T) {
 	restoreVMwareFlags(t)
 
-	model := simulator.VPX()
-	defer model.Remove()
-
-	if err := model.Create(); err != nil {
-		t.Fatalf("failed to create simulator model: %v", err)
+	// accept 连接但永不回任何字节。net.Listen 而不是 httptest.NewServer：
+	// 后者会正常完成 TLS 握手并回 404，请求就不会挂住了。
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
 	}
+	defer ln.Close()
 
-	server := model.Service.NewServer()
-	defer server.Close()
+	accepted := make(chan struct{}, 1)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			select {
+			case accepted <- struct{}{}:
+			default:
+			}
+			// 故意不读不写、不关闭：让对端一直等在 TLS 握手上。
+			// 连接由 defer ln.Close() 与进程退出兜底回收。
+			_ = conn
+		}
+	}()
 
-	if server.URL.User == nil {
-		t.Fatal("simulator URL is missing credentials")
-	}
-
-	password, ok := server.URL.User.Password()
-	if !ok {
-		t.Fatal("simulator URL is missing password")
-	}
-
-	*vmwUser = server.URL.User.Username()
-	*vmwPasswd = password
-	*vmwSchema = server.URL.Scheme
+	*vmwUser = "user"
+	*vmwPasswd = "pass"
+	*vmwSchema = "https"
 	*vmwTLS = true
 	*vmwInterval = 20
-	*vmGranularity = 10
+	*vmGranularity = 20
+	// 故意设一个远大于测试容忍度的超时。若实现用 Background 派生，
+	// 登录会挂到这个超时到期，下面的墙钟断言就会失败。
+	*vmwTimeout = 60
 
-	loginData := map[string]interface{}{
-		"target": server.URL.Host,
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// 等连接真正建立之后再取消，确保被取消的是一个已经挂住的请求，
+	// 而不是一个还没发出去的请求 —— 后者任何实现都会「立刻返回」，
+	// 测不出 context 是否被尊重。
+	go func() {
+		select {
+		case <-accepted:
+		case <-time.After(3 * time.Second):
+		}
+		cancel()
+	}()
+
+	begin := time.Now()
+	s, cleanup, err := NewAPI().Login(ctx, ln.Addr().String())
+	elapsed := time.Since(begin)
+
+	if cleanup != nil {
+		cleanup()
+	}
+	if s != nil {
+		t.Fatalf("Login() returned a non-nil Scrape for a cancelled context: %+v", s)
+	}
+	if err == nil {
+		t.Fatal("Login() succeeded against a server that never responds")
 	}
 
-	if err := govmomiLoginWithCreds(loginData, Credentials{Username: *vmwUser, Password: *vmwPasswd, Target: server.URL.Host, Schema: *vmwSchema, Insecure: *vmwTLS}, discardLogger()); err != nil {
-		t.Fatalf("govmomiLogin() returned error: %v", err)
-	}
-
-	if _, ok := loginData["ctx"].(context.Context); !ok {
-		t.Fatalf("ctx type = %T, want context.Context", loginData["ctx"])
-	}
-
-	cancel, ok := loginData["cancel"].(context.CancelFunc)
-	if !ok {
-		t.Fatalf("cancel type = %T, want context.CancelFunc", loginData["cancel"])
-	}
-	defer cancel()
-
-	if _, ok := loginData["client"].(*vim25.Client); !ok {
-		t.Fatalf("client type = %T, want *vim25.Client", loginData["client"])
-	}
-
-	// session 必须存进 loginData，否则 Logout() 无法发起 SOAP 登出（P0-1）。
-	if _, ok := loginData["session"].(*cache.Session); !ok {
-		t.Fatalf("session type = %T, want *cache.Session", loginData["session"])
-	}
-
-	if _, ok := loginData["view"].(*view.Manager); !ok {
-		t.Fatalf("view type = %T, want *view.Manager", loginData["view"])
-	}
-
-	if _, ok := loginData["perf"].(*performance.Manager); !ok {
-		t.Fatalf("perf type = %T, want *performance.Manager", loginData["perf"])
-	}
-
-	counters, ok := loginData["counters"].(map[string]*types.PerfCounterInfo)
-	if !ok {
-		t.Fatalf("counters type = %T, want map[string]*types.PerfCounterInfo", loginData["counters"])
-	}
-
-	if len(counters) == 0 {
-		t.Fatal("expected counters to be populated")
-	}
-
-	if got := loginData["interval"]; got != int32(20) {
-		t.Fatalf("interval = %v, want %d", got, int32(20))
-	}
-
-	if got := loginData["samples"]; got != int32(2) {
-		t.Fatalf("samples = %v, want %d", got, int32(2))
+	if elapsed > 10*time.Second {
+		t.Fatalf("Login() took %s against an unresponsive server with -vmware.timeout=60s; "+
+			"the caller's context is being ignored (it was derived from context.Background() "+
+			"before Stage 9)", elapsed)
 	}
 }
-
-func testCredentials() Credentials {
-	return Credentials{
-		Username: *vmwUser,
-		Password: *vmwPasswd,
-		Schema:   *vmwSchema,
-		Insecure: *vmwTLS,
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Stage 1 (P0) 回归测试
-// ---------------------------------------------------------------------------
 
 // TestValidateFlags 覆盖 P0-3：非法参数组合必须在启动阶段被拒绝。
 func TestValidateFlags(t *testing.T) {
@@ -612,14 +331,19 @@ func newObserverClient(ctx context.Context, rawURL string) (*vim25.Client, error
 	return c.Client, nil
 }
 
-// TestLogoutReleasesServerSession 是 P0-1 的核心回归测试。
+// TestCleanupReleasesServerSession 是 P0-1 的核心回归测试。
 //
 // 旧实现里 cache.Session 设了 Passthrough:true，但 Logout() 只调用 cancel()，
 // 从不发 SOAP Logout，服务端会话会一直挂到自然超时（vCenter 默认 30 分钟）。
 // 高频抓取下会迅速堆到会话上限，之后所有登录都失败。
 //
-// 用内存版 vCenter 验证：Logout() 之后服务端会话数必须回落到登录前的水平。
-func TestLogoutReleasesServerSession(t *testing.T) {
+// 相对改动前，这个测试现在验证的是**生产路径**：登出逻辑从独立的 Logout()
+// 方法搬进了 LoginWithCredentials 返回的 cleanup 闭包，调用方 defer 一次即可。
+// 原先它跑的是 govmomiLoginWithCreds + Logout，而这两个在生产代码里
+// 已经没人调用了 —— 测一条死路径永远是绿的，说明不了正在跑的代码是对的。
+//
+// 用内存版 vCenter 验证：cleanup() 之后服务端会话数必须回落到登录前的水平。
+func TestCleanupReleasesServerSession(t *testing.T) {
 	restoreVMwareFlags(t)
 
 	*vmwInterval = 20
@@ -654,14 +378,12 @@ func TestLogoutReleasesServerSession(t *testing.T) {
 		Insecure: true,
 	}
 
-	loginData := make(map[string]interface{})
-	if err := govmomiLoginWithCreds(loginData, creds, discardLogger()); err != nil {
-		t.Fatalf("govmomiLoginWithCreds() failed: %v", err)
+	s, cleanup, err := NewAPI().LoginWithCredentials(observerCtx, creds, discardLogger())
+	if err != nil {
+		t.Fatalf("LoginWithCredentials() failed: %v", err)
 	}
-
-	// Logout 完全依赖这个键，缺了就静默跳过 SOAP 登出。
-	if _, ok := loginData["session"].(*cache.Session); !ok {
-		t.Fatalf(`loginData["session"] type = %T, want *cache.Session`, loginData["session"])
+	if s == nil {
+		t.Fatal("LoginWithCredentials() returned a nil Scrape without an error")
 	}
 
 	afterLogin, err := activeSessionCount(observerCtx, observer)
@@ -673,9 +395,7 @@ func TestLogoutReleasesServerSession(t *testing.T) {
 		t.Fatalf("session count did not grow after login: baseline=%d after=%d", baseline, afterLogin)
 	}
 
-	if err := NewAPI().Logout(loginData, discardLogger()); err != nil {
-		t.Fatalf("Logout() returned error: %v", err)
-	}
+	cleanup()
 
 	afterLogout, err := activeSessionCount(observerCtx, observer)
 	if err != nil {
@@ -723,8 +443,10 @@ func TestDetectTargetTypeAgainstSimulators(t *testing.T) {
 			restoreVMwareFlags(t)
 			*vmwSchema = server.URL.Scheme
 			*vmwTLS = true
+			*vmwInterval = 20
+			*vmGranularity = 20
+			*vmwTimeout = 60
 
-			loginData := make(map[string]interface{})
 			creds := Credentials{
 				Username: "user",
 				Password: "pass",
@@ -733,27 +455,20 @@ func TestDetectTargetTypeAgainstSimulators(t *testing.T) {
 				Insecure: true,
 			}
 
-			if err := govmomiLoginWithCreds(loginData, creds, discardLogger()); err != nil {
+			s, cleanup, err := NewAPI().LoginWithCredentials(context.Background(), creds, discardLogger())
+			if err != nil {
 				t.Fatalf("login failed: %v", err)
 			}
-			// Logout 失败不该让测试失败 —— 它是清理动作，被测的东西已经
-			// 验证完了。但也不能直接丢掉错误：会话泄漏正是 Stage 1 修的那个
-			// bug，真出问题时日志里得有痕迹。
-			defer func() {
-				if err := NewAPI().Logout(loginData, discardLogger()); err != nil {
-					t.Logf("logout failed during cleanup: %v", err)
-				}
-			}()
+			// cleanup 包含 SOAP 登出。失败不该让测试失败 —— 它是清理动作，
+			// 被测的东西已经验证完了。会话是否真的释放由
+			// TestCleanupReleasesServerSession 专门覆盖。
+			defer cleanup()
 
-			got, ok := loginData["targetType"].(string)
-			if !ok {
-				t.Fatalf(`loginData["targetType"] type = %T, want string`, loginData["targetType"])
-			}
-
-			if got != tc.want {
-				t.Fatalf("targetType = %q, want %q (ApiType was %q)",
-					got, tc.want,
-					loginData["client"].(*vim25.Client).ServiceContent.About.ApiType)
+			// targetType 从 map 里的 any 变成了 Scrape 上的 string 字段，
+			// 所以「类型不对」这条断言消失了 —— 编译器已经保证它是 string。
+			if s.TargetType != tc.want {
+				t.Fatalf("TargetType = %q, want %q (ApiType was %q)",
+					s.TargetType, tc.want, s.Client.ServiceContent.About.ApiType)
 			}
 		})
 	}

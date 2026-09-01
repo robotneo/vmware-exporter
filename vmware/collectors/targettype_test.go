@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/performance"
 	"github.com/vmware/govmomi/simulator"
@@ -18,29 +19,38 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// TestTargetTypeDefaultsToVCenter 锁住目标类型的回落行为。
+//
+// 用例集比改造前小了两条，这不是覆盖度下降而是那两条已经不可能发生：
+// 改造前 targetType 从 map[string]interface{} 里取键，于是「键上挂着 42
+// 这种错类型」和「键不存在」都是运行期才暴露的真实风险，必须测。
+// 现在 TargetType 是 *collector.Scrape 上的 string 字段，编译器不允许
+// 往里放 42 —— 那条用例连写都写不出来。
+//
+// 剩下的两个边界仍然要测：空串（Scrape 被部分构造，比如登录中途失败）
+// 和 nil 指针（调用方传了零值）。这两种在类型系统里合法，所以仍是真风险。
 func TestTargetTypeDefaultsToVCenter(t *testing.T) {
 	testCases := []struct {
-		name      string
-		loginData map[string]interface{}
-		want      string
+		name   string
+		scrape *collector.Scrape
+		want   string
 	}{
-		{"esxi", map[string]interface{}{"targetType": "esxi"}, targetTypeESXi},
-		{"vcenter", map[string]interface{}{"targetType": "vcenter"}, targetTypeVCenter},
-		// 键缺失 / 空串 / 类型不对时都必须回落到 vCenter，而不是 panic。
-		// Update() 可能被尚未适配的调用方触发，少一个键不该炸掉整次抓取。
-		{"missing key", map[string]interface{}{}, targetTypeVCenter},
-		{"empty string", map[string]interface{}{"targetType": ""}, targetTypeVCenter},
-		{"wrong type", map[string]interface{}{"targetType": 42}, targetTypeVCenter},
+		{"esxi", &collector.Scrape{TargetType: collector.TargetTypeESXi}, targetTypeESXi},
+		{"vcenter", &collector.Scrape{TargetType: collector.TargetTypeVCenter}, targetTypeVCenter},
+		// 空串 / nil 都必须回落到 vCenter，而不是 panic：少一个字段
+		// 不该炸掉整次抓取。
+		{"empty string", &collector.Scrape{}, targetTypeVCenter},
+		{"nil scrape", nil, targetTypeVCenter},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := targetType(tc.loginData); got != tc.want {
+			if got := targetType(tc.scrape); got != tc.want {
 				t.Fatalf("targetType() = %q, want %q", got, tc.want)
 			}
 
 			wantESXi := tc.want == targetTypeESXi
-			if got := isESXi(tc.loginData); got != wantESXi {
+			if got := isESXi(tc.scrape); got != wantESXi {
 				t.Fatalf("isESXi() = %v, want %v", got, wantESXi)
 			}
 		})

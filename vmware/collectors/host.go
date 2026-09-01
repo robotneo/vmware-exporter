@@ -8,12 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/prezhdarov/prometheus-exporter/pkg/collector"
+	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/vmware/govmomi/performance"
-	"github.com/vmware/govmomi/view"
-	"github.com/vmware/govmomi/vim25"
-	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/types"
 )
 
@@ -41,36 +37,34 @@ type hostCollector struct {
 }
 
 func init() {
-	collector.RegisterCollector("host", hostCollectorFlag, NewhostCollector)
+	collector.RegisterFlag("host", hostCollectorFlag)
 }
 
 func NewhostCollector(logger *slog.Logger) (collector.Collector, error) {
 	return &hostCollector{logger}, nil
 }
 
-func (c *hostCollector) Update(ch chan<- prometheus.Metric, namespace string, clientAPI collector.ClientAPI, loginData map[string]interface{}, params map[string]string) error {
+func (c *hostCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s *collector.Scrape) error {
 
 	var (
-		hosts     []mo.HostSystem
 		hostRefs  []types.ManagedObjectReference
 		hostNames = make(map[string]string)
 	)
 
 	begin := time.Now()
 
-	descs := descsFor(namespace).host
-	target := loginData["target"].(string)
+	descs := descsFor(s.Namespace).host
+	target := s.Target
 
-	err := fetchProperties(
-		loginData["ctx"].(context.Context), loginData["view"].(*view.Manager), loginData["client"].(*vim25.Client),
-		[]string{"HostSystem"}, []string{"parent", "summary", "runtime"}, &hosts, c.logger,
-	)
+	// 请求内共享：host、esxcli.host.nic、esxcli.storage 三个 collector 原先
+	// 各自检索一遍 HostSystem。s.Hosts 用 sync.Once 保证一轮抓取里只取一次。
+	// 属性集是三者需求的并集，所以这里会多拿到 config 与 hardware ——
+	// 代价远小于省下的两次 ContainerView 创建/销毁往返。
+	hosts, err := s.Hosts(ctx, fetchHosts(c.logger))
 	if err != nil {
 		return err
 
 	}
-
-	wg := sync.WaitGroup{}
 
 	for _, host := range hosts {
 
@@ -131,7 +125,7 @@ func (c *hostCollector) Update(ch chan<- prometheus.Metric, namespace string, cl
 
 	c.logger.Debug("time to process property collector for host", "duration_seconds", time.Since(begin).Seconds())
 
-	c.logger.Debug("max perf samples configured", "samples", loginData["samples"].(int32))
+	c.logger.Debug("max perf samples configured", "samples", s.Samples)
 
 	begin = time.Now()
 
@@ -145,36 +139,36 @@ func (c *hostCollector) Update(ch chan<- prometheus.Metric, namespace string, cl
 		// ProviderSummary 可能声称 SummarySupported，但它不跑汇总服务，
 		// 落到 300s 历史间隔上就查不到数据。详见 targettype.go 的说明。
 		interval := resolvePerfIntervalForTarget(
-			loginData["ctx"].(context.Context),
-			loginData["perf"].(*performance.Manager),
+			ctx,
+			s.Perf,
 			hostRefs[0],
-			loginData["interval"].(int32),
-			loginData["interval"].(int32),
-			targetType(loginData),
+			s.Interval,
+			s.Interval,
+			targetType(s),
 			c.logger,
 		)
 
+		// 两轮采样：一轮非 instanced 计数器，一轮 instanced。
+		//
+		// 这里的 goroutine 数是固定的 2，不随主机数增长，所以不需要
+		// 并发上限 —— 上限管的是 collector 层的 fan-out（见
+		// internal/collector.CollectorSet.Collect 的 SetLimit）。
+		wg := sync.WaitGroup{}
 		wg.Add(2)
-		for i := 0; i < 2; i++ {
-			switch i {
-			case 0:
-				go func(i int) {
-					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), interval, loginData["perf"].(*performance.Manager),
-						target, "HostSystem", namespace, hostSubsystem, "", cHostCounters,
-						loginData["counters"].(map[string]*types.PerfCounterInfo), hostRefs, hostNames)
-					wg.Done()
-				}(i)
 
-			case 1:
-				go func(i int) {
-					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), interval, loginData["perf"].(*performance.Manager),
-						target, "HostSystem", namespace, hostSubsystem, "*", iHostCounters,
-						loginData["counters"].(map[string]*types.PerfCounterInfo), hostRefs, hostNames)
-					wg.Done()
-				}(i)
-			}
+		go func() {
+			defer wg.Done()
+			scrapePerformance(ctx, ch, c.logger, s.Samples, interval, s.Perf,
+				target, "HostSystem", s.Namespace, hostSubsystem, "", cHostCounters,
+				s.Counters, hostRefs, hostNames)
+		}()
 
-		}
+		go func() {
+			defer wg.Done()
+			scrapePerformance(ctx, ch, c.logger, s.Samples, interval, s.Perf,
+				target, "HostSystem", s.Namespace, hostSubsystem, "*", iHostCounters,
+				s.Counters, hostRefs, hostNames)
+		}()
 
 		wg.Wait()
 	}

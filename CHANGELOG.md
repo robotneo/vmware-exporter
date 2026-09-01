@@ -101,6 +101,59 @@ time() - vmware_vm_snapshot_info > 7 * 86400   # snapshots older than a week
 
 This metric is also unreferenced by the bundled dashboards.
 
+#### Flag replaced: `-prom.maxRequests` → `-collector.max-concurrency`
+
+`-prom.maxRequests` is gone. It was a dead parameter: the upstream framework
+stored it in `eHandler.maxRequests` and never read the field again, so setting it
+had no effect at any value. Passing it now makes the exporter exit with
+`flag provided but not defined` — which is the point. A flag that silently does
+nothing is worse than one that fails loudly, because the operator believes a
+limit is in place.
+
+`-collector.max-concurrency` (default `8`) replaces it and actually bounds two
+things:
+
+- how many collectors run in parallel, and
+- the fan-out width inside the `esxcli.host.nic` and `esxcli.storage`
+  collectors.
+
+The second is the dangerous one. Previously the esxcli collectors started one
+goroutine per host with no limit, then another per NIC inside each of those — a
+500-host estate with four NICs each produced roughly 2500 concurrent SOAP
+requests against a single vCenter. That is a self-inflicted denial of service,
+and `-prom.maxRequests` could not stop it no matter what you set.
+
+Set it to `0` to leave the collector layer unbounded; the per-host fan-out keeps
+an internal floor regardless, for the reason above.
+
+#### `/probe` no longer returns HTTP 401 when vCenter rejects the credentials
+
+A login failure used to produce `401 Unauthorized` and no metrics at all. That
+made two very different situations indistinguishable to Prometheus: *the target
+rejected these credentials* and *the exporter itself is broken* both showed up as
+a failed scrape with no data.
+
+The request now returns `200` with `vmware_up 0` plus
+`vmware_scrape_collector_success{collector="..."} 0` for every enabled
+collector. If you alert on the HTTP status of `/probe`, switch to `vmware_up`.
+
+Emitting only `vmware_up 0` would not have been enough: the
+`vmware_scrape_collector_success` series would vanish, turning any alert that
+reads it from *firing* into *no data*. Those two states behave differently in
+Alertmanager.
+
+#### `-disable.default.collectors` was never real
+
+Both READMEs documented this flag. The binary never registered it, so passing it
+always failed with `flag provided but not defined`. The tables no longer list it.
+To run a subset, disable the defaults individually:
+`-collector.datacenter=false -collector.cluster=false ...`.
+
+`scripts/check_config.py` now fails on any flag documented in a reference table
+but not registered by the binary, so this cannot recur. That check also caught
+its own blind spot: the regex used to extract flag names excluded `-`, which
+silently truncated `-collector.max-concurrency` to `-collector.max`.
+
 ### Deprecated
 
 Three metrics are superseded by explicitly unit-suffixed replacements. **Both
@@ -126,6 +179,16 @@ class of breaking change.
 
 ### Added
 
+- **`vmware_up`** — whether the target could be logged into. `0` means the scrape
+  produced no inventory data at all. This is not the `up` metric Prometheus
+  generates on its own: that one only reports whether the HTTP request succeeded,
+  and for a multi-target exporter *HTTP fine, vCenter login rejected* is a
+  routine outcome that the built-in `up` reports as success.
+- **`vmware_scrape_duration_seconds`** (no labels) — total scrape duration
+  including login and logout. The framework only produced
+  `vmware_scrape_collector_duration_seconds{collector="all_collectors"}`, which
+  is not what generic exporter alerting rules query. The labelled series is still
+  emitted, unchanged, and still excludes login/logout.
 - **Standalone ESXi hosts can now be scraped directly**, without a vCenter. The
   target type is detected from `ServiceContent.About.ApiType` and exposed as a
   new `vmware_target_info{target, type}` metric (`type` is `vcenter` or `esxi`).
@@ -204,8 +267,40 @@ class of breaking change.
 
 ### Changed
 
+- **The `prezhdarov/prometheus-exporter` dependency is gone.** Its scheduling and
+  configuration layers were replaced by `internal/collector` and
+  `internal/config`. This was not a preference for in-house code — four defects
+  could not be worked around from the outside:
+
+  1. `Collector.Update()` had no `context.Context` parameter, so no vCenter call
+     could ever be cancelled. A client disconnect or a Prometheus scrape timeout
+     left the SOAP requests running to completion against vCenter. `-vmware.timeout`
+     is now an upper bound on a context derived from the HTTP request, rather than
+     the only thing that ever stops a scrape.
+  2. A login failure returned immediately, producing zero metrics for the whole
+     round — no `up=0`, so the failure could not be alerted on.
+  3. `collectorState` was package-private and unreadable from outside, which is
+     why `/probe` carried a hand-written duplicate of the entire scheduling loop.
+     One implementation now serves both endpoints.
+  4. `-prom.maxRequests` was accepted and never read (see *Breaking changes*).
+
+  The three flags the framework owned — `-file`, `-envflag.enable`,
+  `-envflag.prefix` — are unchanged and keep working. They are part of the
+  documented interface: `docker-compose.yml` relies on `-envflag.enable`
+  specifically to keep passwords off the container command line, so dropping them
+  would have reopened a leak this release closes.
+
+  `internal/config` also turns three silent failures into errors: an unknown flag
+  name in the config file, an invalid `-log.level` or `-log.format` (previously
+  downgraded to the default without a word), and a `-file` path that does not
+  exist.
 - `/metrics` and `/probe` now share one scrape scheduler instead of maintaining
   two divergent code paths.
+- The three host-related collectors (`host`, `esxcli.host.nic`,
+  `esxcli.storage`) share one `HostSystem` property retrieval per scrape instead
+  of issuing three. This is request-scoped sharing, not a cache: the state lives
+  on the per-request scrape object, so there is no staleness and no TTL to reason
+  about.
 - `*prometheus.Desc` objects are built once per namespace instead of once per
   entity per scrape. Entity identifiers moved from `constLabels` to
   `variableLabels`, which is invisible in the exposition format — const and

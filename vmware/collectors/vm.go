@@ -8,11 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/prezhdarov/prometheus-exporter/pkg/collector"
+	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/vmware/govmomi/performance"
-	"github.com/vmware/govmomi/view"
-	"github.com/vmware/govmomi/vim25"
 	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/types"
 )
@@ -38,15 +35,15 @@ type vmCollector struct {
 }
 
 func init() {
-	collector.RegisterCollector(vmSubsystem, vmCollectorFlag, NewvmCollector)
+	collector.RegisterFlag(vmSubsystem, vmCollectorFlag)
 }
 
-// NewMeminfoCollector returns a new Collector exposing memory stats.
+// NewvmCollector returns a new Collector exposing virtual machine stats.
 func NewvmCollector(logger *slog.Logger) (collector.Collector, error) {
 	return &vmCollector{logger}, nil
 }
 
-func (c *vmCollector) Update(ch chan<- prometheus.Metric, namespace string, clientAPI collector.ClientAPI, loginData map[string]interface{}, params map[string]string) error {
+func (c *vmCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s *collector.Scrape) error {
 
 	var (
 		vms     []mo.VirtualMachine
@@ -56,19 +53,17 @@ func (c *vmCollector) Update(ch chan<- prometheus.Metric, namespace string, clie
 
 	begin := time.Now()
 
-	descs := descsFor(namespace).vm
-	target := loginData["target"].(string)
+	descs := descsFor(s.Namespace).vm
+	target := s.Target
 
 	err := fetchProperties(
-		loginData["ctx"].(context.Context), loginData["view"].(*view.Manager), loginData["client"].(*vim25.Client),
+		ctx, s.View, s.Client,
 		[]string{"VirtualMachine"}, []string{"summary", "runtime", "storage", "snapshot", "snapshot.rootSnapshotList", "snapshot.currentSnapshot"}, &vms, c.logger,
 	)
 	if err != nil {
 		return err
 
 	}
-
-	wg := sync.WaitGroup{}
 
 	for _, vm := range vms {
 
@@ -134,36 +129,32 @@ func (c *vmCollector) Update(ch chan<- prometheus.Metric, namespace string, clie
 		// 与 host 一致：采样间隔以服务端 RefreshRate 为准，
 		// 并对 ESXi 额外拦掉 300s 历史间隔。
 		interval := resolvePerfIntervalForTarget(
-			loginData["ctx"].(context.Context),
-			loginData["perf"].(*performance.Manager),
+			ctx,
+			s.Perf,
 			vmRefs[0],
-			loginData["interval"].(int32),
-			loginData["interval"].(int32),
-			targetType(loginData),
+			s.Interval,
+			s.Interval,
+			targetType(s),
 			c.logger,
 		)
 
+		// 固定 2 个 goroutine，不随 VM 数量增长。
+		wg := sync.WaitGroup{}
 		wg.Add(2)
-		for i := 0; i < 2; i++ {
-			switch i {
-			case 0:
-				go func() {
-					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), interval, loginData["perf"].(*performance.Manager),
-						target, "VirtualMachine", namespace, vmSubsystem, "", cVMCounters,
-						loginData["counters"].(map[string]*types.PerfCounterInfo), vmRefs, vmNames)
-					wg.Done()
-				}()
 
-			case 1:
-				go func() {
-					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), interval, loginData["perf"].(*performance.Manager),
-						target, "VirtualMachine", namespace, vmSubsystem, "*", iVMCounters,
-						loginData["counters"].(map[string]*types.PerfCounterInfo), vmRefs, vmNames)
-					wg.Done()
-				}()
-			}
+		go func() {
+			defer wg.Done()
+			scrapePerformance(ctx, ch, c.logger, s.Samples, interval, s.Perf,
+				target, "VirtualMachine", s.Namespace, vmSubsystem, "", cVMCounters,
+				s.Counters, vmRefs, vmNames)
+		}()
 
-		}
+		go func() {
+			defer wg.Done()
+			scrapePerformance(ctx, ch, c.logger, s.Samples, interval, s.Perf,
+				target, "VirtualMachine", s.Namespace, vmSubsystem, "*", iVMCounters,
+				s.Counters, vmRefs, vmNames)
+		}()
 
 		wg.Wait()
 

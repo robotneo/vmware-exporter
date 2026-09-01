@@ -1,7 +1,6 @@
 package vmwareCollectors
 
 import (
-	"context"
 	"io"
 	"log/slog"
 	"reflect"
@@ -16,7 +15,6 @@ import (
 	"github.com/vmware/govmomi/find"
 	"github.com/vmware/govmomi/performance"
 	"github.com/vmware/govmomi/simulator"
-	"github.com/vmware/govmomi/vim25"
 	"github.com/vmware/govmomi/vim25/types"
 )
 
@@ -367,7 +365,7 @@ func entityPairs(series []map[string]string, moidLabel, nameLabel string) map[st
 
 func TestHostCollectorLabelValuePairing(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	loginData, cleanup := setupCollectorLoginData(t)
+	ctx, s, cleanup := setupCollectorScrape(t)
 	defer cleanup()
 
 	collector, err := NewhostCollector(logger)
@@ -376,12 +374,12 @@ func TestHostCollectorLabelValuePairing(t *testing.T) {
 	}
 
 	ch := make(chan prometheus.Metric, 40000)
-	if err := collector.Update(ch, "vmware", nil, loginData, map[string]string{}); err != nil {
+	if err := collector.Update(ctx, ch, s); err != nil {
 		t.Fatalf("host Update() returned error: %v", err)
 	}
 
 	series := collectSeries(t, ch)
-	target := loginData["target"].(string)
+	target := s.Target
 
 	// hardware_info 是最有说服力的一条：六个 label 的值互不相同，
 	// 任意两个位置调换都会被下面的断言抓到。
@@ -461,7 +459,7 @@ func TestHostCollectorLabelValuePairing(t *testing.T) {
 
 func TestVMCollectorLabelValuePairing(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	loginData, cleanup := setupCollectorLoginData(t)
+	ctx, s, cleanup := setupCollectorScrape(t)
 	defer cleanup()
 
 	collector, err := NewvmCollector(logger)
@@ -470,12 +468,12 @@ func TestVMCollectorLabelValuePairing(t *testing.T) {
 	}
 
 	ch := make(chan prometheus.Metric, 60000)
-	if err := collector.Update(ch, "vmware", nil, loginData, map[string]string{}); err != nil {
+	if err := collector.Update(ctx, ch, s); err != nil {
 		t.Fatalf("vm Update() returned error: %v", err)
 	}
 
 	series := collectSeries(t, ch)
-	target := loginData["target"].(string)
+	target := s.Target
 
 	// vmmo, vm, hostmo, vcenter —— 三个实体 label 里有两个是 moid，
 	// 靠前缀（vm- / host-）区分，确保 vmmo 与 hostmo 没有互换。
@@ -536,7 +534,7 @@ func TestVMCollectorLabelValuePairing(t *testing.T) {
 // 却忘了旧指标，用户在迁移过程中会看到图表数值突变，且没有任何报错。
 func TestDeprecatedAndReplacementMetricsAgree(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	loginData, cleanup := setupCollectorLoginData(t)
+	ctx, s, cleanup := setupCollectorScrape(t)
 	defer cleanup()
 
 	hostCol, err := NewhostCollector(logger)
@@ -544,7 +542,7 @@ func TestDeprecatedAndReplacementMetricsAgree(t *testing.T) {
 		t.Fatalf("NewhostCollector() returned error: %v", err)
 	}
 	hostCh := make(chan prometheus.Metric, 40000)
-	if err := hostCol.Update(hostCh, "vmware", nil, loginData, map[string]string{}); err != nil {
+	if err := hostCol.Update(ctx, hostCh, s); err != nil {
 		t.Fatalf("host Update() returned error: %v", err)
 	}
 
@@ -553,7 +551,7 @@ func TestDeprecatedAndReplacementMetricsAgree(t *testing.T) {
 		t.Fatalf("NewvmCollector() returned error: %v", err)
 	}
 	vmCh := make(chan prometheus.Metric, 60000)
-	if err := vmCol.Update(vmCh, "vmware", nil, loginData, map[string]string{}); err != nil {
+	if err := vmCol.Update(ctx, vmCh, s); err != nil {
 		t.Fatalf("vm Update() returned error: %v", err)
 	}
 
@@ -667,11 +665,10 @@ func labelKey(labels map[string]string) string {
 // value 是同一时刻的 Unix 秒数。前提正是 value 携带时间戳，所以必须锁住。
 func TestSnapshotInfoKeepsTimestampAsValue(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	loginData, cleanup := setupCollectorLoginData(t)
+	ctx, s, cleanup := setupCollectorScrape(t)
 	defer cleanup()
 
-	ctx := loginData["ctx"].(context.Context)
-	client := loginData["client"].(*vim25.Client)
+	client := s.Client
 
 	// simulator 默认不带快照，得自己造一个。
 	finder := find.NewFinder(client, false)
@@ -701,7 +698,7 @@ func TestSnapshotInfoKeepsTimestampAsValue(t *testing.T) {
 	}
 
 	ch := make(chan prometheus.Metric, 60000)
-	if err := collector.Update(ch, "vmware", nil, loginData, map[string]string{}); err != nil {
+	if err := collector.Update(ctx, ch, s); err != nil {
 		t.Fatalf("vm Update() returned error: %v", err)
 	}
 
@@ -720,7 +717,7 @@ func TestSnapshotInfoKeepsTimestampAsValue(t *testing.T) {
 		}
 
 		assertLabels(t, "vmware_vm_snapshot_info", labels, map[string]string{
-			"vcenter": loginData["target"].(string),
+			"vcenter": s.Target,
 			"name":    "batch3-snap",
 		})
 		assertIsMoid(t, "vmware_vm_snapshot_info", "vmmo", labels["vmmo"], "vm-")
@@ -748,10 +745,10 @@ func TestSnapshotInfoKeepsTimestampAsValue(t *testing.T) {
 // 两处顺序不一致本身就是错配的高危来源。
 func TestPerfMetricLabelValuePairing(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	loginData, cleanup := setupCollectorLoginData(t)
+	ctx, s, cleanup := setupCollectorScrape(t)
 	defer cleanup()
 
-	refs, names := getHostRefsAndNames(t, loginData, logger)
+	refs, names := getHostRefsAndNames(t, ctx, s, logger)
 	if len(refs) == 0 {
 		t.Fatal("expected at least one host reference from simulator")
 	}
@@ -767,11 +764,11 @@ func TestPerfMetricLabelValuePairing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ch := make(chan prometheus.Metric, 5000)
 			scrapePerformance(
-				loginData["ctx"].(context.Context), ch, logger, 1, 20,
-				loginData["perf"].(*performance.Manager), loginData["target"].(string),
+				ctx, ch, logger, 1, 20,
+				s.Perf, s.Target,
 				"HostSystem", "vmware", "host", tc.instance,
 				[]string{"cpu.usage.average"},
-				loginData["counters"].(map[string]*types.PerfCounterInfo), refs, names,
+				s.Counters, refs, names,
 			)
 
 			metrics := drainMetrics(ch)
@@ -786,7 +783,7 @@ func TestPerfMetricLabelValuePairing(t *testing.T) {
 				}
 
 				assertLabels(t, name, labels, map[string]string{
-					"vcenter": loginData["target"].(string),
+					"vcenter": s.Target,
 				})
 				assertIsMoid(t, name, "hostmo", labels["hostmo"], "host-")
 				assertIsNotMoid(t, name, "host", labels["host"])
@@ -820,7 +817,7 @@ func TestPerfMetricLabelValuePairing(t *testing.T) {
 func BenchmarkHostCollectorUpdate(b *testing.B) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	loginData, cleanup := setupCollectorLoginData(b)
+	ctx, s, cleanup := setupCollectorScrape(b)
 	defer cleanup()
 
 	collector, err := NewhostCollector(logger)
@@ -831,7 +828,7 @@ func BenchmarkHostCollectorUpdate(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		ch := make(chan prometheus.Metric, 40000)
-		if err := collector.Update(ch, "vmware", nil, loginData, map[string]string{}); err != nil {
+		if err := collector.Update(ctx, ch, s); err != nil {
 			b.Fatalf("host Update() returned error: %v", err)
 		}
 		drainMetrics(ch)
@@ -844,11 +841,16 @@ func BenchmarkHostCollectorUpdate(b *testing.B) {
 // namespace 缓存，跑多少轮、有多少实体都只有一套。缓存条目数就是最直接的证据。
 func TestDescCacheSizeIsIndependentOfEntityCount(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	loginData, cleanup := setupCollectorLoginData(t)
+	ctx, s, cleanup := setupCollectorScrape(t)
 	defer cleanup()
 
 	// 用独立 namespace，避免与其他测试共享缓存导致计数受污染。
+	//
+	// namespace 此前是 Update 的位置参数，现在挂在 Scrape 上 —— 这也是
+	// 改造的意图之一：一次抓取的全部上下文集中在一个值里，而不是散落在
+	// 五个形参和一个 map 之间。
 	const ns = "benchns"
+	s.Namespace = ns
 
 	collector, err := NewhostCollector(logger)
 	if err != nil {
@@ -868,7 +870,7 @@ func TestDescCacheSizeIsIndependentOfEntityCount(t *testing.T) {
 	var entityCount int
 	for round := 0; round < 3; round++ {
 		ch := make(chan prometheus.Metric, 40000)
-		if err := collector.Update(ch, ns, nil, loginData, map[string]string{}); err != nil {
+		if err := collector.Update(ctx, ch, s); err != nil {
 			t.Fatalf("host Update() returned error: %v", err)
 		}
 
@@ -1046,7 +1048,7 @@ func TestClusterDatastoreEmitsOneSeriesPerDatastore(t *testing.T) {
 	model := simulator.VPX()
 	model.Datastore = 3
 
-	loginData, cleanup := setupCollectorLoginDataWithModel(t, model)
+	ctx, s, cleanup := setupCollectorScrapeWithModel(t, model)
 	defer cleanup()
 
 	collector, err := NewClusterCollector(logger)
@@ -1055,7 +1057,7 @@ func TestClusterDatastoreEmitsOneSeriesPerDatastore(t *testing.T) {
 	}
 
 	ch := make(chan prometheus.Metric, 10000)
-	if err := collector.Update(ch, "vmware", nil, loginData, map[string]string{}); err != nil {
+	if err := collector.Update(ctx, ch, s); err != nil {
 		t.Fatalf("cluster Update() returned error: %v", err)
 	}
 
@@ -1077,19 +1079,22 @@ func TestClusterDatastoreEmitsOneSeriesPerDatastore(t *testing.T) {
 			"a single series means the moids were joined into one label value again", len(dsSeries))
 	}
 
-	for _, s := range dsSeries {
-		assertLabels(t, "vmware_cluster_datastore", s, map[string]string{
-			"vcenter": loginData["target"].(string),
+	// 循环变量叫 series 而不是 s：s 现在是这个测试持有的 *collector.Scrape，
+	// 内层同名会把它遮蔽掉，而遮蔽后 s.Target 仍然编译不过 —— 那是运气好。
+	// 换个名字比依赖编译器报错可靠。
+	for _, series := range dsSeries {
+		assertLabels(t, "vmware_cluster_datastore", series, map[string]string{
+			"vcenter": s.Target,
 		})
-		assertIsMoid(t, "vmware_cluster_datastore", "cmo", s["cmo"], "domain-")
+		assertIsMoid(t, "vmware_cluster_datastore", "cmo", series["cmo"], "domain-")
 
 		// 核心断言：dsmo 是**单个** moid，不是逗号拼接的列表。
-		if strings.Contains(s["dsmo"], ",") {
+		if strings.Contains(series["dsmo"], ",") {
 			t.Errorf("vmware_cluster_datastore: dsmo = %q contains a comma; each datastore "+
-				"must get its own series so that dsmo can be used in a join", s["dsmo"])
+				"must get its own series so that dsmo can be used in a join", series["dsmo"])
 			continue
 		}
-		assertIsMoid(t, "vmware_cluster_datastore", "dsmo", s["dsmo"], "datastore-")
+		assertIsMoid(t, "vmware_cluster_datastore", "dsmo", series["dsmo"], "datastore-")
 	}
 
 }
@@ -1104,7 +1109,7 @@ func TestClusterDatastoreEmitsOneSeriesPerDatastore(t *testing.T) {
 // 断言方式是 help 必须互不相同：只要有人再复制粘贴一次，这个测试就会失败。
 func TestClusterMetricHelpTextsAreDistinct(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	loginData, cleanup := setupCollectorLoginData(t)
+	ctx, s, cleanup := setupCollectorScrape(t)
 	defer cleanup()
 
 	collector, err := NewClusterCollector(logger)
@@ -1113,7 +1118,7 @@ func TestClusterMetricHelpTextsAreDistinct(t *testing.T) {
 	}
 
 	ch := make(chan prometheus.Metric, 10000)
-	if err := collector.Update(ch, "vmware", nil, loginData, map[string]string{}); err != nil {
+	if err := collector.Update(ctx, ch, s); err != nil {
 		t.Fatalf("cluster Update() returned error: %v", err)
 	}
 

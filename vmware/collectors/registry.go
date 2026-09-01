@@ -1,27 +1,16 @@
 package vmwareCollectors
 
 import (
-	"log/slog"
 	"sort"
 
-	"github.com/prezhdarov/prometheus-exporter/pkg/collector"
+	"github.com/prezhdarov/vmware-exporter/internal/collector"
 )
 
-// Definition 描述一个 collector 的身份、构造方式与默认开关状态。
-type Definition struct {
-	// Name 是 collector 的规范名，同时用于：
-	//   - 命令行开关 -collector.<Name>（框架注册用）
-	//   - /probe 的 collect[]=<Name> / nocollect[]=<Name>
-	//   - vmware_scrape_collector_duration_seconds{collector="<Name>"} 的标签值
-	// 三处必须一致，否则 /metrics 与 /probe 的开关行为会分叉。
-	Name string
-
-	// Creator 构造 collector 实例。
-	Creator func(*slog.Logger) (collector.Collector, error)
-
-	// DefaultEnabled 决定未显式指定时是否启用。
-	DefaultEnabled bool
-}
+// Definition 是 internal/collector.Definition 的别名。
+//
+// 别名而非重新声明：清单的消费方（根包的 /probe 处理、首页文档生成）拿到的
+// 就是调度层认识的同一个类型，不需要任何转换代码。
+type Definition = collector.Definition
 
 // definitions 是全项目 collector 清单的**唯一来源**。
 //
@@ -30,8 +19,9 @@ type Definition struct {
 // "all" 分支又硬编码一份字符串列表。三份不同步时 /metrics 与 /probe
 // 的可用 collector 就会不一致，新增 collector 极易漏改。
 //
-// 现在 Collect 与 parseCollectors 都从这里取；各 collector 的 init()
-// 仍走框架的 RegisterCollector（框架的 collectorState 是私有的，无法反查），
+// 现在这份清单同时驱动 /metrics 与 /probe：两条路径共用
+// internal/collector.CollectorSet，不再有第二份调度实现。
+// 各 collector 的 init() 仍额外注册一个 -collector.<name> 命令行开关，
 // 两边的一致性由 TestDefinitionsMatchRegisteredFlags 保证。
 var definitions = []Definition{
 	// 基础 collectors，默认启用。
