@@ -1,18 +1,30 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prezhdarov/prometheus-exporter/pkg/exporter"
 	vmwareCollectors "github.com/prezhdarov/vmware-exporter/vmware/collectors"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/exporter-toolkit/web"
 	"github.com/vmware/govmomi/simulator"
 )
 
@@ -707,4 +719,201 @@ func labelValue(body, metricName, label string) string {
 	}
 
 	return ""
+}
+
+// TestWebConfigPassesThroughConfigFile 覆盖 -web.config.file 是否真的接到了
+// exporter-toolkit。
+//
+// 上面那个 TestWebConfigUsesListenAddress 只断言默认值为空 —— 在 webConfig()
+// 里硬编码 `configFile := ""` 的旧实现下它同样能通过，所以它对这条链路是
+// 没有约束力的。这里改设 flag 再读回，才能区分「接上了」与「返回了一个恰好
+// 也是空字符串的局部变量」。
+//
+// 这条链路断掉是静默的：exporter 会正常启动、正常服务，只是明文 HTTP，
+// 而 /probe 的 URL 参数与 Basic Auth 里带着 vCenter 凭证。
+func TestWebConfigPassesThroughConfigFile(t *testing.T) {
+	original := *webConfigFile
+	t.Cleanup(func() { *webConfigFile = original })
+
+	const want = "/etc/vmware-exporter/web-config.yml"
+	*webConfigFile = want
+
+	addr := ":9169"
+	cfg := webConfig(&addr)
+
+	if cfg.WebConfigFile == nil {
+		t.Fatal("WebConfigFile is nil")
+	}
+
+	if got := *cfg.WebConfigFile; got != want {
+		t.Fatalf("WebConfigFile = %q, want %q\n"+
+			"  the flag is not reaching web.FlagConfig, so TLS and basic auth "+
+			"cannot be enabled at all", got, want)
+	}
+}
+
+// TestWebConfigFileFlagIsRegistered 断言 flag 以预期的名字注册。
+//
+// 名字是对外契约：systemd unit、compose 文件和文档都写死了它。而且
+// exporter-toolkit 上游用的就是 web.config.file，跟着它走能让用户在不同
+// exporter 之间复用同一套部署脚本。
+func TestWebConfigFileFlagIsRegistered(t *testing.T) {
+	f := flag.Lookup("web.config.file")
+	if f == nil {
+		t.Fatal("flag -web.config.file is not registered")
+	}
+
+	if f.DefValue != "" {
+		t.Errorf("default = %q, want empty (TLS off unless explicitly configured)", f.DefValue)
+	}
+
+	// 说明文字里必须留下能查到格式的线索 —— 这个文件的 schema 不是自解释的，
+	// 用户没有指引就只能猜。
+	if !strings.Contains(f.Usage, "exporter-toolkit") {
+		t.Errorf("usage text does not point at the exporter-toolkit docs: %q", f.Usage)
+	}
+}
+
+// TestWebConfigFileAcceptsGeneratedTLSConfig 用真实的证书与配置文件走一遍
+// exporter-toolkit 的加载路径。
+//
+// 前两个测试只证明字符串传到了结构体里，不能证明这个值最终真的被用于建立
+// TLS。这里生成一张自签证书、写一份最小 web config、启一个 server，然后用
+// HTTPS 客户端去访问 —— 如果配置没生效，服务端会是明文 HTTP，TLS 握手就会
+// 失败。
+func TestWebConfigFileAcceptsGeneratedTLSConfig(t *testing.T) {
+	dir := t.TempDir()
+
+	certPath, keyPath := writeSelfSignedCert(t, dir)
+
+	configPath := filepath.Join(dir, "web-config.yml")
+	configBody := fmt.Sprintf("tls_server_config:\n  cert_file: %s\n  key_file: %s\n",
+		certPath, keyPath)
+	if err := os.WriteFile(configPath, []byte(configBody), 0o600); err != nil {
+		t.Fatalf("write web config: %v", err)
+	}
+
+	original := *webConfigFile
+	t.Cleanup(func() { *webConfigFile = original })
+	*webConfigFile = configPath
+
+	// 监听 127.0.0.1:0 拿一个空闲端口，避免与并行测试抢固定端口。
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ping", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, "pong")
+	})
+	srv := &http.Server{Handler: mux}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	listenAddr := addr
+	cfg := webConfig(&listenAddr)
+
+	errCh := make(chan error, 1)
+	go func() {
+		// ServeMultiple 会读取 WebConfigFile 并据此包上 TLS。
+		errCh <- web.ServeMultiple([]net.Listener{ln}, srv, cfg,
+			slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}()
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			// 自签证书，跳过校验；这里要验证的是「有没有 TLS」，
+			// 不是「证书链是否可信」。
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	var resp *http.Response
+	var lastErr error
+	// server 启动是异步的，短暂重试几次。
+	for i := 0; i < 20; i++ {
+		resp, lastErr = client.Get("https://" + addr + "/ping")
+		if lastErr == nil {
+			break
+		}
+		select {
+		case err := <-errCh:
+			t.Fatalf("server exited early: %v", err)
+		default:
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if lastErr != nil {
+		t.Fatalf("HTTPS request failed after retries: %v\n"+
+			"  the web config file was not applied, so the listener is plain HTTP", lastErr)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(body) != "pong" {
+		t.Fatalf("body = %q, want %q", body, "pong")
+	}
+	if resp.TLS == nil {
+		t.Fatal("resp.TLS is nil: the connection was not encrypted")
+	}
+}
+
+// writeSelfSignedCert 生成一张仅用于测试的自签证书，返回证书与私钥的路径。
+func writeSelfSignedCert(t *testing.T, dir string) (string, string) {
+	t.Helper()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	tmpl := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "vmware-exporter-test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:     []string{"localhost"},
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+
+	certPath := filepath.Join(dir, "cert.pem")
+	certOut, err := os.OpenFile(certPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		t.Fatalf("open cert file: %v", err)
+	}
+	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: der}); err != nil {
+		t.Fatalf("encode cert: %v", err)
+	}
+	if err := certOut.Close(); err != nil {
+		t.Fatalf("close cert file: %v", err)
+	}
+
+	keyPath := filepath.Join(dir, "key.pem")
+	keyOut, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		t.Fatalf("open key file: %v", err)
+	}
+	if err := pem.Encode(keyOut, &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	}); err != nil {
+		t.Fatalf("encode key: %v", err)
+	}
+	if err := keyOut.Close(); err != nil {
+		t.Fatalf("close key file: %v", err)
+	}
+
+	return certPath, keyPath
 }

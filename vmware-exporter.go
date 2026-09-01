@@ -37,6 +37,18 @@ var (
 
 	logLevel  = flag.String("log.level", "debug", "Log Level minimums. Available options are: debug,info,warn and error")
 	logFormat = flag.String("log.format", "logfmt", "Log output format. Available options are: logfmt and json")
+
+	// webConfigFile 交给 exporter-toolkit 处理 TLS 与 HTTP Basic Auth。
+	//
+	// 在此之前 WebConfigFile 被硬编码为空字符串，也就是说没有任何办法给
+	// exporter 加上 TLS 或认证 —— 而 /probe 接受 URL 参数与 Basic Auth 形式的
+	// vCenter 凭证，明文 HTTP 下这些凭证在网络上是裸奔的。
+	//
+	// 文件格式见 exporter-toolkit 的文档：
+	// https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md
+	webConfigFile = flag.String("web.config.file", "",
+		"Path to a web configuration file enabling TLS and/or HTTP basic auth. See "+
+			"https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md")
 )
 
 func usage() {
@@ -66,12 +78,11 @@ Available collectors: %s
 func webConfig(listenAddress *string) *web.FlagConfig {
 	listenAddresses := []string{*listenAddress}
 	systemSocket := false
-	configFile := ""
 
 	return &web.FlagConfig{
 		WebListenAddresses: &listenAddresses,
 		WebSystemdSocket:   &systemSocket,
-		WebConfigFile:      &configFile,
+		WebConfigFile:      webConfigFile,
 	}
 }
 

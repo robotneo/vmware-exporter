@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔐 Security — rotate your vCenter credentials
+
+**This repository shipped working vCenter passwords in plain text. They are in
+the git history of a public repository and cannot be removed from it.**
+
+The affected values, and where they were:
+
+| Value | Files | First committed |
+| --- | --- | --- |
+| `public@123` | `vmware.conf`, `README-zh.md` | 2024-08-26 (`2cc216d`, `06c97fd`, `25b9c4b`) |
+| `QOo%zF7AsvJ280.s@sc` | `docker-compose.yml` | 2024-08-26 (`25b9c4b`) |
+| `public@12345`, `public@54321` | `README-zh.md` (file_sd example) | 2026-01-16 (`935889c`) |
+
+Internal addresses (`172.16.10.1`, `172.16.10.10`, `172.17.41.101`) were exposed
+alongside them.
+
+This release replaces every one of them with a placeholder, but **that only
+closes the door going forward.** Anyone who cloned the repository, or who opens
+any commit from 2024 onwards on GitHub, can still read the originals. Rewriting
+history is not an option here — this repository is a fork, and rewriting would
+sever the upstream relationship and break every existing clone.
+
+**If any of these passwords was ever real in your environment, change it in
+vCenter now.** Assume it is compromised.
+
+Two things were added to keep this from happening again:
+
+- `-web.config.file` now exists, so the exporter's own listener can require TLS
+  and basic auth. `/probe` accepts vCenter credentials as URL parameters and via
+  basic auth, and until now there was no way to encrypt that hop. See
+  [Securing the exporter](README.md#securing-the-exporter).
+- `scripts/check_config.py` fails if a credential reappears in a shipped config
+  file, if a password lands on a container command line, or if an environment
+  variable name maps to no registered flag. Wire it into CI.
+
 ### ⚠️ Breaking changes
 
 These require action before upgrading. Nothing else in this release changes the
@@ -105,6 +140,20 @@ class of breaking change.
   with a ready-made alerting rule.
 - `scripts/patch_dashboards.py` for applying the dashboard changes structurally,
   with `--check` (CI-friendly) and `--revert` modes.
+- **`-web.config.file`**, wired to
+  [exporter-toolkit](https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md),
+  enabling TLS and HTTP basic auth on the exporter's listener. The field existed
+  in the config struct but was hardcoded to `""`, so there was no way to turn
+  either on. Empty by default, so nothing changes unless you point it at a file.
+- `scripts/check_config.py`, a CI-runnable guard over the shipped config files.
+  Besides scanning for reintroduced credentials, it cross-checks every
+  `VMWARE_`-prefixed variable name in `docker-compose.yml` — including the ones
+  in the `.env` example in the comments — against the flags the binary actually
+  registers. A name that maps to nothing is a genuine bug: envflag ignores it
+  without a word.
+- A *Securing the exporter* section in both READMEs, covering the distinction
+  between the vCenter-facing connection and the exporter's own listener, and
+  documenting the envflag case rule.
 
 ### Fixed
 
@@ -144,4 +193,11 @@ class of breaking change.
   scrape round).
 - Dashboard JSON is normalised to 2-space indentation. This was done as a
   separate, semantics-preserving commit so that functional diffs stay reviewable.
+- `docker-compose.yml` passes credentials through `environment:` plus
+  `-envflag.enable` instead of putting them in `command:`. Anything on a
+  container's command line is readable via `docker inspect`, via `ps` inside the
+  container, and via `/proc`; environment variables are not.
+- `vmware.conf` now documents that it holds a password in plain text, and
+  suggests `chmod 600`, a read-only service account, and passing the password via
+  an `EnvironmentFile` instead.
 - Removed dead code: `inSlice` and `moSliceToString`.

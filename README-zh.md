@@ -20,7 +20,7 @@ cd /opt/vmware
 mv vmware-exporter /usr/bin
 
 # 把 vmware.conf 文件放入 /etc/vmware-exporter/ 目录中，vmware.conf 通过命令行选项加载参数
-ARGS="-vmware.username=administrator@vsphere.local -vmware.password=public@123 -vmware.vcenter=172.16.10.1:443 -vmware.insecureTLS"
+ARGS="-vmware.username=administrator@vsphere.local -vmware.password=<VCENTER_PASSWORD> -vmware.vcenter=<VCENTER_HOST>:443 -vmware.insecureTLS"
 # 更多参数 可通过空格进行添加 
 
 # 复制项目中 system 目录下的 vmware-exporter.service 文件到 /etc/systemd/system/ 目录中，实现 systemd 管理 vmware-exporter 服务。
@@ -40,8 +40,8 @@ docker run -d \
   -p 9169:9169 \
   meisite/vmware-exporter:latest \
   -vmware.username=administrator@vsphere.local \
-  -vmware.password=public@123 \
-  -vmware.vcenter=172.16.10.1 \
+  -vmware.password=<VCENTER_PASSWORD> \
+  -vmware.vcenter=<VCENTER_HOST> \
   -vmware.granularity=20 \
   -vmware.interval=20 \
   -vmware.insecureTLS
@@ -60,14 +60,14 @@ scrape_configs:
     # metrics_path: /probe
     static_configs:
       - targets:
-        - '172.16.10.1'
+        - 'vcenter.example.com'
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target
       - source_labels: [__param_target]
         target_label: instance
       - target_label: __address__
-        replacement: 172.16.10.100:9169
+        replacement: exporter.example.com:9169
 ```
 
 多凭证支持：
@@ -124,22 +124,20 @@ vmware_targets.yml 示例：
 
 ```yaml
 - targets:
-  - 172.16.10.10
-  # - vcenter1.example.com
+  - vcenter1.example.com
   labels:
     __meta_username: 'administrator@vsphere.local'
-    __meta_password: 'public@12345'
+    __meta_password: '<VCENTER1_PASSWORD>'
     __meta_schema: 'https'
     __meta_insecure: 'true'
     __meta_env: 'prod'  # 可删除
     __meta_datacenter: 'dc01' # 可删除
 
 - targets:
-  - 192.168.10.10
-  # vcenter2.example.com
+  - vcenter2.example.com
   labels:
     __meta_username: 'administrator@vsphere.local'
-    __meta_password: 'public@54321'
+    __meta_password: '<VCENTER2_PASSWORD>'
     __meta_schema: 'https'
     __meta_insecure: 'true'
     __meta_env: 'prod'  # 可删除
@@ -273,12 +271,85 @@ scrape_configs:
 | `-log.level` | string | 日志级别: `debug`, `info`, `warn`, `error`。 | `debug` |
 | `-log.format` | string | 日志格式: `logfmt` 或 `json`。 | `logfmt` |
 | `-file` | string | 指定配置文件的路径。 | - |
+| `-web.config.file` | string | Web 配置文件路径，用于给 exporter 自身的监听端口启用 TLS 与 HTTP Basic Auth。详见[安全加固](#安全加固)。 | - |
 
 ### 5. 环境变量集成
 | 参数 | 类型 | 说明 | 默认值 |
 | :--- | :--- | :--- | :--- |
 | `-envflag.enable` | bool | 是否允许从环境变量中读取配置。 | `false` |
 | `-envflag.prefix` | string | 环境变量的前缀（需配合 `-envflag.enable` 使用）。 | - |
+
+#### 环境变量名的大小写（容易踩坑）
+
+变量名 = `-envflag.prefix` 的值 + flag 名把 `.` 换成 `_`。注意**flag 名保持原样，不会转成大写**。以 `-envflag.prefix=VMWARE_` 为例：
+
+| flag | 环境变量名 |
+| :--- | :--- |
+| `-vmware.password` | `VMWARE_vmware_password` |
+| `-vmware.vcenter` | `VMWARE_vmware_vcenter` |
+| `-vmware.insecureTLS` | `VMWARE_vmware_insecureTLS` |
+| `-http.address` | `VMWARE_http_address` |
+
+写成 `VMWARE_VMWARE_PASSWORD` 会被**静默忽略** —— 没有告警、没有报错，exporter 直接用 flag 的默认值，唯一的表现是登录失败，而日志里看不出任何原因。
+
+仓库里的 `scripts/check_config.py` 会拿 `docker-compose.yml` 里的变量名去比对二进制实际注册的 flag，把这类拼写问题拦在 CI，而不是留到生产环境。
+
+---
+
+## 安全加固
+
+有两件需要分开看的事，很容易混淆：
+
+1. **exporter 到 vCenter/ESXi 的连接** —— 由 `-vmware.schema` 与 `-vmware.insecureTLS` 控制，默认走 HTTPS。
+2. **exporter 自身的监听端口**（Prometheus 抓取的那个）—— 由 `-web.config.file` 控制，**默认完全没有保护**。
+
+第二项的风险比看上去大：`/probe` 接受以 URL 查询参数或 HTTP Basic Auth 形式传入的 vCenter 凭证。明文 HTTP 下这些凭证在网络上是裸奔的；而查询参数的形式还会被写进中间反向代理的 access log 以及 Prometheus 自己的日志里。**优先用 Basic Auth 而不是 `?password=`，并启用 TLS。**
+
+`-web.config.file` 指向一个 [exporter-toolkit 格式](https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md)的文件：
+
+```yaml
+tls_server_config:
+  cert_file: /etc/vmware-exporter/cert.pem
+  key_file: /etc/vmware-exporter/key.pem
+
+basic_auth_users:
+  # bcrypt 哈希，可用 htpasswd -nBC 12 "" | tr -d ':\n' 生成
+  prometheus: $2y$12$hK1n...
+```
+
+```bash
+./vmware-exporter -web.config.file=/etc/vmware-exporter/web-config.yml ...
+```
+
+Prometheus 侧对应配置：
+
+```yaml
+scrape_configs:
+  - job_name: "vmware-exporter"
+    scheme: https
+    tls_config:
+      ca_file: /etc/prometheus/vmware-exporter-ca.pem
+    basic_auth:
+      username: prometheus
+      password_file: /etc/prometheus/vmware-exporter-password
+```
+
+### 让密码不出现在进程列表里
+
+用 `-vmware.password=...` 传入的密码，主机上任何能读 `/proc` 的人都能看到，容器内 `ps` 能看到，`docker inspect` 也能看到。改用环境变量传：
+
+```bash
+docker run -d --name vmware-exporter -p 9169:9169 \
+  -e VMWARE_vmware_username -e VMWARE_vmware_password -e VMWARE_vmware_vcenter \
+  meisite/vmware-exporter:latest \
+  -envflag.enable -envflag.prefix=VMWARE_ -vmware.insecureTLS
+```
+
+systemd 部署时，把密码放在 root 所有、权限 `600` 的 `EnvironmentFile` 里，而不是写进 `vmware.conf`。
+
+用 file_sd 做多凭证（`__meta_password`）时，凭证是明文写在 target 文件里的 —— 那个文件同样要 `chmod 600` 并限制属主。
+
+**建议使用只读的 vCenter 服务账号。** exporter 只读取属性和性能计数器，从不写入。
 
 ---
 
@@ -289,7 +360,7 @@ scrape_configs:
 
 ```bash
 ./vmware-exporter \
-  -vmware.vcenter="172.16.10.1:443" \
+  -vmware.vcenter="<VCENTER_HOST>:443" \
   -vmware.username="administrator@vsphere.local" \
   -vmware.password="your_password" \
   -vmware.insecureTLS \

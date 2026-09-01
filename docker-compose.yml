@@ -1,3 +1,22 @@
+# Credentials come from the environment, not from the command line.
+#
+# Anything in `command` ends up in the container's cmdline, which is visible to
+# `docker inspect`, to `ps` inside the container, and to any process that can
+# read /proc. Passing the password via -envflag.enable keeps it out of there.
+#
+# Create a .env file next to this one (and add it to .gitignore):
+#
+#   VMWARE_vmware_username=readonly@vsphere.local
+#   VMWARE_vmware_password=...
+#   VMWARE_vmware_vcenter=vcenter.example.com:443
+#
+# Mind the case: the variable name is the -envflag.prefix value followed by the
+# flag name with dots replaced by underscores, keeping the flag's original
+# lowercase. VMWARE_VMWARE_PASSWORD is silently ignored.
+#
+# Use a read-only vCenter service account. The exporter only reads properties
+# and performance counters; it never writes.
+
 services:
   vmware-exporter:
     image: meisite/vmware-exporter:latest
@@ -5,10 +24,13 @@ services:
     hostname: vmware-exporter
     ports:
       - 9169:9169
+    environment:
+      - VMWARE_vmware_username
+      - VMWARE_vmware_password
+      - VMWARE_vmware_vcenter
     command:
-      - "-vmware.username=administrator@vsphere.local"
-      - "-vmware.password=QOo%zF7AsvJ280.s@sc"
-      - "-vmware.vcenter=172.17.41.101:443"
+      - "-envflag.enable"
+      - "-envflag.prefix=VMWARE_"
       - "-vmware.granularity=15"
       - "-vmware.interval=15"
     restart: always
@@ -23,11 +45,16 @@ services:
 #    hostname: vmware-exporter-esxi
 #    ports:
 #      - 9170:9169
+#    environment:
+#      # -vmware.vcenter accepts an ESXi address; the flag name is kept for
+#      # backwards compatibility.
+#      - VMWARE_vmware_username
+#      - VMWARE_vmware_password
+#      - VMWARE_vmware_vcenter
 #    command:
-#      - "-vmware.username=root"
-#      - "-vmware.password=<ESXI_PASSWORD>"
-#      - "-vmware.vcenter=10.0.0.5:443"   # flag name kept for compatibility
-#      - "-vmware.insecureTLS"            # ESXi ships a self-signed certificate
+#      - "-envflag.enable"
+#      - "-envflag.prefix=VMWARE_"
+#      - "-vmware.insecureTLS"   # ESXi ships a self-signed certificate
 #      - "-vmware.interval=20"
 #      - "-vmware.granularity=20"
 #    restart: always

@@ -103,6 +103,7 @@ The options available are:
 | -http.address | The address and port the exporter will bind to in host:port format (default: ":9169") |
 | -log.format | Can be either json or logfmt (default: logfmt) |
 | -log.level | One of debug,info,warn or error (default: debug) - Don't expect much..|
+| -web.config.file | Path to a web configuration file enabling TLS and/or HTTP basic auth on the exporter's own listener - see [Securing the exporter](#securing-the-exporter) |
 | -prom.maxRequests | Max concurrent scrape requests (default: 20) |
 | -disable.exporter.metrics | Disables exporter process metrics |
 | -disable.exporter.target | Disables exporter default target - /metrics will only return exporter data - use /probe |
@@ -126,6 +127,76 @@ The options available are:
 Invalid values (for example `-vmware.granularity=0`, or a granularity larger than
 the interval) make the process exit at startup with an explicit reason instead of
 running with a broken configuration.
+
+### Environment variables: mind the case
+
+With `-envflag.enable`, a variable name is the `-envflag.prefix` value followed by
+the flag name with dots replaced by underscores. **The flag name keeps its
+original case** - it is not upper-cased. So with `-envflag.prefix=VMWARE_`:
+
+| flag | variable |
+| ---- | -------- |
+| `-vmware.password` | `VMWARE_vmware_password` |
+| `-vmware.vcenter` | `VMWARE_vmware_vcenter` |
+| `-vmware.insecureTLS` | `VMWARE_vmware_insecureTLS` |
+| `-http.address` | `VMWARE_http_address` |
+
+`VMWARE_VMWARE_PASSWORD` is **silently ignored**. There is no warning and no
+error - the exporter simply uses the flag default, and the only symptom is a
+login failure with no explanation. `scripts/check_config.py` checks the names
+used in `docker-compose.yml` against the flags the binary actually registers, so
+a typo fails in CI rather than in production.
+
+## Securing the exporter
+
+Two separate things are worth protecting, and they are easy to confuse:
+
+1. **The connection to vCenter/ESXi.** Controlled by `-vmware.schema` and
+   `-vmware.insecureTLS`. Defaults to HTTPS.
+2. **The exporter's own listener** - the one Prometheus scrapes. Controlled by
+   `-web.config.file`, and **unprotected by default**.
+
+The second one matters more than it looks. The `/probe` endpoint accepts vCenter
+credentials as URL query parameters or via HTTP basic auth, so on a plain HTTP
+listener those credentials travel unencrypted, and the query-parameter form also
+lands in the access logs of any reverse proxy in between and in Prometheus's own
+logs. Prefer basic auth over `?password=`, and enable TLS.
+
+Point `-web.config.file` at a file in
+[exporter-toolkit format](https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md):
+
+```yaml
+tls_server_config:
+  cert_file: /etc/vmware-exporter/cert.pem
+  key_file: /etc/vmware-exporter/key.pem
+
+basic_auth_users:
+  # bcrypt hash, e.g. from `htpasswd -nBC 12 "" | tr -d ':\n'`
+  prometheus: $2y$12$hK1n...
+```
+
+```bash
+./vmware-exporter -web.config.file=/etc/vmware-exporter/web-config.yml ...
+```
+
+### Keeping credentials out of process listings
+
+A password passed as `-vmware.password=...` is visible to anyone who can read
+`/proc` on the host, to `ps` inside a container, and to `docker inspect`. Pass it
+through the environment instead:
+
+```bash
+docker run -d --name vmware-exporter -p 9169:9169 \
+  -e VMWARE_vmware_username -e VMWARE_vmware_password -e VMWARE_vmware_vcenter \
+  meisite/vmware-exporter:latest \
+  -envflag.enable -envflag.prefix=VMWARE_ -vmware.insecureTLS
+```
+
+For the systemd unit, keep the password in an `EnvironmentFile` owned by root
+with mode `600` rather than in `vmware.conf`.
+
+Use a **read-only** vCenter service account. The exporter only reads properties
+and performance counters; it never writes.
 
 
 ## Self-monitoring
