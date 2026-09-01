@@ -20,12 +20,17 @@ builds:
       - arm64
 
 archives:
-  - format: tar.gz
+  # `format` and `format_overrides.format` were renamed to `formats` (now a
+  # list) in goreleaser v2.6. The singular form still works, but `goreleaser
+  # check` exits non-zero on it, and deprecated properties are dropped on major
+  # versions -- the release workflow pins `version: latest`, so that removal
+  # would land here without warning.
+  - formats: [tar.gz]
     # 生成格式如: vmware-exporter-v0.1.16-linux-amd64.tar.gz
     name_template: "{{ .ProjectName }}-{{ .Tag }}-{{ .Os }}-{{ .Arch }}"
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
     files:
       - LICENSE*
       - README*

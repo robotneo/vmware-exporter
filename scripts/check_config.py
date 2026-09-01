@@ -11,7 +11,8 @@ Three classes of problem are caught, in increasing order of subtlety:
    live in docker-compose.yml, vmware.conf and README-zh.md. They are in the
    git history and cannot be removed from it (the repo is a fork, so rewriting
    history would break the relationship), which makes it all the more important
-   that no new one gets added.
+   that no new one gets added. Every text file tracked by git is scanned, not a
+   curated list of them -- see LEAK_SCAN_EXCEPTIONS for why.
 
 2. **Credentials on the command line.** Anything in a compose `command:` ends
    up in the container's cmdline, readable via `docker inspect`, via `ps`
@@ -62,13 +63,48 @@ KNOWN_LEAKS = [
 
 # Files users copy from verbatim. A live credential in any of these is as bad
 # as one in the compose file.
-SCANNED_FILES = [
-    "docker-compose.yml",
-    "vmware.conf",
-    "README.md",
-    "README-zh.md",
-    "system/vmware-exporter.service",
-]
+#
+# This used to be a hand-maintained list of five paths, which had exactly the
+# bug it was written to prevent: README-zh.md kept its plaintext passwords
+# through the first pass of the security work precisely because it was not on
+# somebody's list. A whitelist that misses a file fails silently; a scan that
+# covers everything and carries explicit exceptions fails loudly. So: scan every
+# text file git tracks, and name the exceptions here with a reason.
+LEAK_SCAN_EXCEPTIONS = {
+    # Documents which passwords leaked and when, so users know what to rotate.
+    # Redacting it would defeat its purpose.
+    "CHANGELOG.md",
+    # Holds KNOWN_LEAKS itself.
+    "scripts/check_config.py",
+}
+
+# Extensions worth reading as text. Go sources are excluded on purpose: they are
+# covered by the compiler and tests, and test fixtures legitimately contain
+# host-like strings.
+TEXT_SUFFIXES = (
+    ".md", ".yml", ".yaml", ".conf", ".service", ".json",
+    ".sh", ".toml", ".ini", ".cfg", ".env", ".py", ".txt",
+)
+TEXT_NAMES = ("Dockerfile", "Makefile", "LICENSE")
+
+
+def scanned_files() -> list[str]:
+    """Every text file git tracks, minus the documented exceptions."""
+    out = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    found = []
+    for rel in out.stdout.split("\0"):
+        if not rel or rel in LEAK_SCAN_EXCEPTIONS:
+            continue
+        base = os.path.basename(rel)
+        if rel.endswith(TEXT_SUFFIXES) or base in TEXT_NAMES:
+            found.append(rel)
+    return sorted(found)
 
 
 def registered_flags() -> set[str]:
@@ -83,12 +119,24 @@ def registered_flags() -> set[str]:
     return set(re.findall(r'"([^"]+)"', out.stdout))
 
 
-def check_leaks(failures: list[str]) -> None:
-    for rel in SCANNED_FILES:
+def check_leaks(failures: list[str], files: list[str]) -> None:
+    # A stale exception is a hole: if CHANGELOG.md were renamed, the entry here
+    # would quietly stop excusing anything while still looking deliberate.
+    for rel in sorted(LEAK_SCAN_EXCEPTIONS):
+        if not os.path.exists(os.path.join(REPO, rel)):
+            failures.append(
+                f"LEAK_SCAN_EXCEPTIONS lists {rel!r}, which does not exist; "
+                "remove the entry or fix the path"
+            )
+
+    for rel in files:
         path = os.path.join(REPO, rel)
         if not os.path.exists(path):
             continue
-        text = open(path, encoding="utf-8").read()
+        try:
+            text = open(path, encoding="utf-8").read()
+        except (UnicodeDecodeError, OSError):
+            continue
         for secret in KNOWN_LEAKS:
             if secret in text:
                 failures.append(
@@ -209,7 +257,8 @@ def main() -> int:
         return 2
 
     failures: list[str] = []
-    check_leaks(failures)
+    files = scanned_files()
+    check_leaks(failures, files)
     check_compose(failures, flags)
     check_conf(failures, flags)
 
@@ -219,7 +268,7 @@ def main() -> int:
             print(f"  - {f}")
         return 1
 
-    print(f"config check OK ({len(flags)} flags known, {len(SCANNED_FILES)} files scanned)")
+    print(f"config check OK ({len(flags)} flags known, {len(files)} files scanned)")
     return 0
 
 

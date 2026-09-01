@@ -150,7 +150,10 @@ class of breaking change.
   `VMWARE_`-prefixed variable name in `docker-compose.yml` — including the ones
   in the `.env` example in the comments — against the flags the binary actually
   registers. A name that maps to nothing is a genuine bug: envflag ignores it
-  without a word.
+  without a word. The credential scan walks every text file git tracks rather
+  than a curated list, with `CHANGELOG.md` and the script itself excepted by
+  name; a whitelist that misses a file fails silently, which is how
+  `README-zh.md` kept its passwords through the first pass of this work.
 - A *Securing the exporter* section in both READMEs, covering the distinction
   between the vCenter-facing connection and the exporter's own listener, and
   documenting the envflag case rule.
@@ -207,9 +210,28 @@ class of breaking change.
   ran in the resulting binary.
 - CI now runs `gofmt`, `go vet`, `go test -race`, `golangci-lint` (the
   `.golangci.yml` in the repository had never been executed by any workflow),
-  `scripts/check_config.py` and `scripts/patch_dashboards.py --check`. The
-  `paths-ignore: '*.md'` filter was dropped: the config check scans the READMEs
-  for credentials, so a docs-only change is precisely when it needs to run.
+  `scripts/check_config.py`, `scripts/patch_dashboards.py --check` and
+  `goreleaser check`. The `paths-ignore: '*.md'` filter was dropped: the config
+  check scans the READMEs for credentials, so a docs-only change is precisely
+  when it needs to run.
+- **Release config fixed before it broke a release.** `.goreleaser.yaml` used
+  `archives.format` and `archives.format_overrides.format`, both renamed to
+  `formats` in goreleaser v2.6 — `goreleaser check` exits non-zero on them, and
+  deprecated properties get removed on major versions while
+  `release_build.yaml` pins `version: latest`. The release workflow only runs on
+  tags, so this would have surfaced during a release; `goreleaser check` now
+  runs on every push. Verified with a full `--snapshot` build: four archives,
+  `.tar.gz` for Linux and `.zip` for Windows, each containing the binary,
+  `LICENSE` and both READMEs.
+- Workflow actions brought up to date: `actions/checkout` v3/v4 → v6,
+  `actions/setup-go` v3 → v6 (now reading `go-version-file: go.mod` rather than
+  a hardcoded `>=1.22.1` that had fallen below go.mod's own `1.26`),
+  `goreleaser/goreleaser-action` v4 → v7 — v4 predates the goreleaser v2 that
+  `version: latest` installs, against a `version: 2` config file.
+- `dependabot.yml` watches `github-actions` in addition to `gomod`. Only Go
+  modules were configured, which is why the action versions above had been left
+  behind: nothing was tracking them. Grouped into a single PR so the weekly bump
+  stays reviewable.
 - Removed dead code: `inSlice`, `moSliceToString`, five entirely
   commented-out files under `vmware/api/` (`clusters.go`, `datastores.go`,
   `host.go`, `vm.go`, `inventory.go` — remnants of a REST `/api/vcenter/...`
