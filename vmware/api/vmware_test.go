@@ -144,7 +144,14 @@ func TestLoginRespectsCallerContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
 	}
-	defer ln.Close()
+	// t.Cleanup 而不是 defer：Close 的错误要报出来。这个 listener 的
+	// 生命周期就是这个测试，关不掉说明有东西还挂在上面 —— 那正是这个
+	// 测试要验证的情形（连接没被取消）以另一种形式出现。
+	t.Cleanup(func() {
+		if err := ln.Close(); err != nil {
+			t.Errorf("closing the listener failed: %v", err)
+		}
+	})
 
 	accepted := make(chan struct{}, 1)
 	go func() {

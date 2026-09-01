@@ -94,7 +94,9 @@ Available collectors: %s
 	// flag 默认值，其他情况打一行「跑 -help 看说明」。既然自己实现，
 	// 就直接把 flag 列表打全 —— usage 被调用时用户就是想看它。
 	out := flag.CommandLine.Output()
-	fmt.Fprintf(out, "%s\n", s)
+	// 错误显式丢弃，理由同 internal/config.Usage：写 usage 输出失败时
+	// 无处可报，报错得往同一个已经坏掉的流里写。
+	_, _ = fmt.Fprintf(out, "%s\n", s)
 	flag.PrintDefaults()
 }
 
