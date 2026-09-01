@@ -5,11 +5,15 @@ on:
   push:
     branches:
       - master
-    paths-ignore:
-      - '*.md'
+      - dev
 
 permissions:
   contents: read
+
+# Note there is deliberately no `paths-ignore` here. The previous version
+# skipped runs when only `*.md` changed, but scripts/check_config.py scans the
+# READMEs for credentials -- so a docs-only commit is exactly the case where
+# skipping is most harmful.
 
 jobs:
   tests:
@@ -29,8 +33,97 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Check formatting
+        # gofmt -l prints the files it would change and exits 0 either way, so
+        # the output has to be turned into the failure signal.
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:"
+            echo "$unformatted"
+            gofmt -d $unformatted
+            exit 1
+          fi
+
+      - name: Check go.mod is tidy
+        run: |
+          set -euo pipefail
+          cp go.mod go.mod.bak
+          cp go.sum go.sum.bak
+          # `go mod tidy` reaches out to the module proxy and can fail for
+          # reasons that have nothing to do with this repository. Let it fail the
+          # step explicitly rather than comparing files afterwards -- a partial
+          # tidy leaves the files untouched, which would otherwise be read as
+          # "tidy" and pass.
+          go mod tidy
+          if ! diff -q go.mod go.mod.bak || ! diff -q go.sum go.sum.bak; then
+            echo "go.mod/go.sum are not tidy; run 'go mod tidy' and commit the result"
+            diff -u go.mod.bak go.mod || true
+            diff -u go.sum.bak go.sum || true
+            exit 1
+          fi
+          rm go.mod.bak go.sum.bak
+
       - name: Build
         run: go build ./...
 
+      - name: Vet
+        run: go vet ./...
+
       - name: Run tests
         run: go test ./...
+
+      - name: Run tests with the race detector
+        # The collectors fan out over hosts and VMs in goroutines and share the
+        # Desc cache, so this is the check that matters most for this codebase.
+        # Kept as a separate step from the plain run so a data race is
+        # distinguishable from a logic failure in the job summary.
+        run: go test -race ./...
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # .golangci.yml has been in the repository without anything running it.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+
+  config:
+    name: Config and dashboards
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      # Fails if a credential reappears in a shipped config file or README, if a
+      # password lands on a container command line, or if a VMWARE_ variable
+      # name maps to no registered flag (envflag ignores those silently).
+      - name: Check shipped configuration
+        run: python scripts/check_config.py
+
+      # Verifies the dashboards still carry the target_type variable and the
+      # renamed metrics, rather than having been overwritten by an export from
+      # a Grafana instance that predates the change.
+      - name: Check dashboards
+        run: python scripts/patch_dashboards.py --check

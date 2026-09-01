@@ -3,10 +3,14 @@ package main
 import (
 	"flag"
 	"fmt"
+	"html"
 	"log/slog"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/prezhdarov/prometheus-exporter/pkg/collector"
 	"github.com/prezhdarov/prometheus-exporter/pkg/config"
@@ -33,6 +37,18 @@ var (
 
 	logLevel  = flag.String("log.level", "debug", "Log Level minimums. Available options are: debug,info,warn and error")
 	logFormat = flag.String("log.format", "logfmt", "Log output format. Available options are: logfmt and json")
+
+	// webConfigFile 交给 exporter-toolkit 处理 TLS 与 HTTP Basic Auth。
+	//
+	// 在此之前 WebConfigFile 被硬编码为空字符串，也就是说没有任何办法给
+	// exporter 加上 TLS 或认证 —— 而 /probe 接受 URL 参数与 Basic Auth 形式的
+	// vCenter 凭证，明文 HTTP 下这些凭证在网络上是裸奔的。
+	//
+	// 文件格式见 exporter-toolkit 的文档：
+	// https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md
+	webConfigFile = flag.String("web.config.file", "",
+		"Path to a web configuration file enabling TLS and/or HTTP basic auth. See "+
+			"https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md")
 )
 
 func usage() {
@@ -48,27 +64,53 @@ Two modes of operation:
    Use /probe endpoint with URL parameters or Basic Auth.
    Each probe request uses independent credentials.
 
-`, exporterName)
+Timing flags:
+   -vmware.timeout      overall timeout for one scrape (login, properties, performance)
+   -vmware.interval     PerfManager sampling window; independent from the timeout
+   -vmware.granularity  sampling frequency; must be > 0 and <= interval
+
+Available collectors: %s
+
+`, exporterName, strings.Join(vmwareCollectors.Names(), ", "))
 	config.Usage(s)
 }
 
 func webConfig(listenAddress *string) *web.FlagConfig {
 	listenAddresses := []string{*listenAddress}
 	systemSocket := false
-	configFile := ""
 
 	return &web.FlagConfig{
 		WebListenAddresses: &listenAddresses,
 		WebSystemdSocket:   &systemSocket,
-		WebConfigFile:      &configFile,
+		WebConfigFile:      webConfigFile,
 	}
 }
 
-// collectorConfig 定义 collector 配置
-type collectorConfig struct {
-	name           string
-	creator        func(*slog.Logger) (collector.Collector, error)
-	defaultEnabled bool
+// scrapeMetrics 是 /probe 路径的自监控指标描述符。
+//
+// 名称与标签必须与框架 /metrics 路径产出的完全一致
+// （见 prometheus-exporter/pkg/collector/collector.go:84-96），
+// 否则同一套 Prometheus 查询无法同时覆盖两个端点。
+type scrapeMetrics struct {
+	duration *prometheus.Desc
+	success  *prometheus.Desc
+}
+
+func newScrapeMetrics(namespace string) scrapeMetrics {
+	return scrapeMetrics{
+		duration: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "scrape", "collector_duration_seconds"),
+			"Duration of a collector scrape.",
+			[]string{"collector"},
+			nil,
+		),
+		success: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "scrape", "collector_success"),
+			"Whether a collector succeeded.",
+			[]string{"collector"},
+			nil,
+		),
+	}
 }
 
 // vmwareCollector 包装 VMware collectors 以符合 prometheus.Collector 接口
@@ -78,6 +120,7 @@ type vmwareCollector struct {
 	logger            *slog.Logger
 	clientAPI         collector.ClientAPI
 	enabledCollectors map[string]bool
+	scrapeMetrics     scrapeMetrics
 }
 
 func newVMwareCollector(loginData map[string]interface{}, namespace string, logger *slog.Logger, enabledCollectors map[string]bool) (*vmwareCollector, error) {
@@ -87,61 +130,92 @@ func newVMwareCollector(loginData map[string]interface{}, namespace string, logg
 		logger:            logger,
 		clientAPI:         vmware.NewAPI(),
 		enabledCollectors: enabledCollectors,
+		scrapeMetrics:     newScrapeMetrics(namespace),
 	}, nil
 }
 
-// Describe 实现 prometheus.Collector 接口
+// Describe 实现 prometheus.Collector 接口。
+//
+// 业务指标的 Desc 在各 collector 内部按采集结果动态构造，无法预先枚举，
+// 因此这里只描述两个固定的自监控指标。空实现会让 registry 把本 collector
+// 视为「unchecked collector」，从而跳过重复注册检测。
 func (c *vmwareCollector) Describe(ch chan<- *prometheus.Desc) {
-	// 动态 collector，不需要预先描述
+	ch <- c.scrapeMetrics.duration
+	ch <- c.scrapeMetrics.success
 }
 
-// Collect 实现 prometheus.Collector 接口
+// isEnabled 判断某个 collector 本次是否应该运行。
+// 未显式指定时回退到该 collector 的默认状态。
+func (c *vmwareCollector) isEnabled(def vmwareCollectors.Definition) bool {
+	if enabled, exists := c.enabledCollectors[def.Name]; exists {
+		return enabled
+	}
+
+	return def.DefaultEnabled
+}
+
+// Collect 实现 prometheus.Collector 接口。
+//
+// 并发调度所有启用的 collector，并为每个 collector 产出
+// _duration_seconds 与 _success 两个自监控指标。
+//
+// 这里刻意复刻框架 CollectorSet.Collect 的行为
+// （prometheus-exporter/pkg/collector/collect.go:28-73），使 /probe 与
+// /metrics 两条路径在并发性与可观测性上完全对齐。此前 /probe 是串行执行
+// 且完全没有自监控指标，同一份告警规则在两个端点上表现不同。
+//
+// 注意：登录/登出由调用方 probeHandler 负责，不在此处，所以本函数只产出
+// 各 collector 的耗时与 all_collectors 汇总，不产出 login/logout 计时。
 func (c *vmwareCollector) Collect(ch chan<- prometheus.Metric) {
+	begin := time.Now()
+
 	params := make(map[string]string)
 
-	// 定义所有可用的 collectors
-	collectors := []collectorConfig{
-		// 基础 collectors（默认启用）
-		{"datacenter", vmwareCollectors.NewdatacenterCollector, true},
-		{"cluster", vmwareCollectors.NewClusterCollector, true},
-		{"datastore", vmwareCollectors.NewdatastoreCollector, true},
-		{"host", vmwareCollectors.NewhostCollector, true},
-		{"vm", vmwareCollectors.NewvmCollector, true},
+	wg := sync.WaitGroup{}
 
-		// ESXi CLI collectors（默认禁用）
-		{"esxcli.host.nic", vmwareCollectors.NewesxcliHostNICCollector, false},
-		{"esxcli.storage", vmwareCollectors.NewesxcliStorageListCCollector, false},
-	}
-
-	for _, col := range collectors {
-		// 检查是否应该运行此 collector
-		enabled, exists := c.enabledCollectors[col.name]
-		if !exists {
-			// 如果没有明确指定，使用默认设置
-			enabled = col.defaultEnabled
-		}
-
-		if !enabled {
-			c.logger.Debug("skipping disabled collector", "name", col.name)
+	for _, def := range vmwareCollectors.Definitions() {
+		if !c.isEnabled(def) {
+			c.logger.Debug("skipping disabled collector", "name", def.Name)
 			continue
 		}
 
-		c.logger.Debug("creating collector", "name", col.name)
-
-		instance, err := col.creator(c.logger)
+		instance, err := def.Creator(c.logger.With("collector", def.Name))
 		if err != nil {
-			c.logger.Error("failed to create collector", "collector", col.name, "error", err)
+			// 构造失败也要产出 success=0，否则这个 collector 在监控上
+			// 表现为「静默消失」而非「失败」，无法告警。
+			c.logger.Error("failed to create collector", "collector", def.Name, "error", err)
+			ch <- prometheus.MustNewConstMetric(c.scrapeMetrics.success, prometheus.GaugeValue, 0, def.Name)
 			continue
 		}
 
-		c.logger.Debug("updating collector", "name", col.name)
-		if err := instance.Update(ch, c.namespace, c.clientAPI, c.loginData, params); err != nil {
-			c.logger.Error("collector failed", "collector", col.name, "error", err)
-			// 继续收集其他 collectors 的指标
-		} else {
-			c.logger.Debug("collector completed successfully", "name", col.name)
-		}
+		wg.Add(1)
+
+		go func(name string, instance collector.Collector) {
+			defer wg.Done()
+
+			collectorBegin := time.Now()
+
+			err := instance.Update(ch, c.namespace, c.clientAPI, c.loginData, params)
+
+			duration := time.Since(collectorBegin)
+
+			success := float64(1)
+			if err != nil {
+				success = 0
+				c.logger.Error("collector failed", "collector", name, "duration_seconds", duration.Seconds(), "error", err)
+			} else {
+				c.logger.Debug("collector scraped successfully", "collector", name, "duration_seconds", duration.Seconds())
+			}
+
+			ch <- prometheus.MustNewConstMetric(c.scrapeMetrics.duration, prometheus.GaugeValue, duration.Seconds(), name)
+			ch <- prometheus.MustNewConstMetric(c.scrapeMetrics.success, prometheus.GaugeValue, success, name)
+		}(def.Name, instance)
 	}
+
+	wg.Wait()
+
+	// 与框架保持一致的汇总计时，标签值同样用 "all_collectors"。
+	ch <- prometheus.MustNewConstMetric(c.scrapeMetrics.duration, prometheus.GaugeValue, time.Since(begin).Seconds(), "all_collectors")
 }
 
 // parseCollectors 解析 collectors 参数
@@ -150,19 +224,32 @@ func (c *vmwareCollector) Collect(ch chan<- prometheus.Metric) {
 //	collect[]=datacenter&collect[]=host  (启用指定的)
 //	collect[]=all                         (启用所有)
 //	collect[]=all&nocollect[]=esxcli.host.nic  (启用所有，但禁用指定的)
-func parseCollectors(params map[string][]string, logger *slog.Logger) map[string]bool {
+//
+// 返回的 map 只包含被显式指定的 collector；未出现的沿用各自的默认状态，
+// 由 vmwareCollector.isEnabled 兜底。
+//
+// 第二个返回值是无法识别的名字，供调用方记日志。拼错的名字此前会被静默
+// 忽略 —— 比如 collect[]=vms（多个 s）会导致所有默认 collector 都不跑却
+// 毫无提示，返回一份空指标集，排查起来非常费时。
+func parseCollectors(params map[string][]string, logger *slog.Logger) (map[string]bool, []string) {
 	enabledCollectors := make(map[string]bool)
 
-	// 获取 collect[] 参数
 	collectParams := params["collect[]"]
 	noCollectParams := params["nocollect[]"]
 
-	// 如果没有指定任何参数，返回空 map（使用默认值）
+	// 未指定任何参数：返回空 map，全部走默认值。
 	if len(collectParams) == 0 && len(noCollectParams) == 0 {
-		return enabledCollectors
+		return enabledCollectors, nil
 	}
 
-	// 如果指定了 "all"，启用所有 collectors
+	// 已知的 collector 名，来自 vmware/collectors 的单一清单。
+	known := make(map[string]bool)
+	for _, name := range vmwareCollectors.Names() {
+		known[name] = true
+	}
+
+	var unknown []string
+
 	hasAll := false
 	for _, c := range collectParams {
 		if c == "all" {
@@ -172,31 +259,43 @@ func parseCollectors(params map[string][]string, logger *slog.Logger) map[string
 	}
 
 	if hasAll {
-		// 启用所有 collectors
-		enabledCollectors["datacenter"] = true
-		enabledCollectors["cluster"] = true
-		enabledCollectors["datastore"] = true
-		enabledCollectors["host"] = true
-		enabledCollectors["vm"] = true
-		enabledCollectors["esxcli.host.nic"] = true
-		enabledCollectors["esxcli.storage"] = true
+		// 启用全部，清单从 vmware/collectors 取，不再硬编码。
+		for _, name := range vmwareCollectors.Names() {
+			enabledCollectors[name] = true
+		}
 
-		logger.Debug("enabled all collectors")
+		logger.Debug("enabled all collectors", "count", len(enabledCollectors))
 	} else if len(collectParams) > 0 {
-		// 只启用指定的 collectors
+		// collect[] 一旦显式给出，就意味着「只跑这些」：先把所有 collector
+		// 置为 false，再逐个打开。否则默认启用的 collector 会一起跑，
+		// collect[]=vm 的语义会变成「vm 加上全部默认项」。
+		for _, name := range vmwareCollectors.Names() {
+			enabledCollectors[name] = false
+		}
+
 		for _, c := range collectParams {
+			if !known[c] {
+				unknown = append(unknown, c)
+				continue
+			}
+
 			enabledCollectors[c] = true
 			logger.Debug("enabled collector", "name", c)
 		}
 	}
 
-	// 处理 nocollect[] 参数（禁用指定的）
+	// nocollect[] 在 collect[] 之后处理，因此可以从 all 里剔除。
 	for _, c := range noCollectParams {
+		if !known[c] {
+			unknown = append(unknown, c)
+			continue
+		}
+
 		enabledCollectors[c] = false
 		logger.Debug("disabled collector", "name", c)
 	}
 
-	return enabledCollectors
+	return enabledCollectors, unknown
 }
 
 // probeHandler 处理 probe 请求，支持多 target 和独立凭证
@@ -239,7 +338,21 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 	insecure := params.Get("insecure") == "true"
 
 	// 解析 collectors 配置
-	enabledCollectors := parseCollectors(params, logger)
+	enabledCollectors, unknownCollectors := parseCollectors(params, logger)
+
+	// 拼错的 collector 名此前被静默忽略，会得到一份空指标集且毫无提示。
+	// 这里拒绝请求并把已知名列出来，让调用方立刻能改对。
+	if len(unknownCollectors) > 0 {
+		msg := fmt.Sprintf("unknown collector(s): %s. Available: %s",
+			strings.Join(unknownCollectors, ", "),
+			strings.Join(vmwareCollectors.Names(), ", "))
+
+		http.Error(w, msg, http.StatusBadRequest)
+		logger.Error("probe request specified unknown collectors",
+			"target", target, "unknown", strings.Join(unknownCollectors, ","))
+
+		return
+	}
 
 	collectorList := []string{}
 	for name, enabled := range enabledCollectors {
@@ -247,6 +360,8 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 			collectorList = append(collectorList, name)
 		}
 	}
+
+	sort.Strings(collectorList)
 
 	logger.Debug("probe request received",
 		"target", target,
@@ -312,12 +427,61 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 	logger.Info("probe request completed successfully", "target", target)
 }
 
+// collectorDescriptions 给首页文档提供人类可读的说明。
+// 缺失的条目会退化为空说明，但 collector 本身仍会被列出 ——
+// 保证新增 collector 时首页不会漏项，最差也只是少一句描述。
+var collectorDescriptions = map[string]string{
+	"datacenter":      "vCenter and datacenter info",
+	"cluster":         "Cluster information",
+	"datastore":       "Datastore metrics",
+	"host":            "ESXi host metrics",
+	"vm":              "Virtual machine metrics",
+	"esxcli.host.nic": "ESXi NIC driver info",
+	"esxcli.storage":  "ESXi storage info",
+}
+
+// collectorListHTML 从 collector 清单生成首页的可用 collector 列表。
+//
+// 此前这段 HTML 是手写的硬编码列表，是清单的第四处副本
+// （另外三处：各 collector 的 init() 注册、Collect 的 slice、
+// parseCollectors 里的 "all"）。新增 collector 时极易漏改文档，
+// 导致首页宣称的可用项与实际不符。
+func collectorListHTML() string {
+	var b strings.Builder
+
+	for _, def := range vmwareCollectors.Definitions() {
+		state := "disabled"
+		if def.DefaultEnabled {
+			state = "enabled"
+		}
+
+		description := collectorDescriptions[def.Name]
+		if description != "" {
+			description = " - " + description
+		}
+
+		fmt.Fprintf(&b, "\n\t\t\t\t<li><code>%s</code>%s (default: %s)</li>",
+			html.EscapeString(def.Name), html.EscapeString(description), state)
+	}
+
+	b.WriteString("\n\t\t\t")
+
+	return b.String()
+}
+
 func main() {
 	flag.CommandLine.SetOutput(os.Stdout)
 	flag.Usage = usage
 	config.Parse()
 
 	logger := promslog.New(config.SetLogger(logFormat, logLevel))
+
+	// fail-fast：非法的 vmware.* 参数组合会在运行期引发除零 panic 或让采样
+	// 永远拿不到数据，必须在监听端口之前就拒绝启动。
+	if err := vmware.ValidateFlags(); err != nil {
+		logger.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
 
 	logger.Debug("exporter target setting", "disabled", *disableExporterTarget)
 
@@ -354,6 +518,17 @@ func main() {
   -vmware.insecureTLS=true
 			</pre>
 			<p>Then scrape: <code>http://localhost:9169/metrics</code></p>
+
+			<h4>Timing flags</h4>
+			<ul>
+				<li><b>-vmware.timeout</b> (default: 60) - overall timeout in seconds for a single
+					scrape, covering login, property retrieval and performance sampling.
+					Raise this for large inventories.</li>
+				<li><b>-vmware.interval</b> (default: 20) - PerfManager sampling window in seconds.
+					Does not affect the scrape timeout.</li>
+				<li><b>-vmware.granularity</b> (default: 20) - sampling frequency in seconds.
+					Must be greater than 0 and not larger than the interval.</li>
+			</ul>
 			
 			<h3>2. Probe Mode (Multiple vCenters)</h3>
 			
@@ -373,15 +548,7 @@ func main() {
 			</ul>
 			
 			<h4>Available Collectors:</h4>
-			<ul>
-				<li><code>datacenter</code> - vCenter and datacenter info (default: enabled)</li>
-				<li><code>cluster</code> - Cluster information (default: enabled)</li>
-				<li><code>datastore</code> - Datastore metrics (default: enabled)</li>
-				<li><code>host</code> - ESXi host metrics (default: enabled)</li>
-				<li><code>vm</code> - Virtual machine metrics (default: enabled)</li>
-				<li><code>esxcli.host.nic</code> - ESXi NIC driver info (default: disabled)</li>
-				<li><code>esxcli.storage</code> - ESXi storage info (default: disabled)</li>
-			</ul>
+			<ul>` + collectorListHTML() + `</ul>
 			
 			<h4>Examples:</h4>
 			<pre>

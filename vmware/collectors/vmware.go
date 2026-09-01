@@ -2,9 +2,7 @@ package vmwareCollectors
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -16,34 +14,6 @@ import (
 
 func Load(logger *slog.Logger) {
 	logger.Info("Loading VMware vSphere collector set")
-}
-
-func inSlice(slice []string, val *string) bool {
-	for _, item := range slice {
-		if item == *val {
-			return true
-		}
-	}
-	return false
-}
-
-func moSliceToString(moSlice []types.ManagedObjectReference) *string {
-
-	var stringList string
-	if len(moSlice) > 0 {
-
-		stringList = moSlice[0].Value
-
-		if len(moSlice) > 1 {
-
-			for _, item := range moSlice[1:] {
-
-				stringList = stringList + "," + item.Value
-			}
-		}
-	}
-
-	return &stringList
 }
 
 func fetchProperties(ctx context.Context, viewManager *view.Manager, vmwClient *vim25.Client, moTypes, propSpec []string, dataContainer interface{}, logger *slog.Logger) error {
@@ -82,26 +52,23 @@ func emitPerformanceMetrics(
 	countersSpec map[string]*types.PerfCounterInfo,
 	targetNames map[string]string,
 	metrics []performance.EntityMetric,
+	logger *slog.Logger,
 ) {
+	entityLabels := perfEntityLabels(moType)
+	if entityLabels == nil {
+		// 原实现的 switch 没有 default 分支，未知实体类型会静默产出只带
+		// vcenter label 的指标 —— 该类型下所有实体的序列互相覆盖，最后只剩
+		// 一条，而且看不出哪里出了问题。宁可跳过并留下日志。
+		logger.Error("unknown managed object type for performance metrics, skipping", "type", moType)
+		return
+	}
+
 	for _, metric := range metrics {
-		labelMap := map[string]string{"vcenter": vcenter}
-
-		switch moType {
-		case "HostSystem":
-			labelMap["host"] = targetNames[metric.Entity.Value]
-			labelMap["hostmo"] = metric.Entity.Value
-		case "VirtualMachine":
-			labelMap["vm"] = targetNames[metric.Entity.Value]
-			labelMap["vmmo"] = metric.Entity.Value
-		case "Datastore":
-			labelMap["ds"] = targetNames[metric.Entity.Value]
-			labelMap["dsmo"] = metric.Entity.Value
-		}
-
 		for _, value := range metric.Value {
-			if value.Instance != "" {
-				labelMap["pfinstance"] = value.Instance
-			} else if instance != "" {
+			instanced := value.Instance != ""
+
+			// instance 参数非空表示这一轮只要 instanced 计数器。
+			if !instanced && instance != "" {
 				continue
 			}
 
@@ -109,6 +76,8 @@ func emitPerformanceMetrics(
 				continue
 			}
 
+			// 样本数与时间戳数不一致说明这批数据不完整，跳过而不是
+			// 按错位的方式求平均。
 			if len(value.Value) != len(metric.SampleInfo) {
 				continue
 			}
@@ -118,33 +87,29 @@ func emitPerformanceMetrics(
 				continue
 			}
 
-			if len(value.Value) == 0 {
-				continue
-			}
-
-			var avg int64
+			var sum int64
 			for _, subvalue := range value.Value {
-				avg += subvalue
+				sum += subvalue
 			}
-			avg = avg / int64(len(value.Value))
+			avg := sum / int64(len(value.Value))
+
+			// label 值按 Desc 声明的顺序拼装：vcenter, <实体标签...>, [pfinstance]
+			//
+			// labelValues 每次循环重新构造。原实现把 labelMap 提到外层复用，
+			// 结果 pfinstance 一旦被设置就再也不会清除 —— 若某个 value 带
+			// instance 而下一个不带，陈旧的 pfinstance 会泄漏到后者身上，
+			// 产出一条 label 错误的序列。
+			labelValues := make([]string, 0, len(entityLabels)+2)
+			labelValues = append(labelValues, vcenter, targetNames[metric.Entity.Value], metric.Entity.Value)
+			if instanced {
+				labelValues = append(labelValues, value.Instance)
+			}
 
 			ch <- prometheus.MustNewConstMetric(
-				prometheus.NewDesc(
-					prometheus.BuildFQName(
-						namespace,
-						subsystem,
-						strings.ReplaceAll(value.Name, ".", "_"),
-					),
-					fmt.Sprintf(
-						"%s in %s ",
-						counterInfo.UnitInfo.GetElementDescription().Label,
-						counterInfo.NameInfo.GetElementDescription().Summary,
-					),
-					nil,
-					labelMap,
-				),
+				perfDesc(namespace, subsystem, value.Name, moType, instanced, counterInfo),
 				prometheus.GaugeValue,
 				float64(avg),
+				labelValues...,
 			)
 		}
 	}
@@ -216,6 +181,7 @@ func scrapePerformance(ctx context.Context, ch chan<- prometheus.Metric, logger 
 		countersSpec,
 		targetNames,
 		metrics,
+		logger,
 	)
 
 	logger.Debug("time to process perfman metrics", "type", moType, "duration_seconds", time.Since(begin).Seconds())

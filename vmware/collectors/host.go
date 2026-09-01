@@ -58,6 +58,9 @@ func (c *hostCollector) Update(ch chan<- prometheus.Metric, namespace string, cl
 
 	begin := time.Now()
 
+	descs := descsFor(namespace).host
+	target := loginData["target"].(string)
+
 	err := fetchProperties(
 		loginData["ctx"].(context.Context), loginData["view"].(*view.Manager), loginData["client"].(*vim25.Client),
 		[]string{"HostSystem"}, []string{"parent", "summary", "runtime"}, &hosts, c.logger,
@@ -79,63 +82,49 @@ func (c *hostCollector) Update(ch chan<- prometheus.Metric, namespace string, cl
 
 			c.logger.Debug("gathering metrics for host", "host", host.Summary.Config.Name, "host_moref", host.Self.Value)
 
-			ch <- prometheus.MustNewConstMetric(
-				prometheus.NewDesc(
-					prometheus.BuildFQName(namespace, hostSubsystem, "info"),
-					"Basic host info", nil,
-					map[string]string{"hostmo": host.Self.Value, "host": host.Summary.Config.Name, "cmo": host.Parent.Value,
-						"vcenter": loginData["target"].(string)},
-				), prometheus.GaugeValue, 1.0,
-			)
+			moid := host.Self.Value
+			name := host.Summary.Config.Name
+			hw := host.Summary.Hardware
+			product := host.Summary.Config.Product
 
-			ch <- prometheus.MustNewConstMetric(
-				prometheus.NewDesc(
-					prometheus.BuildFQName(namespace, hostSubsystem, "hardware_info"),
-					"Hardware information", nil,
-					map[string]string{"hostmo": host.Self.Value, "host": host.Summary.Config.Name, "vendor": host.Summary.Hardware.Vendor,
-						"model": host.Summary.Hardware.Model, "cpu_type": host.Summary.Hardware.CpuModel, "vcenter": loginData["target"].(string)},
-				), prometheus.GaugeValue, 1.0,
-			)
+			ch <- prometheus.MustNewConstMetric(descs.info,
+				prometheus.GaugeValue, 1.0,
+				moid, name, host.Parent.Value, target)
 
-			ch <- prometheus.MustNewConstMetric(
-				prometheus.NewDesc(
-					prometheus.BuildFQName(namespace, hostSubsystem, "software_info"),
-					"Software Information", nil,
-					map[string]string{"hostmo": host.Self.Value, "host": host.Summary.Config.Name, "software": host.Summary.Config.Product.Name,
-						"version": host.Summary.Config.Product.Version, "build": host.Summary.Config.Product.Build,
-						"vcenter": loginData["target"].(string)},
-				), prometheus.GaugeValue, 1.0,
-			)
+			ch <- prometheus.MustNewConstMetric(descs.hardwareInfo,
+				prometheus.GaugeValue, 1.0,
+				moid, name, hw.Vendor, hw.Model, hw.CpuModel, target)
 
-			hostLabels := map[string]string{"hostmo": host.Self.Value, "host": host.Summary.Config.Name, "vcenter": loginData["target"].(string)}
+			ch <- prometheus.MustNewConstMetric(descs.softwareInfo,
+				prometheus.GaugeValue, 1.0,
+				moid, name, product.Name, product.Version, product.Build, target)
 
-			ch <- prometheus.MustNewConstMetric(
-				prometheus.NewDesc(
-					prometheus.BuildFQName(namespace, hostSubsystem, "cpu_corecount"),
-					"Number of physical CPU cores", nil, hostLabels,
-				), prometheus.GaugeValue, float64(host.Summary.Hardware.NumCpuCores),
-			)
+			ch <- prometheus.MustNewConstMetric(descs.cpuCoreCount,
+				prometheus.GaugeValue, float64(hw.NumCpuCores),
+				moid, name, target)
 
-			ch <- prometheus.MustNewConstMetric(
-				prometheus.NewDesc(
-					prometheus.BuildFQName(namespace, hostSubsystem, "cpu_threadcount"),
-					"Number of virtual (HT) CPU cores", nil, hostLabels,
-				), prometheus.GaugeValue, float64(host.Summary.Hardware.NumCpuThreads),
-			)
+			ch <- prometheus.MustNewConstMetric(descs.cpuThreadCount,
+				prometheus.GaugeValue, float64(hw.NumCpuThreads),
+				moid, name, target)
 
-			ch <- prometheus.MustNewConstMetric(
-				prometheus.NewDesc(
-					prometheus.BuildFQName(namespace, hostSubsystem, "cpu_capacity"),
-					"Average CPU Frequency", nil, hostLabels,
-				), prometheus.GaugeValue, float64(host.Summary.Hardware.CpuMhz),
-			)
+			// 双写过渡：无单位后缀的旧指标与带 _mhz / _bytes 的新指标同时输出。
+			// 旧指标的 help 已标注 deprecated，值不变 —— 唯一变化是文案，
+			// 所以现有 dashboard 不需要任何改动就能继续工作。
+			ch <- prometheus.MustNewConstMetric(descs.cpuCapacity,
+				prometheus.GaugeValue, float64(hw.CpuMhz),
+				moid, name, target)
 
-			ch <- prometheus.MustNewConstMetric(
-				prometheus.NewDesc(
-					prometheus.BuildFQName(namespace, hostSubsystem, "mem_capacity"),
-					"Amount of RAM in MB", nil, hostLabels,
-				), prometheus.GaugeValue, float64(host.Summary.Hardware.MemorySize),
-			)
+			ch <- prometheus.MustNewConstMetric(descs.cpuCapacityMHz,
+				prometheus.GaugeValue, float64(hw.CpuMhz),
+				moid, name, target)
+
+			ch <- prometheus.MustNewConstMetric(descs.memCapacity,
+				prometheus.GaugeValue, float64(hw.MemorySize),
+				moid, name, target)
+
+			ch <- prometheus.MustNewConstMetric(descs.memCapacityBytes,
+				prometheus.GaugeValue, float64(hw.MemorySize),
+				moid, name, target)
 
 		}
 	}
@@ -148,21 +137,38 @@ func (c *hostCollector) Update(ch chan<- prometheus.Metric, namespace string, cl
 
 	if len(hostRefs) > 0 {
 
+		// 采样间隔向服务端协商。ESXi 上用户传入的 -vmware.interval 可能与
+		// 服务端 RefreshRate 不符，此时以服务端为准 —— 请求一个服务端没有的
+		// 间隔只会得到空结果。
+		//
+		// 用 ForTarget 变体而非裸的 resolvePerfInterval：ESXi 的
+		// ProviderSummary 可能声称 SummarySupported，但它不跑汇总服务，
+		// 落到 300s 历史间隔上就查不到数据。详见 targettype.go 的说明。
+		interval := resolvePerfIntervalForTarget(
+			loginData["ctx"].(context.Context),
+			loginData["perf"].(*performance.Manager),
+			hostRefs[0],
+			loginData["interval"].(int32),
+			loginData["interval"].(int32),
+			targetType(loginData),
+			c.logger,
+		)
+
 		wg.Add(2)
 		for i := 0; i < 2; i++ {
 			switch i {
 			case 0:
 				go func(i int) {
-					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), loginData["interval"].(int32), loginData["perf"].(*performance.Manager),
-						loginData["target"].(string), "HostSystem", namespace, hostSubsystem, "", cHostCounters,
+					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), interval, loginData["perf"].(*performance.Manager),
+						target, "HostSystem", namespace, hostSubsystem, "", cHostCounters,
 						loginData["counters"].(map[string]*types.PerfCounterInfo), hostRefs, hostNames)
 					wg.Done()
 				}(i)
 
 			case 1:
 				go func(i int) {
-					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), loginData["interval"].(int32), loginData["perf"].(*performance.Manager),
-						loginData["target"].(string), "HostSystem", namespace, hostSubsystem, "*", iHostCounters,
+					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), interval, loginData["perf"].(*performance.Manager),
+						target, "HostSystem", namespace, hostSubsystem, "*", iHostCounters,
 						loginData["counters"].(map[string]*types.PerfCounterInfo), hostRefs, hostNames)
 					wg.Done()
 				}(i)

@@ -28,9 +28,42 @@ var (
 	vCenter       = flag.String("vmware.vcenter", "", "vCenter server address in host:port format. This is not the vCenter Management Console")
 	vmwSchema     = flag.String("vmware.schema", "https", "Use HTTP or HTTPS")
 	vmwTLS        = flag.Bool("vmware.insecureTLS", false, "Trust insecure vCenter TLS (true) or verify (default)")
-	vmwInterval   = flag.Int("vmware.interval", 20, "How often data will be collected. Default is every 20s.")
+	vmwInterval   = flag.Int("vmware.interval", 20, "PerfManager sampling window in seconds. Default is 20s.")
 	vmGranularity = flag.Int("vmware.granularity", 20, "The frequency of the sampled data. Default is 20s")
+	vmwTimeout    = flag.Int("vmware.timeout", 60, "Overall timeout in seconds for a single scrape (login, property retrieval and performance sampling). Independent from -vmware.interval.")
 )
+
+// logoutTimeout 是 SOAP Logout 单独使用的超时。抓取用的 ctx 在 Logout 时
+// 很可能已经超时或被取消，复用它会导致登出请求直接失败、会话继续泄漏，
+// 因此这里必须用一个独立的、短的超时。
+const logoutTimeout = 10 * time.Second
+
+// ValidateFlags 在启动阶段校验 vmware.* 参数组合，避免把非法值带进运行期
+// 引发除零 panic 或永远拿不到采样数据。必须在 flag 解析之后、HTTP 服务
+// 启动之前调用。
+func ValidateFlags() error {
+	if *vmGranularity <= 0 {
+		return fmt.Errorf("-vmware.granularity must be greater than 0, got %d", *vmGranularity)
+	}
+
+	if *vmwInterval <= 0 {
+		return fmt.Errorf("-vmware.interval must be greater than 0, got %d", *vmwInterval)
+	}
+
+	if *vmwInterval < *vmGranularity {
+		return fmt.Errorf("-vmware.interval (%d) must be greater than or equal to -vmware.granularity (%d), otherwise no sample would ever be collected", *vmwInterval, *vmGranularity)
+	}
+
+	if *vmwTimeout <= 0 {
+		return fmt.Errorf("-vmware.timeout must be greater than 0, got %d", *vmwTimeout)
+	}
+
+	if *vmwSchema != "http" && *vmwSchema != "https" {
+		return fmt.Errorf(`-vmware.schema must be either "http" or "https", got %q`, *vmwSchema)
+	}
+
+	return nil
+}
 
 type VMware struct {
 	//logger log.Logger
@@ -89,11 +122,12 @@ func (vm *VMware) Login(target string, logger *slog.Logger) (map[string]interfac
 	loginData["credentials"] = creds
 
 	// 登录
-	if err := govmomiLoginWithCreds(loginData, creds); err != nil {
+	if err := govmomiLoginWithCreds(loginData, creds, logger); err != nil {
 		return loginData, err
 	}
 
-	logger.Info("logged in to vCenter using default credentials", "target", target)
+	logger.Info("logged in using default credentials",
+		"target", target, "target_type", loginData["targetType"])
 
 	return loginData, nil
 }
@@ -119,26 +153,55 @@ func (vm *VMware) LoginWithCredentials(creds Credentials, logger *slog.Logger) (
 	loginData["credentials"] = creds
 
 	// 使用提供的凭证登录
-	if err := govmomiLoginWithCreds(loginData, creds); err != nil {
+	if err := govmomiLoginWithCreds(loginData, creds, logger); err != nil {
 		return nil, err
 	}
 
-	logger.Info("logged in to vCenter using probe credentials", "target", creds.Target, "username", creds.Username)
+	// 不记录 username：probe 端点的凭证来自请求参数或 Basic Auth，
+	// 写进日志会让凭证随日志流出到集中式日志系统。
+	logger.Info("logged in using probe credentials",
+		"target", creds.Target, "target_type", loginData["targetType"])
 
 	return loginData, nil
 }
 
-// Logout 清理资源，通过 context cancel 自动清理连接
+// Logout 先向服务端发起 SOAP 登出释放会话，然后取消 context 释放本地资源。
+//
+// 顺序至关重要，不要调换：cancel() 之后抓取用的 ctx 已失效，任何后续 SOAP
+// 调用都会立刻失败，服务端会话就会一直挂到自然超时（vCenter 默认 30 分钟），
+// 在高频抓取下会迅速堆积到会话上限。
+//
+// 这里所有取值都用带 ok 的类型断言：登录中途失败时 loginData 里的键是不全的，
+// 裸断言会 panic。
 func (vm *VMware) Logout(loginData map[string]interface{}, logger *slog.Logger) error {
 	target := "unknown"
 	if t, ok := loginData["target"].(string); ok {
 		target = t
 	}
 
-	// 清理 context - 这会自动关闭连接和清理资源
+	// 第一步：发起 SOAP 登出。用独立的短超时 context，不复用抓取的 ctx
+	// （它此刻可能已经超时）。
+	session, hasSession := loginData["session"].(*cache.Session)
+	client, hasClient := loginData["client"].(*vim25.Client)
+
+	if hasSession && hasClient {
+		logoutCtx, logoutCancel := context.WithTimeout(context.Background(), logoutTimeout)
+		if err := session.Logout(logoutCtx, client); err != nil {
+			// 登出失败不阻断流程：本地资源仍然要释放，否则会同时泄漏
+			// 服务端会话和本地 goroutine。
+			logger.Error("SOAP logout failed, server-side session may linger until it times out", "target", target, "error", err)
+		} else {
+			logger.Debug("SOAP logout succeeded", "target", target)
+		}
+		logoutCancel()
+	} else {
+		logger.Debug("no cached session found in loginData, skipping SOAP logout", "target", target)
+	}
+
+	// 第二步：取消 context，释放本地连接与关联 goroutine。
 	if cancel, ok := loginData["cancel"].(context.CancelFunc); ok {
 		cancel()
-		logger.Debug("logged out and cleaned up resources for vCenter", "target", target)
+		logger.Debug("cleaned up local resources", "target", target)
 	}
 
 	return nil
@@ -177,7 +240,8 @@ func requestWithCreds(method, urlStr string, headers map[string]string, creds Cr
 
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   time.Duration(*vmwInterval-2) * time.Second,
+		// 与 SOAP 抓取一致，用独立的 -vmware.timeout，不从采样频率推导。
+		Timeout: time.Duration(*vmwTimeout) * time.Second,
 	}
 
 	req, err := http.NewRequest(method, urlStr, nil)
@@ -219,7 +283,7 @@ func requestWithCreds(method, urlStr string, headers map[string]string, creds Cr
 }
 
 // govmomiLoginWithCreds 使用指定凭证登录
-func govmomiLoginWithCreds(loginData map[string]interface{}, creds Credentials) error {
+func govmomiLoginWithCreds(loginData map[string]interface{}, creds Credentials, logger *slog.Logger) error {
 	// 准备 SOAP 登录 URL
 	urlx, err := soap.ParseURL(fmt.Sprintf("%s://%s%s", creds.Schema, creds.Target, vim25.Path))
 	if err != nil {
@@ -228,7 +292,9 @@ func govmomiLoginWithCreds(loginData map[string]interface{}, creds Credentials) 
 
 	urlx.User = url.UserPassword(creds.Username, creds.Password)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*vmwInterval-2)*time.Second)
+	// 抓取的整体超时用独立的 -vmware.timeout 控制，不再从采样频率推导。
+	// 旧实现是 (interval-2)s，默认只有 18s，大规模环境下属性检索还没跑完就被掐断。
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*vmwTimeout)*time.Second)
 
 	session := &cache.Session{
 		URL:         urlx,
@@ -260,8 +326,24 @@ func govmomiLoginWithCreds(loginData map[string]interface{}, creds Credentials) 
 	// 添加 context 和 govmomi client
 	loginData["ctx"] = ctx
 	loginData["client"] = client
+
+	// session 必须存进 loginData，Logout 要靠它发 SOAP 登出。
+	// Passthrough=true 时 cache.Session.Logout 才会真正调用 SessionManager.Logout。
+	loginData["session"] = session
+
 	loginData["interval"] = int32(*vmwInterval)
-	loginData["samples"] = int32(*vmwInterval / *vmGranularity)
+
+	// 目标类型探测。必须在登录成功之后 —— ServiceContent 是登录的产物。
+	// 结果写入 loginData，全部下游 collector 据此选择行为分支。
+	loginData["targetType"] = detectTargetType(client, logger)
+
+	// granularity 已在启动时由 ValidateFlags 保证 > 0，这里不会除零。
+	// 同时保证至少取 1 个采样点，避免 interval 略小于 granularity 时算出 0。
+	samples := *vmwInterval / *vmGranularity
+	if samples < 1 {
+		samples = 1
+	}
+	loginData["samples"] = int32(samples)
 
 	return nil
 }

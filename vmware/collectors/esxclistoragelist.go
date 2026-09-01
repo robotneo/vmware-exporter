@@ -92,9 +92,11 @@ func esxcliStorageDriverInfo(ch chan<- prometheus.Metric, logger *slog.Logger, c
 	host mo.HostSystem, namespace, subsystem *string) {
 
 	var (
-		data        StorageResponse
-		driverMutex = sync.Mutex{}
-		driverMap   = make(map[string][]string)
+		data StorageResponse
+		// 同 esxclihostnic：原先的 map+Mutex 是 check-then-act 非原子写法，
+		// 换成读写同锁的 versionSet。这里遍历是串行的（单次 SOAP 返回全部设备），
+		// 但用同一个抽象可以避免两处实现分叉。
+		revisions = newVersionSet()
 	)
 
 	mme, err := esxcli.GetHostMME(ctx, client, &host.Self)
@@ -109,73 +111,26 @@ func esxcliStorageDriverInfo(ch chan<- prometheus.Metric, logger *slog.Logger, c
 		Method:  "vim.EsxCLI.storage.core.device.list",
 		Version: "urn:vim25/5.0",
 	}
-	/*
-		res, err := esxcli.ExecuteSoap(ctx, client, &request)
-		if err != nil {
-			//errchan <- err
-			return
-		}
 
-		if res.Returnval != nil {
-			if res.Returnval.Fault != nil {
-				level.Error(logger).Log("msg", "error retrieving host nic info", "err", err)
-				return
-			}
-
-		}
-
-		err = xml.Unmarshal([]byte(res.Returnval.Response), &data)
-		if err != nil {
-			level.Error(logger).Log("msg", "error unmarshalling host nic info", "err", err)
-			return
-		}
-	*/
 	err = esxcli.GetSOAP(ctx, client, &request, &data)
 	if err != nil {
 		logger.Error("error fetching soap data", "error", err, "host", host.Name)
 		return
 	}
 
-	// level.Debug(logger).Log("msg", fmt.Sprintf("we have SOAP from %s", request.This))
-
 	for _, storage := range data.DataObject {
 
-		// level.Debug(logger).Log("msg", fmt.Sprintf("procesing entry for %s with storage vendor %s, model %s (revision: %s", host.Name, strings.TrimSpace(storage.Vendor), storage.Model, storage.Revision))
-
-		addEntry := false
-
-		if _, exists := driverMap[storage.Model]; exists {
-
-			if !inSlice(driverMap[storage.Model], &storage.Revision) {
-
-				driverMutex.Lock()
-				driverMap[storage.Model] = append(driverMap[storage.Model], storage.Revision)
-				driverMutex.Unlock()
-
-				addEntry = true
-
-			}
-
-		} else {
-
-			driverMutex.Lock()
-			driverMap[storage.Model] = []string{storage.Revision}
-			driverMutex.Unlock()
-
-			addEntry = true
-
+		// 同一 model 的同一 revision 只产出一次，避免重复时间序列。
+		if !revisions.Add(storage.Model, storage.Revision) {
+			continue
 		}
 
-		if addEntry {
-
-			ch <- prometheus.MustNewConstMetric(
-				prometheus.NewDesc(
-					prometheus.BuildFQName(*namespace, *subsystem, "driver"),
-					"NIC Info", nil, map[string]string{"mo": host.Self.Value, "host": host.Name, "vendor": strings.TrimSpace(storage.Vendor), "model": strings.TrimSpace(storage.Model), "revision": strings.TrimSpace(storage.Revision)},
-				), prometheus.GaugeValue, float64(1),
-			)
-
-		}
+		ch <- prometheus.MustNewConstMetric(
+			prometheus.NewDesc(
+				prometheus.BuildFQName(*namespace, *subsystem, "driver"),
+				"Storage device driver info", nil, map[string]string{"mo": host.Self.Value, "host": host.Name, "vendor": strings.TrimSpace(storage.Vendor), "model": strings.TrimSpace(storage.Model), "revision": strings.TrimSpace(storage.Revision)},
+			), prometheus.GaugeValue, float64(1),
+		)
 	}
 
 }

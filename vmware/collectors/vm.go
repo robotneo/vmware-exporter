@@ -56,6 +56,9 @@ func (c *vmCollector) Update(ch chan<- prometheus.Metric, namespace string, clie
 
 	begin := time.Now()
 
+	descs := descsFor(namespace).vm
+	target := loginData["target"].(string)
+
 	err := fetchProperties(
 		loginData["ctx"].(context.Context), loginData["view"].(*view.Manager), loginData["client"].(*vim25.Client),
 		[]string{"VirtualMachine"}, []string{"summary", "runtime", "storage", "snapshot", "snapshot.rootSnapshotList", "snapshot.currentSnapshot"}, &vms, c.logger,
@@ -75,56 +78,47 @@ func (c *vmCollector) Update(ch chan<- prometheus.Metric, namespace string, clie
 
 			vmNames[vm.Self.Value] = vm.Summary.Config.Name
 
-			ch <- prometheus.MustNewConstMetric(
-				prometheus.NewDesc(
-					prometheus.BuildFQName(namespace, vmSubsystem, "info"),
-					"This is basic vm info to be used for parent reference", nil,
-					map[string]string{"vmmo": vm.Self.Value, "vm": vm.Summary.Config.Name, "hostmo": vm.Runtime.Host.Value, "vcenter": loginData["target"].(string)},
-				), prometheus.GaugeValue, 1.0,
-			)
+			moid := vm.Self.Value
+			name := vm.Summary.Config.Name
+			hostMoid := vm.Runtime.Host.Value
 
-			//vmLabels := map[string]string{"vmmo": vm.Self.Value, "vm": vm.Summary.Config.Name, "vcenter": loginData["target"].(string)}
+			ch <- prometheus.MustNewConstMetric(descs.info,
+				prometheus.GaugeValue, 1.0,
+				moid, name, hostMoid, target)
 
-			ch <- prometheus.MustNewConstMetric(
-				prometheus.NewDesc(
-					prometheus.BuildFQName(namespace, vmSubsystem, "cpu_corecount"),
-					"Number of virtual CPUs", nil, map[string]string{"vmmo": vm.Self.Value, "vm": vm.Summary.Config.Name, "hostmo": vm.Runtime.Host.Value, "vcenter": loginData["target"].(string)},
-				), prometheus.GaugeValue, float64(vm.Summary.Config.NumCpu),
-			)
+			ch <- prometheus.MustNewConstMetric(descs.cpuCoreCount,
+				prometheus.GaugeValue, float64(vm.Summary.Config.NumCpu),
+				moid, name, hostMoid, target)
 
-			ch <- prometheus.MustNewConstMetric(
-				prometheus.NewDesc(
-					prometheus.BuildFQName(namespace, vmSubsystem, "mem_capacity"),
-					"Virtual memory configured in MB", nil, map[string]string{"vmmo": vm.Self.Value, "vm": vm.Summary.Config.Name, "hostmo": vm.Runtime.Host.Value, "vcenter": loginData["target"].(string)},
-				), prometheus.GaugeValue, float64(vm.Summary.Config.MemorySizeMB),
-			)
+			ch <- prometheus.MustNewConstMetric(descs.memCapacity,
+				prometheus.GaugeValue, float64(vm.Summary.Config.MemorySizeMB),
+				moid, name, hostMoid, target)
 
 			for _, datastore := range vm.Storage.PerDatastoreUsage {
 
-				ch <- prometheus.MustNewConstMetric(
-					prometheus.NewDesc(
-						prometheus.BuildFQName(namespace, vmSubsystem, "datastore_capacity_used"),
-						"Virtual memory configured in MB", nil,
-						map[string]string{"vmmo": vm.Self.Value, "vm": vm.Summary.Config.Name,
-							"vcenter": loginData["target"].(string), "dsmo": datastore.Datastore.Value},
-					), prometheus.GaugeValue, float64(datastore.Committed),
-				)
+				// 双写过渡：旧指标名保留（dashboard 有引用），help 已从
+				// 错抄的 "Virtual memory configured in MB" 改为正确描述。
+				ch <- prometheus.MustNewConstMetric(descs.dsCapacityUsed,
+					prometheus.GaugeValue, float64(datastore.Committed),
+					moid, name, target, datastore.Datastore.Value)
+
+				ch <- prometheus.MustNewConstMetric(descs.dsCapacityUsedBytes,
+					prometheus.GaugeValue, float64(datastore.Committed),
+					moid, name, target, datastore.Datastore.Value)
 			}
-			// Check if the VM has any snapshots, set value of metric to unix timestamp of snapshot creation time
+
+			// 有快照时把创建时间的 Unix 秒数作为 metric value 输出。
 			if vm.Snapshot != nil {
-				c.logger.Debug("vm has snapshots", "vm", vm.Summary.Config.Name, "vm_moref", vm.Self.Value)
+				c.logger.Debug("vm has snapshots", "vm", name, "vm_moref", moid)
 				for _, rootSnap := range vm.Snapshot.RootSnapshotList {
 
-					snapDate := rootSnap.CreateTime.Format(time.RFC3339)
-
-					ch <- prometheus.MustNewConstMetric(
-						prometheus.NewDesc(
-							prometheus.BuildFQName(namespace, vmSubsystem, "snapshot_info"),
-							"Unix timestamp since snapshot creation", nil,
-							map[string]string{"vmmo": vm.Self.Value, "vm": vm.Summary.Config.Name,
-								"vcenter": loginData["target"].(string), "name": rootSnap.Name, "created": snapDate},
-						), prometheus.GaugeValue, float64(rootSnap.CreateTime.Unix()),
-					)
+					// created label 已移除（P1-4）：它是同一个时间戳的
+					// RFC3339 形式，而 value 就是 Unix 秒数，label 里那份
+					// 纯属冗余。时间戳做 label 会让每个快照占一条独立序列，
+					// 快照删除后序列仍以僵尸形式留在 TSDB 里直到过期。
+					ch <- prometheus.MustNewConstMetric(descs.snapshotInfo,
+						prometheus.GaugeValue, float64(rootSnap.CreateTime.Unix()),
+						moid, name, target, rootSnap.Name)
 				}
 			}
 		}
@@ -137,21 +131,33 @@ func (c *vmCollector) Update(ch chan<- prometheus.Metric, namespace string, clie
 
 	if len(vmRefs) > 0 {
 
+		// 与 host 一致：采样间隔以服务端 RefreshRate 为准，
+		// 并对 ESXi 额外拦掉 300s 历史间隔。
+		interval := resolvePerfIntervalForTarget(
+			loginData["ctx"].(context.Context),
+			loginData["perf"].(*performance.Manager),
+			vmRefs[0],
+			loginData["interval"].(int32),
+			loginData["interval"].(int32),
+			targetType(loginData),
+			c.logger,
+		)
+
 		wg.Add(2)
 		for i := 0; i < 2; i++ {
 			switch i {
 			case 0:
 				go func() {
-					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), loginData["interval"].(int32), loginData["perf"].(*performance.Manager),
-						loginData["target"].(string), "VirtualMachine", namespace, vmSubsystem, "", cVMCounters,
+					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), interval, loginData["perf"].(*performance.Manager),
+						target, "VirtualMachine", namespace, vmSubsystem, "", cVMCounters,
 						loginData["counters"].(map[string]*types.PerfCounterInfo), vmRefs, vmNames)
 					wg.Done()
 				}()
 
 			case 1:
 				go func() {
-					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), loginData["interval"].(int32), loginData["perf"].(*performance.Manager),
-						loginData["target"].(string), "VirtualMachine", namespace, vmSubsystem, "*", iVMCounters,
+					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), interval, loginData["perf"].(*performance.Manager),
+						target, "VirtualMachine", namespace, vmSubsystem, "*", iVMCounters,
 						loginData["counters"].(map[string]*types.PerfCounterInfo), vmRefs, vmNames)
 					wg.Done()
 				}()

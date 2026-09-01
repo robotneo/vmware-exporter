@@ -12,3 +12,9 @@ env.bak/
 venv.bak/
 vendor/
 dist/
+
+# Agent workspace (not a build cache, but session-local)
+.workbuddy/
+
+# Backups written by scripts/patch_dashboards.py so a patch can be reverted
+*.json.bak

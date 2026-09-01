@@ -3,7 +3,7 @@
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/prezhdarov/vmware-exporter)](https://goreportcard.com/report/github.com/prezhdarov/vmware-exporter)
 
-This is a simple prometheus exporter that collects various metrics from a vCenter. 
+This is a simple prometheus exporter that collects various metrics from a vCenter or from a standalone ESXi host.
 
 [中文文档](./README-zh.md)
 
@@ -11,9 +11,86 @@ This is a simple prometheus exporter that collects various metrics from a vCente
 
 Run the exporter in a docker container (or start as a process) with all the settings necessary. Scrape it..
 
-Exporter scrapes single vCenter host when /metrics path is used. Multiple vCenter hosts can be scraped using /probe, however these vCenter hosts must share credentials.
+Exporter scrapes the target configured at startup when the `/metrics` path is used. Multiple targets can be scraped through `/probe?target=host:port`, each with its own credentials supplied either as request parameters (`username` / `password`) or via HTTP Basic Auth.
 
-### Settings 
+## Scrape modes
+
+| Mode | Endpoint | Credentials | When to use |
+| :--- | :--- | :--- | :--- |
+| **Single vCenter** | `/metrics` | Startup flags (global) | One vCenter, simplest deployment |
+| **Multiple vCenters** | `/probe?target=...` | Per-request params or Basic Auth | Several vCenters with different credentials |
+| **Standalone ESXi** | either | Same as above | Hosts without a vCenter, or direct-to-host collection |
+
+**Target type is detected automatically** by reading `ServiceContent.About.ApiType`
+(`VirtualCenter` / `HostAgent`) right after login. No extra flag, no separate
+endpoint, no dedicated `scrape_config` — point the exporter at an ESXi host and
+it just works.
+
+The detected type is exposed as a metric so dashboards and alerts can branch on it:
+
+```
+vmware_target_info{target="10.0.0.5:443", type="esxi", version="7.0.3", build="21930508"} 1
+```
+
+> `vmware_vcenter_info` is still emitted unchanged for backwards compatibility
+> with existing dashboards.
+
+### Direct ESXi example
+
+```bash
+./vmware-exporter \
+  -vmware.vcenter="10.0.0.5:443" \
+  -vmware.username="root" \
+  -vmware.password="your_password" \
+  -vmware.insecureTLS \
+  -http.address=":9169"
+```
+
+Scraping a mix of vCenters and standalone hosts from a single job:
+
+```yaml
+scrape_configs:
+  - job_name: vmware
+    metrics_path: /probe
+    static_configs:
+      - targets:
+          - 10.0.0.1:443   # vCenter
+          - 10.0.0.5:443   # standalone ESXi, nothing special needed
+    params:
+      insecure: ["true"]
+    basic_auth:
+      username: readonly@vsphere.local
+      password: your_password
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: exporter-host:9169
+```
+
+If vCenter and ESXi credentials differ, split them into two jobs with their own `basic_auth`.
+
+### What ESXi mode cannot give you
+
+These gaps come from the vSphere object model, not from the exporter:
+
+| Capability | vCenter | Direct ESXi | Notes |
+| :--- | :--- | :--- | :--- |
+| Datacenter / Cluster | Real objects | **Synthetic** | ESXi only has the implicit `ha-datacenter` / `ha-compute-res`; those metrics carry `synthetic="true"` |
+| Host / VM metrics | Full | Full | No difference |
+| Datastore capacity | Full | Full | No difference |
+| Datastore performance counters | Full | Limited | Counters such as `disk.provisioned.latest` rely on vCenter's historical rollup, which ESXi does not run |
+| Sampling interval | Real-time or 5-minute rollup | **Real-time only** | ESXi keeps no historical statistics, so the requested `-vmware.interval` is overridden by the server's `RefreshRate` |
+| esxcli collection | Proxied through vCenter | Direct | Uses the SOAP `vim.EsxCLI.*` interface — **not SSH** |
+
+**About the `synthetic` label**: `vmware_datacenter_info` and `vmware_compute_info`
+are still emitted on ESXi so that dashboard queries joining on `dcmo` / `cmo` keep
+working, while `synthetic="true"` makes it visible at the metric level that these
+are not real objects. Filter with `synthetic!="true"` to count real datacenters only.
+
+## Settings 
 
 The exporter can be configured via command line options, environment variables, a yaml config file or a combination of all three. The environment variables set will be overwritten by the contents of the config file, which then will be overwritten by any command line option set at startup. 
 The options available are:
@@ -26,6 +103,7 @@ The options available are:
 | -http.address | The address and port the exporter will bind to in host:port format (default: ":9169") |
 | -log.format | Can be either json or logfmt (default: logfmt) |
 | -log.level | One of debug,info,warn or error (default: debug) - Don't expect much..|
+| -web.config.file | Path to a web configuration file enabling TLS and/or HTTP basic auth on the exporter's own listener - see [Securing the exporter](#securing-the-exporter) |
 | -prom.maxRequests | Max concurrent scrape requests (default: 20) |
 | -disable.exporter.metrics | Disables exporter process metrics |
 | -disable.exporter.target | Disables exporter default target - /metrics will only return exporter data - use /probe |
@@ -35,15 +113,143 @@ The options available are:
 | -collector.datastore | Enables or disables Datastore metrics collection (default: enabled) |
 | -collector.host | Enables or disables Host metrics collection (default: enabled) |
 | -collector.vm | Enables or disables Virtual Machine metrics collection (default: enabled) |
-| -collector.esxcli.host.nic | Collects ESXi NIC firmware information using esxcli invoked through the vCenter (default: disabled) |
-| -collector.esxcli.storage | Collects ESXi storage firmware information using esxcli invoked through the vCenter (default: disabled) |
-| -vmware.granularity | The frequency of the sampled data. Default is 20s (default 20) |
-| -vmware.insecureTLS | Trust insecure vCenter TLS (true) or verify (default) |
-| -vmware.interval | How often data will be collected. Default is every 20s. (default 20) |
+| -collector.esxcli.host.nic | Collects ESXi NIC firmware information using esxcli over the SOAP API (proxied by vCenter, or direct when connected to an ESXi host) (default: disabled) |
+| -collector.esxcli.storage | Collects ESXi storage firmware information using esxcli over the SOAP API (proxied by vCenter, or direct when connected to an ESXi host) (default: disabled) |
+| -vmware.granularity | Time granularity of the sampled data in seconds. Must be > 0 and no greater than -vmware.interval (default 20) |
+| -vmware.insecureTLS | Trust insecure TLS certificates (true) or verify them (default). ESXi hosts ship self-signed certificates, so this is usually needed for direct collection |
+| -vmware.interval | PerfManager sampling window in seconds. This is a *request* - the effective interval is decided by the server's PerfProviderSummary.RefreshRate. No longer used for timeout calculation (default 20) |
+| -vmware.timeout | Overall timeout in seconds for a single scrape, covering login, property retrieval and performance sampling (default 60) |
 | -vmware.password | Password for the user above |
 | -vmware.schema | Use HTTP or HTTPS (default "https") |
-| -vmware.username | Username to login to vCenter server |
-| -vmware.vcenter | vCenter server address in host:port format. This is not the vCenter Management Console |
+| -vmware.username | Username to login with |
+| -vmware.vcenter | Target address in host:port format. Accepts a vCenter **or** a standalone ESXi host. This is not the vCenter Management Console. The flag name is kept for backwards compatibility |
+
+Invalid values (for example `-vmware.granularity=0`, or a granularity larger than
+the interval) make the process exit at startup with an explicit reason instead of
+running with a broken configuration.
+
+### Environment variables: mind the case
+
+With `-envflag.enable`, a variable name is the `-envflag.prefix` value followed by
+the flag name with dots replaced by underscores. **The flag name keeps its
+original case** - it is not upper-cased. So with `-envflag.prefix=VMWARE_`:
+
+| flag | variable |
+| ---- | -------- |
+| `-vmware.password` | `VMWARE_vmware_password` |
+| `-vmware.vcenter` | `VMWARE_vmware_vcenter` |
+| `-vmware.insecureTLS` | `VMWARE_vmware_insecureTLS` |
+| `-http.address` | `VMWARE_http_address` |
+
+`VMWARE_VMWARE_PASSWORD` is **silently ignored**. There is no warning and no
+error - the exporter simply uses the flag default, and the only symptom is a
+login failure with no explanation. `scripts/check_config.py` checks the names
+used in `docker-compose.yml` against the flags the binary actually registers, so
+a typo fails in CI rather than in production.
+
+## Securing the exporter
+
+Two separate things are worth protecting, and they are easy to confuse:
+
+1. **The connection to vCenter/ESXi.** Controlled by `-vmware.schema` and
+   `-vmware.insecureTLS`. Defaults to HTTPS.
+2. **The exporter's own listener** - the one Prometheus scrapes. Controlled by
+   `-web.config.file`, and **unprotected by default**.
+
+The second one matters more than it looks. The `/probe` endpoint accepts vCenter
+credentials as URL query parameters or via HTTP basic auth, so on a plain HTTP
+listener those credentials travel unencrypted, and the query-parameter form also
+lands in the access logs of any reverse proxy in between and in Prometheus's own
+logs. Prefer basic auth over `?password=`, and enable TLS.
+
+Point `-web.config.file` at a file in
+[exporter-toolkit format](https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md):
+
+```yaml
+tls_server_config:
+  cert_file: /etc/vmware-exporter/cert.pem
+  key_file: /etc/vmware-exporter/key.pem
+
+basic_auth_users:
+  # bcrypt hash, e.g. from `htpasswd -nBC 12 "" | tr -d ':\n'`
+  prometheus: $2y$12$hK1n...
+```
+
+```bash
+./vmware-exporter -web.config.file=/etc/vmware-exporter/web-config.yml ...
+```
+
+### Keeping credentials out of process listings
+
+A password passed as `-vmware.password=...` is visible to anyone who can read
+`/proc` on the host, to `ps` inside a container, and to `docker inspect`. Pass it
+through the environment instead:
+
+```bash
+docker run -d --name vmware-exporter -p 9169:9169 \
+  -e VMWARE_vmware_username -e VMWARE_vmware_password -e VMWARE_vmware_vcenter \
+  meisite/vmware-exporter:latest \
+  -envflag.enable -envflag.prefix=VMWARE_ -vmware.insecureTLS
+```
+
+For the systemd unit, keep the password in an `EnvironmentFile` owned by root
+with mode `600` rather than in `vmware.conf`.
+
+Use a **read-only** vCenter service account. The exporter only reads properties
+and performance counters; it never writes.
 
 
-The esxcli collectors are a very specific use case that probably is not going to be needed by anyone. Left the code in here as an example on how custom information can be collected using esxcli command tool remotely via vCenter SOAP API 
+## Self-monitoring
+
+Every scrape emits per-collector health metrics, so a collector that silently
+fails is visible without reading logs:
+
+```
+vmware_scrape_collector_duration_seconds{collector="host"} 1.284
+vmware_scrape_collector_success{collector="host"} 1
+```
+
+Alert on `min_over_time(vmware_scrape_collector_success[5m]) == 0` to catch a
+collector that is consistently failing while the rest of the scrape succeeds.
+
+Unknown collector names passed via `collect[]` are rejected with HTTP 400 rather
+than silently ignored.
+
+The esxcli collectors are a very specific use case that probably is not going to be needed by anyone. Left the code in here as an example on how custom information can be collected using esxcli command tool remotely via the SOAP API (`vim.EsxCLI.*`) — no SSH involved. 
+
+## Metric changes and migration
+
+The upcoming release renames two metrics, drops one label and deprecates three
+metric names. `CHANGELOG.md` has the full list; this is the short version.
+
+### You must act on these
+
+| Change | Action |
+| --- | --- |
+| `vmware_cluster_datastores` → `vmware_cluster_datastore` | Update your own rules/panels. Also emits one series per datastore now, instead of a comma-joined list in `dsmo` |
+| `vmware_compute_datastores` → `vmware_compute_datastore` | Same as above |
+| `vmware_vm_snapshot_info` lost its `created` label | Read the creation time from the metric value — it is the same instant as a Unix timestamp |
+
+None of the three is referenced by the dashboards in this repository, so the
+bundled dashboards need no changes. A renamed metric fails silently, though, so
+check your own alerting rules before upgrading.
+
+### You can migrate at your own pace
+
+Three metrics are deprecated in favour of unit-suffixed names. **Both names are
+emitted with identical values** for one release cycle:
+
+| Deprecated | Replacement |
+| --- | --- |
+| `vmware_host_cpu_capacity` | `vmware_host_cpu_capacity_mhz` |
+| `vmware_host_mem_capacity` | `vmware_host_mem_capacity_bytes` |
+| `vmware_vm_datastore_capacity_used` | `vmware_vm_datastore_capacity_used_bytes` |
+
+No value changed. In all three cases the number was already correct and only the
+help text was wrong — `vmware_host_mem_capacity` in particular has always
+reported bytes despite its help claiming MB. If you were compensating for the
+documented unit anywhere, drop the correction.
+
+`vmware_vm_mem_capacity` is **not** deprecated and has no `_bytes` variant: its
+value really is megabytes, so its help was correct. Converting it would change
+the number, which is a different kind of breaking change.

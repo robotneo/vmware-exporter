@@ -96,11 +96,9 @@ func esxcliHostNicInfo(ch chan<- prometheus.Metric, logger *slog.Logger, ctx con
 	host mo.HostSystem, namespace, subsystem *string) {
 
 	var (
-		data          NicListResponse
-		driverMutex   = sync.Mutex{}
-		firmwareMutex = sync.Mutex{}
-		driverMap     = make(map[string][]string)
-		firmwareMap   = make(map[string][]string)
+		data     NicListResponse
+		drivers  = newVersionSet()
+		firmware = newVersionSet()
 	)
 
 	mme, err := esxcli.GetHostMME(ctx, client, &host.Self)
@@ -124,28 +122,28 @@ func esxcliHostNicInfo(ch chan<- prometheus.Metric, logger *slog.Logger, ctx con
 
 	request.Method = "vim.EsxCLI.network.nic.get"
 
-	//	wg := sync.WaitGroup{}
+	// 每张网卡一次 SOAP 往返，串行会让网卡多的主机显著拖慢整轮抓取。
+	// 并发是安全的：versionSet 内部读写在同一把锁内完成，
+	// 且 prometheus.Metric channel 本身支持多 goroutine 写入。
+	wg := sync.WaitGroup{}
 
 	for _, nic := range data.DataObject {
+		wg.Add(1)
 
-		//	wg.Add(1)
+		go func(nic NicListInfo) {
+			defer wg.Done()
 
-		//	go func(nic NicListInfo) {
-
-		// defer wg.Done()
-		esxcliGetNicInfo(ch, logger, ctx, client, request,
-			&host.Self.Value, &host.Name, namespace, subsystem, &nic,
-			&driverMutex, &firmwareMutex, driverMap, firmwareMap)
-
-		//	}(nic)
+			esxcliGetNicInfo(ch, logger, ctx, client, request,
+				&host.Self.Value, &host.Name, namespace, subsystem, &nic,
+				drivers, firmware)
+		}(nic)
 	}
 
-	// wg.Wait()
-
+	wg.Wait()
 }
 
 func esxcliGetNicInfo(ch chan<- prometheus.Metric, logger *slog.Logger, ctx context.Context, client *vim25.Client, request esxcli.ExecuteSoapRequest,
-	hostRef, hostName, namespace, subsystem *string, nic *NicListInfo, driverMutex, firmwareMutex *sync.Mutex, driverMap, firmwareMap map[string][]string) {
+	hostRef, hostName, namespace, subsystem *string, nic *NicListInfo, drivers, firmware *versionSet) {
 
 	var data NicResponse
 
@@ -157,49 +155,12 @@ func esxcliGetNicInfo(ch chan<- prometheus.Metric, logger *slog.Logger, ctx cont
 		return
 	}
 
-	addEntry := false
+	// 两个 Add 都要执行，不能短路：driver 版本与 firmware 版本各自独立去重，
+	// 任一为首次出现就应当产出指标。用 | 而非 || 正是为此。
+	newDriver := drivers.Add(data.DriverInfo.Driver, data.DriverInfo.Version)
+	newFirmware := firmware.Add(data.DriverInfo.Driver, data.DriverInfo.Firmware)
 
-	if _, exists := driverMap[data.DriverInfo.Driver]; exists {
-
-		if !inSlice(driverMap[data.DriverInfo.Driver], &data.DriverInfo.Version) {
-
-			driverMutex.Lock()
-			driverMap[data.DriverInfo.Driver] = append(driverMap[data.DriverInfo.Driver], data.DriverInfo.Version)
-			driverMutex.Unlock()
-
-			addEntry = true
-		}
-	} else {
-
-		driverMutex.Lock()
-		driverMap[data.DriverInfo.Driver] = []string{data.DriverInfo.Version}
-		driverMutex.Unlock()
-
-		addEntry = true
-
-	}
-
-	if _, exists := firmwareMap[data.DriverInfo.Driver]; exists {
-
-		if !inSlice(firmwareMap[data.DriverInfo.Driver], &data.DriverInfo.Firmware) {
-
-			firmwareMutex.Lock()
-			firmwareMap[data.DriverInfo.Driver] = append(firmwareMap[data.DriverInfo.Driver], data.DriverInfo.Firmware)
-			firmwareMutex.Unlock()
-
-			addEntry = true
-		}
-	} else {
-
-		firmwareMutex.Lock()
-		firmwareMap[data.DriverInfo.Driver] = []string{data.DriverInfo.Firmware}
-		firmwareMutex.Unlock()
-
-		addEntry = true
-
-	}
-
-	if addEntry {
+	if newDriver || newFirmware {
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
 				prometheus.BuildFQName(*namespace, *subsystem, "driver"),

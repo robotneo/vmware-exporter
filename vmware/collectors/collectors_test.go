@@ -195,11 +195,23 @@ func TestScrapePerformanceWithNilPerfManagerDoesNotPanicOrEmit(t *testing.T) {
 	}
 }
 
-func setupCollectorLoginData(t *testing.T) (map[string]interface{}, func()) {
+// setupCollectorLoginData 接 testing.TB 而不是 *testing.T，这样 benchmark
+// 也能复用同一套 simulator 脚手架，不必再造一份。
+func setupCollectorLoginData(t testing.TB) (map[string]interface{}, func()) {
+	t.Helper()
+	return setupCollectorLoginDataWithModel(t, simulator.VPX())
+}
+
+// setupCollectorLoginDataWithModel 允许调用方定制 simulator 模型。
+//
+// 默认的 VPX 模型规模很小（1 个 datastore、1 个独立主机、1 个 3 节点集群），
+// 对多数测试够用，但有些断言必须要多个同类实体才有意义 —— 例如验证
+// "每个 datastore 一条序列" 时，只有一个 datastore 的话拼接与拆分的结果
+// 完全一样，测试就成了摆设。
+func setupCollectorLoginDataWithModel(t testing.TB, model *simulator.Model) (map[string]interface{}, func()) {
 	t.Helper()
 
 	ctx := context.Background()
-	model := simulator.VPX()
 	if err := model.Create(); err != nil {
 		t.Fatalf("failed to create simulator model: %v", err)
 	}
@@ -244,7 +256,7 @@ func setupCollectorLoginData(t *testing.T) (map[string]interface{}, func()) {
 	return loginData, cleanup
 }
 
-func getHostRefsAndNames(t *testing.T, loginData map[string]interface{}, logger *slog.Logger) ([]types.ManagedObjectReference, map[string]string) {
+func getHostRefsAndNames(t testing.TB, loginData map[string]interface{}, logger *slog.Logger) ([]types.ManagedObjectReference, map[string]string) {
 	t.Helper()
 
 	var hosts []mo.HostSystem
