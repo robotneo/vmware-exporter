@@ -153,7 +153,21 @@ class of breaking change.
   without a word. The credential scan walks every text file git tracks rather
   than a curated list, with `CHANGELOG.md` and the script itself excepted by
   name; a whitelist that misses a file fails silently, which is how
-  `README-zh.md` kept its passwords through the first pass of this work.
+  `README-zh.md` kept its passwords through the first pass of this work. The
+  flag list comes from building the exporter and reading `--help`, because the
+  collector flags are constructed at registration time
+  (`fmt.Sprintf("collector.%s", ...)`) and a literal grep of the source reports
+  a valid `VMWARE_collector_vm` as unmatched. It also fails when a registered
+  flag has no row in either README's reference table.
+- Documentation for `-disable.exporter.metrics` and `-disable.exporter.target`
+  in README-zh.md, where both were missing entirely. The first **defaults to
+  `true`**, so the exporter's own `go_*` and `process_*` metrics are absent
+  unless you pass `=false` — measured: 0 series by default, 35 and 5 with the
+  flag off. Setting `-disable.exporter.target=true` serves client_golang's
+  default registry on `/metrics`, which carries those collectors regardless of
+  the other flag, while `vmware_*` disappears entirely (measured: 0 series) and
+  must be scraped via `/probe`. Both defaults are now stated in the English
+  table too, where they were the only entries without one.
 - A *Securing the exporter* section in both READMEs, covering the distinction
   between the vCenter-facing connection and the exporter's own listener, and
   documenting the envflag case rule.

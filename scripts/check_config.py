@@ -5,7 +5,8 @@ Run this in CI:
 
     python3 scripts/check_config.py
 
-Three classes of problem are caught, in increasing order of subtlety:
+Three classes of problem are caught, in increasing order of subtlety, plus a
+documentation check:
 
 1. **Credential regressions.** Real passwords and internal addresses used to
    live in docker-compose.yml, vmware.conf and README-zh.md. They are in the
@@ -27,6 +28,16 @@ Three classes of problem are caught, in increasing order of subtlety:
    fails to authenticate for a reason nothing in the logs explains. A name that
    derives no known flag is therefore a real bug, not a style issue.
 
+   The list of valid flags comes from building the exporter and reading
+   `--help`, not from grepping the source: the collector flags are constructed
+   with `fmt.Sprintf("collector.%s", ...)` and a literal grep cannot see them.
+
+4. **Flags missing from the READMEs.** A registered flag with no documentation
+   entry is invisible to users. Found `-disable.exporter.metrics` and
+   `-disable.exporter.target` undocumented in README-zh.md this way -- the
+   first of which defaults to *true*, so the exporter's own `go_*` metrics are
+   absent by default and nothing said so.
+
 Exit code is 0 when clean, 1 when any check fails, 2 on a missing dependency.
 """
 
@@ -34,8 +45,10 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 try:
     import yaml
@@ -107,8 +120,46 @@ def scanned_files() -> list[str]:
     return sorted(found)
 
 
-def registered_flags() -> set[str]:
-    """Every flag name the exporter registers, read from the source."""
+def flags_from_binary() -> set[str] | None:
+    """Ask the exporter itself which flags exist. None if Go is unavailable.
+
+    This is the authoritative answer, and the grep below is not, because the
+    collector flags are built at registration time:
+
+        flag.Bool(fmt.Sprintf("collector.%s", clusterSubsystem), ...)
+
+    A literal-string grep cannot see `collector.cluster`, `collector.vm` and the
+    rest, so it reports a *false positive* on a perfectly valid
+    `VMWARE_collector_vm` -- turning a correct config into a red build. `--help`
+    also covers flags registered by the exporter-toolkit and envflag packages,
+    which live outside this repository entirely.
+    """
+    try:
+        binary = os.path.join(tempfile.mkdtemp(prefix="flagprobe-"), "exporter")
+        build = subprocess.run(
+            ["go", "build", "-o", binary, "."],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "CGO_ENABLED": "0"},
+        )
+        if build.returncode != 0:
+            return None
+        # --help exits non-zero by convention; the output is what matters.
+        out = subprocess.run(
+            [binary, "--help"], capture_output=True, text=True, check=False
+        )
+        names = set(re.findall(r"^\s+-([a-zA-Z][\w.]*)", out.stdout + out.stderr, re.M))
+        return names or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+    finally:
+        shutil.rmtree(os.path.dirname(binary), ignore_errors=True)
+
+
+def flags_from_source() -> set[str]:
+    """Fallback: literal flag names in the source. Misses constructed ones."""
     out = subprocess.run(
         ["git", "grep", "-hoE", r'flag\.[A-Za-z]+\(\s*"[^"]+"', "--", "*.go"],
         cwd=REPO,
@@ -117,6 +168,14 @@ def registered_flags() -> set[str]:
         check=False,
     )
     return set(re.findall(r'"([^"]+)"', out.stdout))
+
+
+def registered_flags() -> tuple[set[str], str]:
+    """Every flag the exporter registers, plus how it was determined."""
+    from_binary = flags_from_binary()
+    if from_binary:
+        return from_binary, "binary"
+    return flags_from_source(), "source"
 
 
 def check_leaks(failures: list[str], files: list[str]) -> None:
@@ -142,6 +201,38 @@ def check_leaks(failures: list[str], files: list[str]) -> None:
                 failures.append(
                     f"{rel}: previously leaked value {secret!r} is present again"
                 )
+
+
+def check_readme_flags(failures: list[str], flags: set[str], source: str) -> None:
+    """Every registered flag must have a row in a README reference table.
+
+    Documentation drifts silently: a flag added without an entry is invisible to
+    users. Only meaningful with the authoritative flag list, so it is skipped in
+    the grep fallback rather than producing noise.
+
+    Deliberately restricted to table rows. Matching prose mentions as well made
+    the check useless: `-disable.exporter.metrics` was missing from
+    README-zh.md's table while being discussed in the paragraph below it, and an
+    earlier version of this function passed on that basis. A flag explained in
+    passing but absent from the reference table is still undocumented as far as
+    somebody scanning for options is concerned.
+    """
+    if source != "binary":
+        return
+
+    for doc in ("README.md", "README-zh.md"):
+        path = os.path.join(REPO, doc)
+        if not os.path.exists(path):
+            continue
+        text = open(path, encoding="utf-8").read()
+        # A table row starts with `|`, then the flag, optionally in backticks:
+        #   | -disable.exporter.metrics | ... |     (README.md)
+        #   | `-vmware.vcenter` | string | ... |    (README-zh.md)
+        documented = set(re.findall(r"^\|\s*`?-([a-zA-Z][\w.]*)", text, re.M))
+        for flag in sorted(flags - documented):
+            failures.append(
+                f"{doc}: flag -{flag} is registered but not documented"
+            )
 
 
 def check_compose(failures: list[str], flags: set[str]) -> None:
@@ -251,16 +342,31 @@ def check_conf(failures: list[str], flags: set[str]) -> None:
 
 
 def main() -> int:
-    flags = registered_flags()
+    flags, source = registered_flags()
     if not flags:
         print("error: found no flag registrations; is this the repo root?", file=sys.stderr)
         return 2
+
+    if source == "source":
+        # Say so rather than degrading quietly. In this mode the collector flags
+        # are invisible, so a valid VMWARE_collector_* variable would be
+        # reported as unmatched -- the reader needs to know that before acting
+        # on such a failure.
+        print(
+            "warning: could not build the exporter, so flag names were grepped "
+            "from the source.\n"
+            "  Constructed names like collector.vm are invisible that way and "
+            "may be reported as unmatched.\n"
+            "  Install Go to get the authoritative list from `--help`.",
+            file=sys.stderr,
+        )
 
     failures: list[str] = []
     files = scanned_files()
     check_leaks(failures, files)
     check_compose(failures, flags)
     check_conf(failures, flags)
+    check_readme_flags(failures, flags, source)
 
     if failures:
         print("config check FAILED:\n")
@@ -268,7 +374,10 @@ def main() -> int:
             print(f"  - {f}")
         return 1
 
-    print(f"config check OK ({len(flags)} flags known, {len(files)} files scanned)")
+    print(
+        f"config check OK ({len(flags)} flags known via {source}, "
+        f"{len(files)} files scanned)"
+    )
     return 0
 
 
