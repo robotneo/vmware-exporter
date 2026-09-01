@@ -150,7 +150,10 @@ class of breaking change.
   `VMWARE_`-prefixed variable name in `docker-compose.yml` — including the ones
   in the `.env` example in the comments — against the flags the binary actually
   registers. A name that maps to nothing is a genuine bug: envflag ignores it
-  without a word.
+  without a word. The credential scan walks every text file git tracks rather
+  than a curated list, with `CHANGELOG.md` and the script itself excepted by
+  name; a whitelist that misses a file fails silently, which is how
+  `README-zh.md` kept its passwords through the first pass of this work.
 - A *Securing the exporter* section in both READMEs, covering the distinction
   between the vCenter-facing connection and the exporter's own listener, and
   documenting the envflag case rule.
