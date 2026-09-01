@@ -12,3 +12,22 @@ services:
       - "-vmware.granularity=15"
       - "-vmware.interval=15"
     restart: always
+
+# Direct collection from a standalone ESXi host (no vCenter).
+# The exporter detects the target type automatically via
+# ServiceContent.About.ApiType, so nothing else needs to change.
+#
+#  vmware-exporter-esxi:
+#    image: meisite/vmware-exporter:latest
+#    container_name: vmware-exporter-esxi
+#    hostname: vmware-exporter-esxi
+#    ports:
+#      - 9170:9169
+#    command:
+#      - "-vmware.username=root"
+#      - "-vmware.password=<ESXI_PASSWORD>"
+#      - "-vmware.vcenter=10.0.0.5:443"   # flag name kept for compatibility
+#      - "-vmware.insecureTLS"            # ESXi ships a self-signed certificate
+#      - "-vmware.interval=20"
+#      - "-vmware.granularity=20"
+#    restart: always

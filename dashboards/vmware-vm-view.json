@@ -1682,6 +1682,33 @@
         "type": "query"
       },
       {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "label_values(vmware_target_info{job=\"$job\"}, type)",
+        "description": "Filter by scrape target type: vcenter or esxi.",
+        "includeAll": true,
+        "label": "Target Type",
+        "multi": true,
+        "name": "target_type",
+        "options": [],
+        "query": {
+          "query": "label_values(vmware_target_info{job=\"$job\"}, type)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
         "current": {
           "isNone": true,
           "selected": false,
@@ -1692,7 +1719,7 @@
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "definition": "label_values(vmware_vcenter_info{job=\"$job\"},vcenter)",
+        "definition": "label_values(vmware_target_info{job=\"$job\", type=~\"$target_type\"}, target)",
         "hide": 0,
         "includeAll": false,
         "label": "vCenter",
@@ -1700,7 +1727,7 @@
         "name": "vcenter",
         "options": [],
         "query": {
-          "query": "label_values(vmware_vcenter_info{job=\"$job\"},vcenter)",
+          "query": "label_values(vmware_target_info{job=\"$job\", type=~\"$target_type\"}, target)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 2,

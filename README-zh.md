@@ -146,18 +146,96 @@ vmware_targets.yml 示例：
     __meta_datacenter: 'dc02' # 可删除
 ```
 
+## 三种采集模式
+
+| 模式 | 端点 | 凭证来源 | 适用场景 |
+| :--- | :--- | :--- | :--- |
+| **单 vCenter** | `/metrics` | 启动参数（全局） | 只有一套 vCenter，最简部署 |
+| **多 vCenter** | `/probe?target=...` | 请求参数或 Basic Auth（每 target 独立） | 多套 vCenter，凭证各不相同 |
+| **单台 ESXi 直连** | 两者皆可 | 同上 | 无 vCenter 的独立主机，或需绕过 vCenter 直采 |
+
+**目标类型自动识别**：登录后读取 `ServiceContent.About.ApiType`
+（`VirtualCenter` / `HostAgent`）判定，无需任何额外配置，也**不需要单独的端点**。
+Prometheus 侧不必为 ESXi 单写一份 `scrape_config`。
+
+识别结果通过指标暴露，可用于 dashboard 条件渲染与告警分流：
+
+```
+vmware_target_info{target="10.0.0.5:443", type="esxi", version="7.0.3", build="21930508"} 1
+```
+
+### ESXi 直连的启动示例
+
+```bash
+./vmware-exporter \
+  -vmware.vcenter="10.0.0.5:443" \
+  -vmware.username="root" \
+  -vmware.password="your_password" \
+  -vmware.insecureTLS \
+  -http.address=":9169"
+```
+
+Prometheus 侧混合采集 vCenter 与 ESXi 的配置：
+
+```yaml
+scrape_configs:
+  - job_name: vmware
+    metrics_path: /probe
+    static_configs:
+      - targets:
+          - 10.0.0.1:443   # vCenter
+          - 10.0.0.5:443   # 独立 ESXi，无需特殊处理
+    params:
+      insecure: ["true"]
+    basic_auth:
+      username: readonly@vsphere.local
+      password: your_password
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: exporter-host:9169
+```
+
+> 若 vCenter 与 ESXi 的凭证不同，拆成两个 job 分别配置 `basic_auth`。
+
+### ESXi 模式的能力边界
+
+这些差异源自 vSphere 的对象模型，不是 exporter 的限制：
+
+| 能力 | vCenter | ESXi 直连 | 说明 |
+| :--- | :--- | :--- | :--- |
+| Datacenter / Cluster | 真实数据 | **伪对象** | ESXi 只有隐式的 `ha-datacenter` / `ha-compute-res`，相关指标带 `synthetic="true"` |
+| Host / VM 指标 | 完整 | 完整 | 无差异 |
+| Datastore 容量 | 完整 | 完整 | 无差异 |
+| Datastore 性能计数器 | 完整 | 受限 | `disk.provisioned.latest` 等计数器依赖 vCenter 的历史汇总，ESXi 不做汇总 |
+| 采样间隔 | 可选实时或 5 分钟汇总 | **仅实时** | ESXi 不聚合历史统计，`-vmware.interval` 的期望值会被服务端 `RefreshRate` 覆盖 |
+| esxcli 采集 | 经 vCenter 转发 | 直连 | 走 SOAP 的 `vim.EsxCLI.*` 接口，**不是 SSH** |
+
+**关于 `synthetic` label**：ESXi 上仍然输出 `vmware_datacenter_info` 与
+`vmware_compute_info`，是为了让依赖 `dcmo` / `cmo` 关联的 dashboard 查询不断链；
+同时打上 `synthetic="true"`，让「这不是真实数据中心」在指标层面可见。
+只想统计真实数据中心时按 `synthetic!="true"` 过滤即可。
+
+---
+
 ## 参数设置
 
 可以通过命令行选项、环境变量、yaml 配置文件或三者的组合来配置输出程序，设置的环境变量将被配置文件的内容覆盖，然后被启动时设置的任何命令行选项覆盖，可用的选项如下：
 
-### 1. vCenter 连接配置
+### 1. 目标连接配置
 | 参数 | 类型 | 说明 | 默认值 |
 | :--- | :--- | :--- | :--- |
-| `-vmware.vcenter` | string | vCenter 服务器地址 (格式 `host:port`)。注意：这不是管理控制台地址。 | - |
-| `-vmware.username` | string | 登录 vCenter 的用户名。 | - |
-| `-vmware.password` | string | 登录 vCenter 的密码。 | - |
-| `-vmware.insecureTLS` | bool | 是否信任不安全的 TLS 证书（连接自签名证书的 vCenter 时需开启）。 | `false` |
+| `-vmware.vcenter` | string | 采集目标地址 (格式 `host:port`)。可以是 vCenter，也可以是单台 ESXi 主机。注意：这不是管理控制台地址。 | - |
+| `-vmware.username` | string | 登录用户名。 | - |
+| `-vmware.password` | string | 登录密码。 | - |
+| `-vmware.insecureTLS` | bool | 是否信任不安全的 TLS 证书（连接自签名证书时需开启，ESXi 默认自签名）。 | `false` |
 | `-vmware.schema` | string | 使用 HTTP 或 HTTPS 协议。 | `https` |
+
+> 参数名保留 `vcenter` 是为了向后兼容既有部署，它同时接受 ESXi 地址。
+> 目标类型由 exporter 自动识别，无需额外配置，详见「三种采集模式」。
 
 ### 2. 采集器开关 (Collectors)
 通过以下参数可以精确控制需要采集的数据类型，以优化性能。
@@ -176,9 +254,17 @@ vmware_targets.yml 示例：
 ### 3. 性能与采样设置
 | 参数 | 类型 | 说明 | 默认值 |
 | :--- | :--- | :--- | :--- |
-| `-vmware.interval` | int | 采集频率（单位：秒）。 | `20` |
-| `-vmware.granularity` | int | 采样数据的时间粒度。 | `20` |
+| `-vmware.timeout` | int | 单次抓取的整体超时（秒），覆盖登录、属性检索与性能采样全过程。 | `60` |
+| `-vmware.interval` | int | PerfManager 采样窗口（秒）。**不再参与超时计算。** | `20` |
+| `-vmware.granularity` | int | 采样数据的时间粒度（秒）。必须大于 0，且不大于 `-vmware.interval`。 | `20` |
 | `-prom.maxRequests` | int | 最大并行采集请求数（设为 0 则不限制）。 | `20` |
+
+> **关于 `-vmware.interval`**：它表达的是期望值。真实采样间隔由服务端的
+> `PerfProviderSummary.RefreshRate` 决定 —— 传一个服务端不支持的间隔只会
+> 得到空数据，所以两者不一致时以服务端为准，并在日志中记录 warn。
+>
+> 参数非法（例如 `granularity=0`）时进程会在启动阶段直接退出并给出原因，
+> 不会带着错误配置运行。
 
 ### 4. 服务与日志配置
 | 参数 | 类型 | 说明 | 默认值 |

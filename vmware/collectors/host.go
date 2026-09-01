@@ -148,12 +148,24 @@ func (c *hostCollector) Update(ch chan<- prometheus.Metric, namespace string, cl
 
 	if len(hostRefs) > 0 {
 
+		// 采样间隔向服务端协商。ESXi 上用户传入的 -vmware.interval 可能与
+		// 服务端 RefreshRate 不符，此时以服务端为准 —— 请求一个服务端没有的
+		// 间隔只会得到空结果。
+		interval := resolvePerfInterval(
+			loginData["ctx"].(context.Context),
+			loginData["perf"].(*performance.Manager),
+			hostRefs[0],
+			loginData["interval"].(int32),
+			loginData["interval"].(int32),
+			c.logger,
+		)
+
 		wg.Add(2)
 		for i := 0; i < 2; i++ {
 			switch i {
 			case 0:
 				go func(i int) {
-					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), loginData["interval"].(int32), loginData["perf"].(*performance.Manager),
+					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), interval, loginData["perf"].(*performance.Manager),
 						loginData["target"].(string), "HostSystem", namespace, hostSubsystem, "", cHostCounters,
 						loginData["counters"].(map[string]*types.PerfCounterInfo), hostRefs, hostNames)
 					wg.Done()
@@ -161,7 +173,7 @@ func (c *hostCollector) Update(ch chan<- prometheus.Metric, namespace string, cl
 
 			case 1:
 				go func(i int) {
-					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), loginData["interval"].(int32), loginData["perf"].(*performance.Manager),
+					scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), interval, loginData["perf"].(*performance.Manager),
 						loginData["target"].(string), "HostSystem", namespace, hostSubsystem, "*", iHostCounters,
 						loginData["counters"].(map[string]*types.PerfCounterInfo), hostRefs, hostNames)
 					wg.Done()

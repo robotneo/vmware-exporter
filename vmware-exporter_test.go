@@ -410,3 +410,301 @@ func TestCollectorDefinitionsMatchRegisteredFlags(t *testing.T) {
 		}
 	}
 }
+
+// TestScrapeAgainstESXiSimulator 是 Stage 3 的核心验收：直连一台 ESXi 时
+// 全部 7 个 collector 都要能跑完且不 panic。
+//
+// simulator.ESX() 的对象模型与真实 ESXi 一致 —— Datacenter / Cluster /
+// ClusterHost 全为零值（simulator/model.go:141），只有隐式的 ha-* 伪对象，
+// ApiType 是 "HostAgent"（simulator/esx/service_content.go:27）。
+// 因此这个测试不需要真实的 ESXi 主机。
+//
+// 之所以要跑全部 collector 而不是挑几个：ESXi 缺层的影响面很难靠推理穷举，
+// 缺 Datacenter 时哪个 collector 会在解引用 Parent 时 panic，只有真跑一遍才知道。
+func TestScrapeAgainstESXiSimulator(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	model := simulator.ESX()
+	if err := model.Create(); err != nil {
+		t.Fatalf("failed to create ESX simulator model: %v", err)
+	}
+	defer model.Remove()
+
+	server := model.Service.NewServer()
+	defer server.Close()
+
+	url := fmt.Sprintf("/probe?target=%s&username=user&password=pass&schema=%s&insecure=true&collect[]=all",
+		server.URL.Host, server.URL.Scheme)
+
+	req := httptest.NewRequest(http.MethodGet, url, nil)
+	rec := httptest.NewRecorder()
+
+	probeHandler(rec, req, logger)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+
+	// 每个 collector 都要有成功标记。success=0 说明 Update() 返回了错误，
+	// 在 ESXi 上通常意味着某个 vCenter 专属假设没有被正确分支掉。
+	for _, name := range vmwareCollectors.Names() {
+		want := fmt.Sprintf(`vmware_scrape_collector_success{collector="%s"} 1`, name)
+		if !strings.Contains(body, want) {
+			t.Errorf("collector %q did not succeed against ESXi\nlooking for: %s", name, want)
+		}
+	}
+
+	// 类型标识指标是全部 dashboard 条件渲染的依据。
+	if !strings.Contains(body, `type="esxi"`) {
+		t.Errorf(`vmware_target_info is missing type="esxi"`)
+	}
+
+	if !strings.Contains(body, "vmware_target_info{") {
+		t.Errorf("vmware_target_info was not emitted at all")
+	}
+}
+
+// TestESXiEmitsSyntheticDatacenterAndCompute 验证伪对象被正确标注。
+//
+// 路线丙的核心取舍就在这里：ESXi 上仍然输出 datacenter / compute 指标（否则
+// dashboard 里依赖 dcmo / cmo 的关联查询会断链），但打上 synthetic="true"，
+// 让「这不是真实数据中心」这件事在指标层面可见。
+func TestESXiEmitsSyntheticDatacenterAndCompute(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	model := simulator.ESX()
+	if err := model.Create(); err != nil {
+		t.Fatalf("failed to create ESX simulator model: %v", err)
+	}
+	defer model.Remove()
+
+	server := model.Service.NewServer()
+	defer server.Close()
+
+	url := fmt.Sprintf("/probe?target=%s&username=user&password=pass&schema=%s&insecure=true&collect[]=datacenter&collect[]=cluster",
+		server.URL.Host, server.URL.Scheme)
+
+	req := httptest.NewRequest(http.MethodGet, url, nil)
+	rec := httptest.NewRecorder()
+
+	probeHandler(rec, req, logger)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+
+	// datacenter 指标必须存在（不断链）且被标记（不含糊）。
+	if !strings.Contains(body, "vmware_datacenter_info{") {
+		t.Fatalf("vmware_datacenter_info missing on ESXi; dashboards relying on dcmo would break\nbody:\n%s", body)
+	}
+
+	if !strings.Contains(body, `dcmo="ha-datacenter"`) {
+		t.Errorf("expected the implicit ha-datacenter pseudo object\nbody:\n%s", body)
+	}
+
+	// 断言必须精确到具体的指标行。只检查 body 里出现过 synthetic="true"
+	// 是不够的 —— cluster 的 ha-compute-res 也带这个 label，会掩盖
+	// datacenter 分支根本没生效的情况。这是反向验证时发现的：注掉
+	// datacenter 的标注逻辑后，宽泛断言依然通过。
+	if !metricHasLabels(body, "vmware_datacenter_info", `dcmo="ha-datacenter"`, `synthetic="true"`) {
+		t.Errorf("vmware_datacenter_info for ha-datacenter is not marked synthetic; "+
+			"the pseudo object would be indistinguishable from a real datacenter\nbody:\n%s", body)
+	}
+
+	if !metricHasLabels(body, "vmware_compute_info", `cmo="ha-compute-res"`, `synthetic="true"`) {
+		t.Errorf("vmware_compute_info for ha-compute-res is not marked synthetic\nbody:\n%s", body)
+	}
+
+	// cluster collector 在 ESXi 上应回退到 ComputeResource。
+	if !strings.Contains(body, "vmware_compute_info{") {
+		t.Errorf("vmware_compute_info missing; the ComputeResource fallback did not run\nbody:\n%s", body)
+	}
+}
+
+// TestVCenterDoesNotEmitSyntheticLabel 是 vCenter 侧的回归防线。
+//
+// synthetic 只应出现在 ESXi 的伪对象上。若它泄漏到 vCenter，用户用
+// {synthetic!="true"} 过滤时会误伤真实数据中心 —— 这类错误在图上表现为
+// 数据莫名消失，很难定位到 exporter。
+func TestVCenterDoesNotEmitSyntheticLabel(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	model := simulator.VPX()
+	if err := model.Create(); err != nil {
+		t.Fatalf("failed to create VPX simulator model: %v", err)
+	}
+	defer model.Remove()
+
+	server := model.Service.NewServer()
+	defer server.Close()
+
+	url := fmt.Sprintf("/probe?target=%s&username=user&password=pass&schema=%s&insecure=true&collect[]=datacenter&collect[]=cluster",
+		server.URL.Host, server.URL.Scheme)
+
+	req := httptest.NewRequest(http.MethodGet, url, nil)
+	rec := httptest.NewRecorder()
+
+	probeHandler(rec, req, logger)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+
+	if strings.Contains(body, `synthetic="true"`) {
+		t.Fatalf("synthetic label leaked into vCenter output\nbody:\n%s", body)
+	}
+
+	if !strings.Contains(body, `type="vcenter"`) {
+		t.Errorf(`vmware_target_info is missing type="vcenter"`)
+	}
+
+	// 既有指标必须原样保留 —— 用户的 dashboard 引用的是它，不是新指标。
+	if !strings.Contains(body, "vmware_vcenter_info{") {
+		t.Errorf("vmware_vcenter_info disappeared; existing dashboards would break")
+	}
+}
+
+// metricHasLabels 检查指定指标族里是否存在同时带有全部给定 label 的序列。
+//
+// 为什么需要它：strings.Contains(body, `synthetic="true"`) 这种宽泛断言
+// 只能证明整个响应里某处出现过该 label，无法定位到哪个指标。当多个 collector
+// 都可能产出同一个 label 时，宽泛断言会掩盖其中一个分支失效的情况 ——
+// Stage 3 的反向验证就撞上了这个坑。
+func metricHasLabels(body, metricName string, labels ...string) bool {
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.HasPrefix(line, metricName+"{") {
+			continue
+		}
+
+		matched := true
+		for _, label := range labels {
+			if !strings.Contains(line, label) {
+				matched = false
+				break
+			}
+		}
+
+		if matched {
+			return true
+		}
+	}
+
+	return false
+}
+
+// TestTargetInfoTargetLabelMatchesVCenterLabel 锁死 dashboard 依赖的一条不变量。
+//
+// 背景：Stage 3 的 dashboard 改造把 $vcenter 模板变量的取值来源从
+// vmware_vcenter_info{...}的 vcenter label 换成了
+// vmware_target_info{...}的 target label —— 因为只有后者带 type label，
+// 换过去才能按目标类型过滤。
+//
+// 而所有 panel 的查询依然写着 vcenter=~"$vcenter"。也就是说：
+//
+//	target_info 的 target 值  ->  填进 $vcenter  ->  用来匹配业务指标的 vcenter 值
+//
+// 这条链要成立，两个 label 的取值必须逐字符相等。一旦哪天有人给其中一个
+// 加了端口归一化、去掉了 :443、或改成小写，dashboard 会**静默**变空 ——
+// 查询语法合法、指标存在、只是匹配不上，没有任何报错。
+//
+// 这种失败模式在 Grafana 里极难排查，所以在这里用测试钉住。
+func TestTargetInfoTargetLabelMatchesVCenterLabel(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	for _, tc := range []struct {
+		name  string
+		model *simulator.Model
+	}{
+		{"vcenter", simulator.VPX()},
+		{"esxi", simulator.ESX()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := tc.model
+			if err := model.Create(); err != nil {
+				t.Fatalf("failed to create simulator model: %v", err)
+			}
+			defer model.Remove()
+
+			server := model.Service.NewServer()
+			defer server.Close()
+
+			url := fmt.Sprintf("/probe?target=%s&username=user&password=pass&schema=%s&insecure=true&collect[]=datacenter&collect[]=host",
+				server.URL.Host, server.URL.Scheme)
+
+			req := httptest.NewRequest(http.MethodGet, url, nil)
+			rec := httptest.NewRecorder()
+
+			probeHandler(rec, req, logger)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status code = %d, want %d; body=%q", rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			body := rec.Body.String()
+
+			target := labelValue(body, "vmware_target_info", "target")
+			if target == "" {
+				t.Fatalf("could not extract target label from vmware_target_info\nbody:\n%s", body)
+			}
+
+			// vmware_vcenter_info 是既有指标，$vcenter 原来就取自它。
+			vcenter := labelValue(body, "vmware_vcenter_info", "vcenter")
+			if vcenter == "" {
+				t.Fatalf("could not extract vcenter label from vmware_vcenter_info\nbody:\n%s", body)
+			}
+
+			if target != vcenter {
+				t.Errorf("vmware_target_info{target=%q} != vmware_vcenter_info{vcenter=%q};\n"+
+					"the bundled dashboards feed $vcenter from target_info's target label but filter\n"+
+					"panels on vcenter=~\"$vcenter\", so a mismatch silently blanks every panel",
+					target, vcenter)
+			}
+
+			// 业务指标侧同样必须匹配，否则 panel 过滤照样落空。
+			hostVCenter := labelValue(body, "vmware_host_info", "vcenter")
+			if hostVCenter == "" {
+				t.Fatalf("could not extract vcenter label from vmware_host_info\nbody:\n%s", body)
+			}
+
+			if hostVCenter != target {
+				t.Errorf("vmware_host_info{vcenter=%q} != vmware_target_info{target=%q}; panel filters would not match",
+					hostVCenter, target)
+			}
+		})
+	}
+}
+
+// labelValue 从 Prometheus 文本格式里取出指定指标第一条序列上某个 label 的值。
+//
+// 只做够用的解析：label 值本身不含逗号或引号（这里全是主机名与 moid），
+// 所以按 `name="` 定位再截到下一个引号即可，不必引入完整的 expfmt 解析器。
+func labelValue(body, metricName, label string) string {
+	needle := label + `="`
+
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.HasPrefix(line, metricName+"{") {
+			continue
+		}
+
+		idx := strings.Index(line, needle)
+		if idx < 0 {
+			continue
+		}
+
+		rest := line[idx+len(needle):]
+		end := strings.Index(rest, `"`)
+		if end < 0 {
+			continue
+		}
+
+		return rest[:end]
+	}
+
+	return ""
+}

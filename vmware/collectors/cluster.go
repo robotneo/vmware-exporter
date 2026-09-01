@@ -67,6 +67,17 @@ func (c *clusterCollector) Update(ch chan<- prometheus.Metric, namespace string,
 
 	if len(clusters) == 0 {
 
+		// ESXi 直连时不存在 ClusterComputeResource，只有隐式的
+		// ha-compute-res。原实现靠 len(clusters)==0 意外兜到这条路径，
+		// 现在把它变成显式分支：既服务 ESXi，也覆盖 vCenter 下主机不在
+		// 任何集群里的情况（独立主机会有一个自动生成的 ComputeResource）。
+		esxi := isESXi(loginData)
+
+		if esxi {
+			c.logger.Debug("no cluster found, falling back to ComputeResource",
+				"target_type", targetTypeESXi)
+		}
+
 		var compute []mo.ComputeResource
 
 		err = fetchProperties(
@@ -80,12 +91,23 @@ func (c *clusterCollector) Update(ch chan<- prometheus.Metric, namespace string,
 
 		for _, cr := range compute {
 
+			infoLabels := map[string]string{"cmo": cr.Self.Value, "host": cr.Name, "foldermo": cr.Parent.Value,
+				"vcenter": loginData["target"].(string)}
+			dsLabels := map[string]string{"cmo": cr.Self.Value, "host": cr.Name, "datastores": *moSliceToString(cr.Datastore),
+				"vcenter": loginData["target"].(string)}
+
+			// 只有 ESXi 的 ha-compute-res 才是伪对象。vCenter 下的独立主机
+			// ComputeResource 是真实存在的托管对象，不该被标成 synthetic。
+			if esxi && cr.Self.Value == syntheticComputeMoid {
+				infoLabels = syntheticLabels(infoLabels)
+				dsLabels = syntheticLabels(dsLabels)
+			}
+
 			ch <- prometheus.MustNewConstMetric(
 				prometheus.NewDesc(
 					prometheus.BuildFQName(namespace, "compute", "info"),
 					"This is basic cluster info to be used for parent reference", nil,
-					map[string]string{"cmo": cr.Self.Value, "host": cr.Name, "foldermo": cr.Parent.Value,
-						"vcenter": loginData["target"].(string)},
+					infoLabels,
 				), prometheus.GaugeValue, 1.0,
 			)
 
@@ -93,8 +115,7 @@ func (c *clusterCollector) Update(ch chan<- prometheus.Metric, namespace string,
 				prometheus.NewDesc(
 					prometheus.BuildFQName(namespace, "compute", "datastores"),
 					"This is basic cluster info to be used for parent reference", nil,
-					map[string]string{"cmo": cr.Self.Value, "host": cr.Name, "datastores": *moSliceToString(cr.Datastore),
-						"vcenter": loginData["target"].(string)},
+					dsLabels,
 				), prometheus.GaugeValue, 1.0,
 			)
 		}

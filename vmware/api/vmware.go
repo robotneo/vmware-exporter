@@ -122,11 +122,12 @@ func (vm *VMware) Login(target string, logger *slog.Logger) (map[string]interfac
 	loginData["credentials"] = creds
 
 	// 登录
-	if err := govmomiLoginWithCreds(loginData, creds); err != nil {
+	if err := govmomiLoginWithCreds(loginData, creds, logger); err != nil {
 		return loginData, err
 	}
 
-	logger.Info("logged in to vCenter using default credentials", "target", target)
+	logger.Info("logged in using default credentials",
+		"target", target, "target_type", loginData["targetType"])
 
 	return loginData, nil
 }
@@ -152,11 +153,14 @@ func (vm *VMware) LoginWithCredentials(creds Credentials, logger *slog.Logger) (
 	loginData["credentials"] = creds
 
 	// 使用提供的凭证登录
-	if err := govmomiLoginWithCreds(loginData, creds); err != nil {
+	if err := govmomiLoginWithCreds(loginData, creds, logger); err != nil {
 		return nil, err
 	}
 
-	logger.Info("logged in to vCenter using probe credentials", "target", creds.Target, "username", creds.Username)
+	// 不记录 username：probe 端点的凭证来自请求参数或 Basic Auth，
+	// 写进日志会让凭证随日志流出到集中式日志系统。
+	logger.Info("logged in using probe credentials",
+		"target", creds.Target, "target_type", loginData["targetType"])
 
 	return loginData, nil
 }
@@ -279,7 +283,7 @@ func requestWithCreds(method, urlStr string, headers map[string]string, creds Cr
 }
 
 // govmomiLoginWithCreds 使用指定凭证登录
-func govmomiLoginWithCreds(loginData map[string]interface{}, creds Credentials) error {
+func govmomiLoginWithCreds(loginData map[string]interface{}, creds Credentials, logger *slog.Logger) error {
 	// 准备 SOAP 登录 URL
 	urlx, err := soap.ParseURL(fmt.Sprintf("%s://%s%s", creds.Schema, creds.Target, vim25.Path))
 	if err != nil {
@@ -328,6 +332,10 @@ func govmomiLoginWithCreds(loginData map[string]interface{}, creds Credentials) 
 	loginData["session"] = session
 
 	loginData["interval"] = int32(*vmwInterval)
+
+	// 目标类型探测。必须在登录成功之后 —— ServiceContent 是登录的产物。
+	// 结果写入 loginData，全部下游 collector 据此选择行为分支。
+	loginData["targetType"] = detectTargetType(client, logger)
 
 	// granularity 已在启动时由 ValidateFlags 保证 > 0，这里不会除零。
 	// 同时保证至少取 1 个采样点，避免 interval 略小于 granularity 时算出 0。

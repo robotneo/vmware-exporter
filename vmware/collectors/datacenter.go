@@ -33,10 +33,43 @@ func NewdatacenterCollector(logger *slog.Logger) (collector.Collector, error) {
 
 func (c *datacenterCollector) Update(ch chan<- prometheus.Metric, namespace string, clientAPI collector.ClientAPI, loginData map[string]interface{}, params map[string]string) error {
 
+	client := loginData["client"].(*vim25.Client)
+	target := loginData["target"].(string)
+	about := client.ServiceContent.About
+
+	// vmware_target_info 是 Stage 3 引入的类型标识指标，也是全部 dashboard
+	// 条件渲染的唯一依赖点。它与下面的 vmware_vcenter_info 并存而非替代 ——
+	// 后者已被既有面板引用，删掉会直接打断用户的图。
+	ch <- prometheus.MustNewConstMetric(
+		prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "target", "info"),
+			"Scrape target type and version. type is either vcenter or esxi.", nil,
+			map[string]string{
+				"target":  target,
+				"type":    targetType(loginData),
+				"version": about.Version,
+				"build":   about.Build,
+				"patch":   about.PatchLevel,
+			},
+		), prometheus.GaugeValue, 1.0,
+	)
+
+	ch <- prometheus.MustNewConstMetric(
+		prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "vcenter", "info"),
+			"This is basic vcenter info", nil,
+			map[string]string{
+				"version": about.Version,
+				"build":   about.Build,
+				"patch":   about.PatchLevel,
+				"vcenter": target},
+		), prometheus.GaugeValue, 1.0,
+	)
+
 	var datacenters []mo.Datacenter
 
 	err := fetchProperties(
-		loginData["ctx"].(context.Context), loginData["view"].(*view.Manager), loginData["client"].(*vim25.Client),
+		loginData["ctx"].(context.Context), loginData["view"].(*view.Manager), client,
 		[]string{"Datacenter"}, []string{"name", "parent"}, &datacenters, c.logger,
 	)
 	if err != nil {
@@ -44,26 +77,22 @@ func (c *datacenterCollector) Update(ch chan<- prometheus.Metric, namespace stri
 
 	}
 
-	ch <- prometheus.MustNewConstMetric(
-		prometheus.NewDesc(
-			prometheus.BuildFQName(namespace, "vcenter", "info"),
-			"This is basic vcenter info", nil,
-			map[string]string{
-				"version": loginData["client"].(*vim25.Client).ServiceContent.About.Version,
-				"build":   loginData["client"].(*vim25.Client).ServiceContent.About.Build,
-				"patch":   loginData["client"].(*vim25.Client).ServiceContent.About.PatchLevel,
-				"vcenter": loginData["target"].(string)},
-		), prometheus.GaugeValue, 1.0,
-	)
-
 	for _, datacenter := range datacenters {
+
+		labels := map[string]string{"dcmo": datacenter.Self.Value, "dc": datacenter.Name,
+			"vcenter": target}
+
+		// ESXi 只有隐式的 ha-datacenter 伪对象。标注 synthetic 让「这不是
+		// 真实数据中心」这件事在指标层面可见，而不是静默混进真实数据里。
+		if isESXi(loginData) && datacenter.Self.Value == syntheticDatacenterMoid {
+			labels = syntheticLabels(labels)
+		}
 
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
 				prometheus.BuildFQName(namespace, datacenterSubsystem, "info"),
 				"This is basic datacenter info to be used for parent reference", nil,
-				map[string]string{"dcmo": datacenter.Self.Value, "dc": datacenter.Name,
-					"vcenter": loginData["target"].(string)},
+				labels,
 			), prometheus.GaugeValue, 1.0,
 		)
 
@@ -72,7 +101,7 @@ func (c *datacenterCollector) Update(ch chan<- prometheus.Metric, namespace stri
 	var folders []mo.Folder
 
 	err = fetchProperties(
-		loginData["ctx"].(context.Context), loginData["view"].(*view.Manager), loginData["client"].(*vim25.Client),
+		loginData["ctx"].(context.Context), loginData["view"].(*view.Manager), client,
 		[]string{"Folder"}, []string{"name", "parent"}, &folders, c.logger,
 	)
 	if err != nil {
@@ -89,7 +118,7 @@ func (c *datacenterCollector) Update(ch chan<- prometheus.Metric, namespace stri
 					prometheus.BuildFQName(namespace, "folder", "info"),
 					"This is basic datacenter info to be used for parent reference", nil,
 					map[string]string{"foldermo": folder.Self.Value, "dc": folder.Name, "dcmo": folder.Parent.Value,
-						"vcenter": loginData["target"].(string)},
+						"vcenter": target},
 				), prometheus.GaugeValue, 1.0,
 			)
 		}

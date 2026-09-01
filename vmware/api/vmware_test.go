@@ -158,7 +158,7 @@ func TestVMwareGetReturnsResponseBody(t *testing.T) {
 	*vmwTLS = false
 	*vmwInterval = 20
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := discardLogger()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/test" {
@@ -212,7 +212,7 @@ func TestVMwareGetReturnsResponseBody(t *testing.T) {
 // 本测试取代旧的 TestLogoutDoesNothingAndReturnsNil —— 那个名字断言的正是
 // P0-1 的错误行为（Logout 什么都不做），现在 Logout 会真的发 SOAP 登出。
 func TestLogoutToleratesIncompleteLoginData(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := discardLogger()
 	vm := NewAPI()
 
 	cases := []struct {
@@ -358,7 +358,7 @@ func TestLoginUsesDefaultVCenterWhenTargetEmpty(t *testing.T) {
 	*vmwTLS = true
 	*vmwInterval = 20
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := discardLogger()
 	vm := NewAPI()
 
 	loginData, err := vm.Login("", logger)
@@ -380,7 +380,7 @@ func TestLoginReturnsErrorWhenGovmomiLoginFails(t *testing.T) {
 	*vmwTLS = true
 	*vmwInterval = 20
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := discardLogger()
 	vm := NewAPI()
 
 	loginData, err := vm.Login("127.0.0.1:1", logger)
@@ -426,7 +426,7 @@ func TestGovmomiLoginSetsRequiredFields(t *testing.T) {
 		"target": server.URL.Host,
 	}
 
-	if err := govmomiLoginWithCreds(loginData, Credentials{Username: *vmwUser, Password: *vmwPasswd, Target: server.URL.Host, Schema: *vmwSchema, Insecure: *vmwTLS}); err != nil {
+	if err := govmomiLoginWithCreds(loginData, Credentials{Username: *vmwUser, Password: *vmwPasswd, Target: server.URL.Host, Schema: *vmwSchema, Insecure: *vmwTLS}, discardLogger()); err != nil {
 		t.Fatalf("govmomiLogin() returned error: %v", err)
 	}
 
@@ -655,7 +655,7 @@ func TestLogoutReleasesServerSession(t *testing.T) {
 	}
 
 	loginData := make(map[string]interface{})
-	if err := govmomiLoginWithCreds(loginData, creds); err != nil {
+	if err := govmomiLoginWithCreds(loginData, creds, discardLogger()); err != nil {
 		t.Fatalf("govmomiLoginWithCreds() failed: %v", err)
 	}
 
@@ -673,7 +673,7 @@ func TestLogoutReleasesServerSession(t *testing.T) {
 		t.Fatalf("session count did not grow after login: baseline=%d after=%d", baseline, afterLogin)
 	}
 
-	if err := NewAPI().Logout(loginData, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+	if err := NewAPI().Logout(loginData, discardLogger()); err != nil {
 		t.Fatalf("Logout() returned error: %v", err)
 	}
 
@@ -685,5 +685,95 @@ func TestLogoutReleasesServerSession(t *testing.T) {
 	if afterLogout != baseline {
 		t.Fatalf("session leaked: baseline=%d after_login=%d after_logout=%d (want %d)",
 			baseline, afterLogin, afterLogout, baseline)
+	}
+}
+
+// discardLogger 返回一个丢弃全部输出的 logger。测试里只关心行为，不关心日志。
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// TestDetectTargetTypeAgainstSimulators 是 Stage 3 模式识别的核心验收。
+//
+// 两个 simulator 模型的 ServiceContent.About.ApiType 分别是
+// "VirtualCenter"（simulator/vpx/service_content.go:31）与
+// "HostAgent"（simulator/esx/service_content.go:27），与真实产品一致，
+// 因此这个测试无需真实的 vCenter 或 ESXi 主机。
+func TestDetectTargetTypeAgainstSimulators(t *testing.T) {
+	testCases := []struct {
+		name  string
+		model *simulator.Model
+		want  string
+	}{
+		{"vCenter", simulator.VPX(), TargetTypeVCenter},
+		{"ESXi", simulator.ESX(), TargetTypeESXi},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			model := tc.model
+			if err := model.Create(); err != nil {
+				t.Fatalf("failed to create %s model: %v", tc.name, err)
+			}
+			defer model.Remove()
+
+			server := model.Service.NewServer()
+			defer server.Close()
+
+			restoreVMwareFlags(t)
+			*vmwSchema = server.URL.Scheme
+			*vmwTLS = true
+
+			loginData := make(map[string]interface{})
+			creds := Credentials{
+				Username: "user",
+				Password: "pass",
+				Target:   server.URL.Host,
+				Schema:   server.URL.Scheme,
+				Insecure: true,
+			}
+
+			if err := govmomiLoginWithCreds(loginData, creds, discardLogger()); err != nil {
+				t.Fatalf("login failed: %v", err)
+			}
+			defer NewAPI().Logout(loginData, discardLogger())
+
+			got, ok := loginData["targetType"].(string)
+			if !ok {
+				t.Fatalf(`loginData["targetType"] type = %T, want string`, loginData["targetType"])
+			}
+
+			if got != tc.want {
+				t.Fatalf("targetType = %q, want %q (ApiType was %q)",
+					got, tc.want,
+					loginData["client"].(*vim25.Client).ServiceContent.About.ApiType)
+			}
+		})
+	}
+}
+
+// TestDetectTargetTypeFallsBackToVCenter 固定未知 ApiType 的处理方式。
+//
+// 未知取值按 vCenter 处理是刻意的保守选择：把一个真 vCenter 误判成 ESXi
+// 会让 datacenter/cluster 指标全部退化成伪对象，破坏既有 dashboard；
+// 反过来只是拿不到 ESXi 的优化，代价小得多。
+func TestDetectTargetTypeFallsBackToVCenter(t *testing.T) {
+	testCases := []struct {
+		apiType string
+		want    string
+	}{
+		{"VirtualCenter", TargetTypeVCenter},
+		{"HostAgent", TargetTypeESXi},
+		{"", TargetTypeVCenter},
+		{"SomethingNew", TargetTypeVCenter},
+	}
+
+	for _, tc := range testCases {
+		client := new(vim25.Client)
+		client.ServiceContent.About.ApiType = tc.apiType
+
+		if got := detectTargetType(client, discardLogger()); got != tc.want {
+			t.Fatalf("detectTargetType(ApiType=%q) = %q, want %q", tc.apiType, got, tc.want)
+		}
 	}
 }

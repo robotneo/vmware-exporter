@@ -102,12 +102,28 @@ func (c *datastoreCollector) Update(ch chan<- prometheus.Metric, namespace strin
 		)
 	}
 
-	//for key, _ := range loginData["counters"].(map[string]*types.PerfCounterInfo) {
-	//	fmt.Println(key)
-	//}
+	// 采样间隔向服务端协商，不再硬编码。
+	//
+	// 原实现直接传 300（5 分钟历史汇总间隔），注释自称 "A dirty workaround"。
+	// 那个值在 vCenter 上碰巧可用，但 ESXi 不聚合历史统计，请求 300 会返回
+	// 空结果集 —— 指标静默消失且无任何报错，属于最难排查的一类故障。
+	//
+	// 这里必须用真实的 datastore 引用探测：QueryPerfProviderSummary 要求实体
+	// 存在，伪造 moid 会被服务端以 InvalidArgument 拒绝。
+	interval := historicIntervalID
+	if len(datastoreRefs) > 0 {
+		interval = resolvePerfIntervalForTarget(
+			loginData["ctx"].(context.Context),
+			loginData["perf"].(*performance.Manager),
+			datastoreRefs[0],
+			loginData["interval"].(int32),
+			historicIntervalID,
+			targetType(loginData),
+			c.logger,
+		)
+	}
 
-	// A dirty workaround to grab data for provisioned storage in each datastore (until there is better option out there to collect in REST)
-	scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), 300, loginData["perf"].(*performance.Manager),
+	scrapePerformance(loginData["ctx"].(context.Context), ch, c.logger, loginData["samples"].(int32), interval, loginData["perf"].(*performance.Manager),
 		loginData["target"].(string), "Datastore", namespace, datastoreSubsystem, "", datastoreCounters,
 		loginData["counters"].(map[string]*types.PerfCounterInfo), datastoreRefs, datastoreNames)
 
