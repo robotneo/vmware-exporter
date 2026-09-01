@@ -98,8 +98,15 @@ jobs:
           cache: true
 
       # .golangci.yml has been in the repository without anything running it.
+      #
+      # v9 is not a feature upgrade: it moves the action from the node20 runtime
+      # to node24, which GitHub has announced the deprecation of. Staying on v8
+      # earns a deprecation warning now and a broken job later. Nothing else in
+      # v9 affects this repository -- no inputs were removed and the minimum
+      # golangci-lint version is unchanged, so `version: latest` (v2.x, matching
+      # `version: "2"` in .golangci.yml) still applies.
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           version: latest
 
@@ -112,7 +119,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.x'
 

@@ -19,3 +19,14 @@ updates:
       actions:
         patterns:
           - "*"
+
+  # The Dockerfile builds `FROM golang:alpine`. That is a rolling tag, so it
+  # cannot go stale the way a pinned one would -- but it is a third ecosystem in
+  # the repository, and leaving it undeclared is the same omission that let the
+  # actions drift. scripts/check_config.py now fails if an ecosystem present in
+  # the tree has no entry here, so the list cannot fall behind the repository
+  # again without CI saying so.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
