@@ -245,13 +245,14 @@ scrape_configs:
 | `-collector.datastore` | bool | 开启存储 (Datastore) 数据采集。 | `true` |
 | `-collector.host` | bool | 开启 ESXi 主机 (Host) 数据采集。 | `true` |
 | `-collector.vm` | bool | 开启虚拟机 (VM) 数据采集。 | `true` |
+| `-collector.resourcepool` | bool | 开启资源池 (Resource Pool) 数据采集：limit、reservation、shares 与瞬时用量。 | `true` |
 | `-collector.esxcli.host.nic` | bool | 开启基于 esxcli 的主机网卡采集。 | `false` |
 | `-collector.esxcli.storage` | bool | 开启基于 esxcli 的存储采集。 | `false` |
 
 > **`-disable.default.collectors` 从未存在。** 本表此前列出过它，但二进制
 > 从来没有注册这个 flag —— 传它会让 exporter 直接以
 > `flag provided but not defined` 退出。要只跑一个子集，请逐个显式关闭默认项：
-> `-collector.datacenter=false -collector.cluster=false -collector.datastore=false -collector.host=false -collector.vm=false`。
+> `-collector.datacenter=false -collector.cluster=false -collector.datastore=false -collector.host=false -collector.vm=false -collector.resourcepool=false`。
 >
 > `scripts/check_config.py` 现在会对「出现在参考表里但代码未注册」的 flag
 > 报错，所以这类文档漂移不会再回来。

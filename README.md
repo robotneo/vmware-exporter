@@ -113,6 +113,7 @@ The options available are:
 | -collector.datastore | Enables or disables Datastore metrics collection (default: enabled) |
 | -collector.host | Enables or disables Host metrics collection (default: enabled) |
 | -collector.vm | Enables or disables Virtual Machine metrics collection (default: enabled) |
+| -collector.resourcepool | Enables or disables Resource Pool metrics collection: limits, reservations, shares and instantaneous usage (default: enabled) |
 | -collector.esxcli.host.nic | Collects ESXi NIC firmware information using esxcli over the SOAP API (proxied by vCenter, or direct when connected to an ESXi host) (default: disabled) |
 | -collector.esxcli.storage | Collects ESXi storage firmware information using esxcli over the SOAP API (proxied by vCenter, or direct when connected to an ESXi host) (default: disabled) |
 
@@ -120,7 +121,7 @@ The options available are:
 > table listed it, but the binary has never registered such a flag — passing it
 > makes the exporter exit with `flag provided but not defined`. To run only a
 > chosen subset, disable the defaults explicitly:
-> `-collector.datacenter=false -collector.cluster=false -collector.datastore=false -collector.host=false -collector.vm=false`.
+> `-collector.datacenter=false -collector.cluster=false -collector.datastore=false -collector.host=false -collector.vm=false -collector.resourcepool=false`.
 >
 > `scripts/check_config.py` now fails on any flag that appears in these tables
 > without being registered, so this class of drift cannot come back.

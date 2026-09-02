@@ -31,6 +31,11 @@ var definitions = []Definition{
 	{Name: "host", Creator: NewhostCollector, DefaultEnabled: collector.DefaultEnabled},
 	{Name: "vm", Creator: NewvmCollector, DefaultEnabled: collector.DefaultEnabled},
 
+	// resourcepool 走属性检索（一次 ContainerView），成本与 cluster 同级，
+	// 因此与其他基础 collector 一样默认启用。它补齐的是 vm → cluster 之间
+	// 缺失的一层，没有它就无法回答「这台 VM 受哪个资源池的 limit 约束」。
+	{Name: "resourcepool", Creator: NewresourcepoolCollector, DefaultEnabled: collector.DefaultEnabled},
+
 	// esxcli collectors 逐主机串行发 SOAP 调用，开销显著，默认禁用。
 	{Name: "esxcli.host.nic", Creator: NewesxcliHostNICCollector, DefaultEnabled: collector.DefaultDisabled},
 	{Name: "esxcli.storage", Creator: NewesxcliStorageListCCollector, DefaultEnabled: collector.DefaultDisabled},

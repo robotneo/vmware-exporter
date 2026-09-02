@@ -389,6 +389,7 @@ var collectorDescriptions = map[string]string{
 	"datastore":       "Datastore metrics",
 	"host":            "ESXi host metrics",
 	"vm":              "Virtual machine metrics",
+	"resourcepool":    "Resource pool limits, reservations and usage",
 	"esxcli.host.nic": "ESXi NIC driver info",
 	"esxcli.storage":  "ESXi storage info",
 }

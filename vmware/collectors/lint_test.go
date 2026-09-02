@@ -76,11 +76,12 @@ func TestBusinessMetricsPassPromlint(t *testing.T) {
 	// esxcli 的两个 collector 不在这里：simulator 不实现 esxcli 通道，它们
 	// 在这个环境下产不出任何指标，列进来只会让覆盖面看起来更宽。
 	creators := map[string]func(*slog.Logger) (collector.Collector, error){
-		"cluster":    NewClusterCollector,
-		"datacenter": NewdatacenterCollector,
-		"datastore":  NewdatastoreCollector,
-		"host":       NewhostCollector,
-		"vm":         NewvmCollector,
+		"cluster":      NewClusterCollector,
+		"datacenter":   NewdatacenterCollector,
+		"datastore":    NewdatastoreCollector,
+		"host":         NewhostCollector,
+		"vm":           NewvmCollector,
+		"resourcepool": NewresourcepoolCollector,
 	}
 
 	names := make([]string, 0, len(creators))

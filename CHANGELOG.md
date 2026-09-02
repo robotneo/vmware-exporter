@@ -501,6 +501,45 @@ default configuration (`samples=1`) the old and new aggregations agree anyway.
   from vCenter's own counter names via `net.bytesRx.average`). The exemption list
   is itself checked: an entry that no longer triggers fails the test, so it
   cannot linger and silently excuse a future regression.
+- **`resourcepool` collector** (`-collector.resourcepool`, **default enabled**) —
+  18 new metrics covering resource pool limits, reservations, shares and
+  instantaneous usage.
+
+  **This adds series to your TSDB without any configuration change on your
+  part.** Pass `-collector.resourcepool=false` to opt out. The cardinality is
+  dominated by `vmware_resourcepool_vm`, which emits one series per virtual
+  machine — the same order of magnitude as `vmware_vm_info`. If you pay per
+  series on a hosted Prometheus, budget for that before upgrading.
+
+  It closes the gap between `vmware_vm_info` and the cluster: until now there was
+  no way to answer *which resource pool constrains this VM*, because nothing
+  exported the intermediate layer. `vmware_resourcepool_vm{rpmo,vmmo}` makes
+  `vm → resourcepool → cluster` joinable.
+
+  Unlike telegraf's `inputs.vsphere`, this reads the `ResourcePool` runtime and
+  config properties rather than performance counters. One `ContainerView`
+  retrieval instead of an extra `QueryPerf` round trip, and — the deciding
+  reason — `reservation`, `limit` and `shares` exist **only** in `Config`. Those
+  three are what explain *why a VM cannot get CPU*, and no performance counter
+  carries them.
+
+  `limit` needs care when reading the metrics: vSphere represents *unlimited* as
+  `-1`, and exporting that verbatim would let `limit - usage` return a negative
+  number and pollute any `sum()` over it. So an unlimited pool emits **no**
+  `cpu_limit_hertz` / `mem_limit_bytes` series at all; use
+  `vmware_resourcepool_{cpu,mem}_limited` (`1` = a limit is configured, `0` =
+  unlimited) to tell *unlimited* apart from *not collected*. A missing series is
+  an empty result in PromQL — safer than a sentinel that arithmetic will happily
+  consume as a real value.
+
+  CPU values are converted MHz → hertz (`×1e6`) and configured memory MB → bytes
+  (`×1048576`), matching the base-unit convention the rest of the exporter
+  follows. Note the asymmetry in vSphere's own API, which the two different
+  factors reflect: `Runtime.Memory.*` is already in bytes while
+  `Config.MemoryAllocation.*` is in MB.
+
+  On ESXi the implicit `ha-root-pool` is labelled `synthetic="true"`, the same
+  treatment `ha-datacenter` and `ha-compute-res` already get.
 
 ### Fixed
 
