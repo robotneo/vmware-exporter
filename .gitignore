@@ -16,5 +16,8 @@ dist/
 # Agent workspace (not a build cache, but session-local)
 .workbuddy/
 
-# Backups written by scripts/patch_dashboards.py so a patch can be reverted
+# Backups written by the scripts under scripts/ so a change can be reverted.
+# Two suffixes because the two scripts must not share one: see migrate() in
+# scripts/migrate_dashboards.py.
 *.json.bak
+*.json.premigrate

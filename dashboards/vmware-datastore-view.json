@@ -100,7 +100,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_datastore_capacity{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}",
+          "expr": "vmware_datastore_capacity_bytes{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -168,7 +168,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "count(vmware_vm_datastore_capacity_used{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"})",
+          "expr": "count(vmware_vm_datastore_capacity_used_bytes{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"})",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -199,7 +199,7 @@
               }
             ]
           },
-          "unit": "kbytes"
+          "unit": "bytes"
         },
         "overrides": []
       },
@@ -236,7 +236,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_datastore_disk_provisioned_latest{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}",
+          "expr": "vmware_datastore_disk_provisioned_bytes{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -267,7 +267,7 @@
               }
             ]
           },
-          "unit": "kbytes"
+          "unit": "bytes"
         },
         "overrides": []
       },
@@ -304,7 +304,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_datastore_disk_used_latest{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}",
+          "expr": "vmware_datastore_disk_used_bytes{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -372,7 +372,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_datastore_free{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}",
+          "expr": "vmware_datastore_free_bytes{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -458,7 +458,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "(\n  vmware_datastore_capacity{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"} -\n  vmware_datastore_free{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}\n) /\nvmware_datastore_capacity{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}\n* 100\n",
+          "expr": "(\n  vmware_datastore_capacity_bytes{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"} -\n  vmware_datastore_free_bytes{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}\n) /\nvmware_datastore_capacity_bytes{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}\n* 100\n",
           "interval": "20s",
           "legendFormat": "__auto",
           "range": true,
@@ -526,7 +526,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_datastore_disk_provisioned_latest{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"} / \nvmware_datastore_capacity * 1024",
+          "expr": "vmware_datastore_disk_provisioned_bytes{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"} / \nvmware_datastore_capacity_bytes",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -561,7 +561,7 @@
             }
           ],
           "mappings": [],
-          "unit": "KiBs"
+          "unit": "Bps"
         },
         "overrides": []
       },
@@ -601,7 +601,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "topk(\n  $top,\n  max_over_time(\n    (\n      (\n        vmware_vm_datastore_read_average{vcenter=~\"$vcenter\"}\n          * on (pfinstance) group_left\n            vmware_datastore_info{vcenter=~\"$vcenter\"}\n      )\n      +\n      (\n        vmware_vm_datastore_write_average{vcenter=~\"$vcenter\"}\n          * on (pfinstance) group_left\n            vmware_datastore_info{vcenter=~\"$vcenter\"}\n      )\n      \n    )[$__range:]\n  )\n)",
+          "expr": "topk(\n  $top,\n  max_over_time(\n    (\n      (\n        vmware_vm_datastore_read_bytes_per_second{vcenter=~\"$vcenter\"}\n          * on (pfinstance) group_left\n            vmware_datastore_info{vcenter=~\"$vcenter\"}\n      )\n      +\n      (\n        vmware_vm_datastore_write_bytes_per_second{vcenter=~\"$vcenter\"}\n          * on (pfinstance) group_left\n            vmware_datastore_info{vcenter=~\"$vcenter\"}\n      )\n      \n    )[$__range:]\n  )\n)",
           "interval": "20s",
           "legendFormat": "{{vm}}",
           "range": true,
@@ -676,7 +676,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "topk(\n  $top,\n  max_over_time(\n    (\n      (\n        vmware_vm_datastore_numberReadAveraged_average{vcenter=~\"$vcenter\"}\n          * on (pfinstance) group_left\n            vmware_datastore_info{vcenter=~\"$vcenter\"}\n      )\n      +\n      (\n        vmware_vm_datastore_numberWriteAveraged_average{vcenter=~\"$vcenter\"}\n          * on (pfinstance) group_left\n            vmware_datastore_info{vcenter=~\"$vcenter\"}\n      )\n    )[$__range:]\n  )\n)\n",
+          "expr": "topk(\n  $top,\n  max_over_time(\n    (\n      (\n        vmware_vm_datastore_read_operations{vcenter=~\"$vcenter\"}\n          * on (pfinstance) group_left\n            vmware_datastore_info{vcenter=~\"$vcenter\"}\n      )\n      +\n      (\n        vmware_vm_datastore_write_operations{vcenter=~\"$vcenter\"}\n          * on (pfinstance) group_left\n            vmware_datastore_info{vcenter=~\"$vcenter\"}\n      )\n    )[$__range:]\n  )\n)\n",
           "interval": "20s",
           "legendFormat": "{{vm}}",
           "range": true,
@@ -751,7 +751,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "topk(\n  $top,\n  max_over_time(\n    vmware_vm_datastore_capacity_used{\n      vcenter=~\"$vcenter\"\n    }[$__range:]\n  )\n)\n",
+          "expr": "topk(\n  $top,\n  max_over_time(\n    vmware_vm_datastore_capacity_used_bytes{\n      vcenter=~\"$vcenter\"\n    }[$__range:]\n  )\n)\n",
           "hide": false,
           "interval": "20s",
           "legendFormat": "{{vm}}",
@@ -780,7 +780,7 @@
             }
           },
           "mappings": [],
-          "unit": "ms"
+          "unit": "s"
         },
         "overrides": []
       },
@@ -820,7 +820,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "topk(\n  $top,\n  max_over_time(\n    (\n      vmware_vm_datastore_totalReadLatency_average{vcenter=~\"$vcenter\"}\n    )[$__range:]\n  )\n)",
+          "expr": "topk(\n  $top,\n  max_over_time(\n    (\n      vmware_vm_datastore_read_latency_seconds{vcenter=~\"$vcenter\"}\n    )[$__range:]\n  )\n)",
           "interval": "20s",
           "legendFormat": "read: {{vm}} ",
           "range": true,
@@ -832,7 +832,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "topk_avg($top,\n    vmware_vm_datastore_totalWriteLatency_average{vcenter=~\"$vcenter\"} * on (pfinstance) group_left \n    vmware_datastore_info{vcenter=~\"$vcenter\", dsmo=\"$dsmo\"}\n) * -1",
+          "expr": "topk_avg($top,\n    vmware_vm_datastore_write_latency_seconds{vcenter=~\"$vcenter\"} * on (pfinstance) group_left \n    vmware_datastore_info{vcenter=~\"$vcenter\", dsmo=\"$dsmo\"}\n) * -1",
           "hide": false,
           "interval": "20s",
           "legendFormat": "write: {{vm}}",
@@ -897,7 +897,7 @@
               }
             ]
           },
-          "unit": "KiBs"
+          "unit": "Bps"
         },
         "overrides": []
       },
@@ -933,7 +933,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n  vmware_host_datastore_read_average{vcenter=~\"$vcenter\"} * \n  on (pfinstance) group_left(ds)\n  vmware_datastore_info{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}\n)",
+          "expr": "sum(\n  vmware_host_datastore_read_bytes_per_second{vcenter=~\"$vcenter\"} * \n  on (pfinstance) group_left(ds)\n  vmware_datastore_info{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}\n)",
           "interval": "20s",
           "legendFormat": "Read",
           "range": true,
@@ -945,7 +945,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n  vmware_host_datastore_write_average{vcenter=~\"$vcenter\"} * \n  on (pfinstance) group_left(ds)\n  vmware_datastore_info{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}\n) * -1",
+          "expr": "sum(\n  vmware_host_datastore_write_bytes_per_second{vcenter=~\"$vcenter\"} * \n  on (pfinstance) group_left(ds)\n  vmware_datastore_info{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}\n) * -1",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Write",
@@ -1046,7 +1046,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n  vmware_host_datastore_numberReadAveraged_average{vcenter=~\"$vcenter\"} * \n  on (pfinstance) group_left(ds)\n  vmware_datastore_info{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}\n)",
+          "expr": "sum(\n  vmware_host_datastore_read_operations{vcenter=~\"$vcenter\"} * \n  on (pfinstance) group_left(ds)\n  vmware_datastore_info{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}\n)",
           "interval": "20s",
           "legendFormat": "Read",
           "range": true,
@@ -1058,7 +1058,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n  vmware_host_datastore_numberWriteAveraged_average{vcenter=~\"$vcenter\"} * \n  on (pfinstance) group_left(ds)\n  vmware_datastore_info{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}\n) * -1",
+          "expr": "sum(\n  vmware_host_datastore_write_operations{vcenter=~\"$vcenter\"} * \n  on (pfinstance) group_left(ds)\n  vmware_datastore_info{vcenter=~\"$vcenter\", dsmo=~\"$dsmo\"}\n) * -1",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Write",

@@ -236,7 +236,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_host_mem_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)",
+          "expr": "sum(\n    vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -381,7 +381,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n  vmware_host_cpu_usagemhz_average{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) /\nsum(\n  vmware_host_cpu_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * \n  vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) \n* 100",
+          "expr": "sum(\n  vmware_host_cpu_usage_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) /\nsum(\n  vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * \n  vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) \n* 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "__auto",
@@ -458,7 +458,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(vmware_host_mem_consumed_average{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * 1024) / \nsum(vmware_host_mem_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"})\n* 100\n",
+          "expr": "sum(vmware_host_mem_consumed_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}) / \nsum(vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"})\n* 100\n",
           "interval": "20s",
           "legendFormat": "__auto",
           "range": true,
@@ -606,7 +606,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_host_cpu_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} *\n    vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * \n    1000 * 1000\n) - \nsum(\n    vmware_host_cpu_usagemhz_average{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * 1000 * 1000\n)",
+          "expr": "sum(\n    vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} *\n    vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) - \nsum(\n    vmware_host_cpu_usage_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -674,7 +674,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_host_cpu_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} *\n    vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * \n    1000 * 1000\n)",
+          "expr": "sum(\n    vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} *\n    vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -705,7 +705,7 @@
               }
             ]
           },
-          "unit": "mbytes"
+          "unit": "bytes"
         },
         "overrides": []
       },
@@ -742,7 +742,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_vm_mem_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) / \nsum(\n   vmware_host_cpu_corecount{ vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)",
+          "expr": "sum(\n    vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) / \nsum(\n   vmware_host_cpu_corecount{ vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -810,7 +810,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_host_mem_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) - \nsum(\n    vmware_host_mem_consumed_average{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * 1024\n)",
+          "expr": "sum(\n    vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) - \nsum(\n    vmware_host_mem_consumed_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -1058,7 +1058,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "vmware_host_cpu_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * 1000 * 1000",
+          "expr": "vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}",
           "format": "table",
           "hide": false,
           "instant": true,
@@ -1074,7 +1074,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "vmware_host_mem_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}",
+          "expr": "vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}",
           "format": "table",
           "hide": false,
           "instant": true,
@@ -1090,7 +1090,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "vmware_host_sys_uptime_latest{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}",
+          "expr": "vmware_host_sys_uptime_seconds{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}",
           "format": "table",
           "hide": false,
           "instant": true,
@@ -1315,7 +1315,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "topk(\n  $top,\n  max_over_time(\n    (\n      vmware_vm_cpu_usagemhz_average{vcenter=~\"$vcenter\"}\n        * on (vmmo) group_left\n          vmware_vm_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n    )[$__range:]\n  )\n) * 1000 * 1000",
+          "expr": "topk(\n  $top,\n  max_over_time(\n    (\n      vmware_vm_cpu_usage_hertz{vcenter=~\"$vcenter\"}\n        * on (vmmo) group_left\n          vmware_vm_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n    )[$__range:]\n  )\n)",
           "instant": true,
           "interval": "20s",
           "legendFormat": "{{vm}}",
@@ -1351,7 +1351,7 @@
             }
           ],
           "mappings": [],
-          "unit": "kbytes"
+          "unit": "bytes"
         },
         "overrides": []
       },
@@ -1392,7 +1392,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "topk(\n  $top,\n  max_over_time(\n    (\n      vmware_vm_mem_consumed_average{vcenter=~\"$vcenter\"}\n        * on (vmmo) group_left\n          vmware_vm_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n    )[$__range:]\n  )\n)",
+          "expr": "topk(\n  $top,\n  max_over_time(\n    (\n      vmware_vm_mem_consumed_bytes{vcenter=~\"$vcenter\"}\n        * on (vmmo) group_left\n          vmware_vm_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n    )[$__range:]\n  )\n)",
           "instant": true,
           "interval": "20s",
           "legendFormat": "{{vm}}",
@@ -1497,7 +1497,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n  vmware_host_cpu_usagemhz_average{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) / \nsum(\n  vmware_host_cpu_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} *\n  vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) \n* 100",
+          "expr": "sum(\n  vmware_host_cpu_usage_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) / \nsum(\n  vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} *\n  vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) \n* 100",
           "interval": "20s",
           "legendFormat": "Usage",
           "range": true,
@@ -1509,7 +1509,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "avg(\n    vmware_host_cpu_latency_average{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) / 100",
+          "expr": "(\navg(\n    vmware_host_cpu_latency_ratio{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)\n) * 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Latency",
@@ -1522,7 +1522,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "avg(\n    sum(\n        vmware_host_cpu_ready_summation{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} / (20 * 1000)\n    ) /\n    sum(\n        vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n    ) \n)\n* 100",
+          "expr": "(\navg(\n    sum(\n        rate(vmware_host_cpu_ready_seconds_total{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}[$__rate_interval])\n    ) /\n    sum(\n        vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n    ) \n)\n) * 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Ready",
@@ -1535,7 +1535,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "avg(\n    vmware_host_cpu_costop_summation{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} / (20 * 1000)\n) \n* 100",
+          "expr": "(\navg(\n    rate(vmware_host_cpu_costop_seconds_total{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}[$__rate_interval])\n)\n) * 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Costop",
@@ -1664,7 +1664,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_host_mem_consumed_average{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * 1024\n) / \nsum(\n    vmware_host_mem_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)\n* 100",
+          "expr": "sum(\n    vmware_host_mem_consumed_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) / \nsum(\n    vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)\n* 100",
           "interval": "20s",
           "legendFormat": "Consumed",
           "range": true,
@@ -1676,7 +1676,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_host_mem_active_average{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * 1024\n) / \nsum(\n    vmware_host_mem_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)\n* 100",
+          "expr": "sum(\n    vmware_host_mem_active_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) / \nsum(\n    vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)\n* 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Active",
@@ -1689,7 +1689,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_host_mem_shared_average{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * 1024\n)/ \nsum(\n    vmware_host_mem_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)\n* 100",
+          "expr": "sum(\n    vmware_host_mem_shared_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)/ \nsum(\n    vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)\n* 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Shared",
@@ -1702,7 +1702,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_host_mem_vmmemctl_average{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * 1024\n)/ \nsum(\n    vmware_host_mem_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)\n* 100",
+          "expr": "sum(\n    vmware_host_mem_balloon_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)/ \nsum(\n    vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)\n* 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Ballooned",
@@ -1803,7 +1803,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(vmware_host_net_bytesRx_average{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", pfinstance!~\"^vusb.*\"} * 8192)",
+          "expr": "sum(vmware_host_net_receive_bytes_per_second{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", pfinstance!~\"^vusb.*\"} * 8)",
           "hide": false,
           "interval": "20s",
           "legendFormat": "rx: {{pfinstance}} ",
@@ -1816,7 +1816,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(vmware_host_net_bytesTx_average{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", pfinstance!~\"^vusb.*\"} * -8192)",
+          "expr": "sum(vmware_host_net_transmit_bytes_per_second{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", pfinstance!~\"^vusb.*\"} * -8)",
           "hide": false,
           "interval": "20s",
           "legendFormat": "tx: {{pfinstance}}",
@@ -1892,7 +1892,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "topk(\n  $top,\n  max_over_time(\n    (\n      sum(\n        vmware_vm_net_bytesRx_average{\n          vcenter=~\"$vcenter\",\n          pfinstance!~\"^vmnic.*|^vusb.*\"\n        }\n      ) by (vm)\n        * on (vm) group_left\n          vmware_vm_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n    )[$__range:]\n  )\n) * 8192",
+          "expr": "topk(\n  $top,\n  max_over_time(\n    (\n      sum(\n        vmware_vm_net_receive_bytes_per_second{\n          vcenter=~\"$vcenter\",\n          pfinstance!~\"^vmnic.*|^vusb.*\"\n        }\n      ) by (vm)\n        * on (vm) group_left\n          vmware_vm_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n    )[$__range:]\n  )\n) * 8",
           "interval": "20s",
           "legendFormat": "{{vm}}",
           "range": true,
@@ -1967,7 +1967,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "topk(\n  $top,\n  max_over_time(\n    (\n      sum(\n        vmware_vm_net_bytesTx_average{\n          vcenter=~\"$vcenter\",\n          pfinstance!~\"^vmnic.*|^vusb.*\"\n        }\n      ) by (vm)\n        * on (vm) group_left\n          vmware_vm_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n    )[$__range:]\n  )\n) * 8192",
+          "expr": "topk(\n  $top,\n  max_over_time(\n    (\n      sum(\n        vmware_vm_net_transmit_bytes_per_second{\n          vcenter=~\"$vcenter\",\n          pfinstance!~\"^vmnic.*|^vusb.*\"\n        }\n      ) by (vm)\n        * on (vm) group_left\n          vmware_vm_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n    )[$__range:]\n  )\n) * 8",
           "interval": "20s",
           "legendFormat": "{{vm}}",
           "range": true,
@@ -2124,7 +2124,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_host_cpu_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * on (hostmo) group_left \nvmware_host_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", host=~\"$host\"} * 1000 * 1000",
+          "expr": "vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * on (hostmo) group_left \nvmware_host_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", host=~\"$host\"}",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -2260,7 +2260,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_host_mem_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * on (hostmo) group_left \nvmware_host_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", host=~\"$host\"}",
+          "expr": "vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * on (hostmo) group_left \nvmware_host_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", host=~\"$host\"}",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -2337,7 +2337,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n  vmware_host_cpu_usagemhz_average{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * on (hostmo) group_left \n  vmware_host_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", host=~\"$host\"}\n) /\nsum(\n  (\n    vmware_host_cpu_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * on (hostmo) group_left \nvmware_host_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", host=~\"$host\"}\n  ) * \n  (\n    vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * on (hostmo) group_left \nvmware_host_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", host=~\"$host\"}\n  )\n) \n* 100",
+          "expr": "sum(\n  vmware_host_cpu_usage_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * on (hostmo) group_left \n  vmware_host_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", host=~\"$host\"}\n) /\nsum(\n  (\n    vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * on (hostmo) group_left \nvmware_host_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", host=~\"$host\"}\n  ) * \n  (\n    vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * on (hostmo) group_left \nvmware_host_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", host=~\"$host\"}\n  )\n) \n* 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "__auto",
@@ -2414,7 +2414,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_host_mem_consumed_average{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * 1024 * on (hostmo) group_left \nvmware_host_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", host=~\"$host\"}\n) / \nsum( \n    vmware_host_mem_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * on (hostmo) group_left \nvmware_host_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", host=~\"$host\"}\n)\n* 100\n",
+          "expr": "sum(\n    vmware_host_mem_consumed_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * on (hostmo) group_left \nvmware_host_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", host=~\"$host\"}\n) / \nsum( \n    vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * on (hostmo) group_left \nvmware_host_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", host=~\"$host\"}\n)\n* 100\n",
           "interval": "20s",
           "legendFormat": "__auto",
           "range": true,
@@ -2562,7 +2562,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "(\n    (\n        vmware_host_cpu_capacity{vcenter=~\"$vcenter\", host=~\"$host\"} *\n        vmware_host_cpu_corecount{vcenter=~\"$vcenter\", host=~\"$host\"} \n    ) - \n    (\n        vmware_host_cpu_usagemhz_average{vcenter=~\"$vcenter\", host=~\"$host\"}\n    )\n) * 1000 * 1000",
+          "expr": "(\n    (\n        vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", host=~\"$host\"} *\n        vmware_host_cpu_corecount{vcenter=~\"$vcenter\", host=~\"$host\"} \n    ) - \n    (\n        vmware_host_cpu_usage_hertz{vcenter=~\"$vcenter\", host=~\"$host\"}\n    )\n)",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -2593,7 +2593,7 @@
               }
             ]
           },
-          "unit": "mbytes"
+          "unit": "bytes"
         },
         "overrides": []
       },
@@ -2630,7 +2630,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_vm_mem_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) / \nsum(\n   vmware_host_cpu_corecount{ vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)",
+          "expr": "sum(\n    vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) / \nsum(\n   vmware_host_cpu_corecount{ vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -2698,7 +2698,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_host_mem_capacity{vcenter=~\"$vcenter\", host=~\"$host\"}\n- \n(\n    vmware_host_mem_consumed_average{vcenter=~\"$vcenter\", host=~\"$host\"} * 1024\n)",
+          "expr": "vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", host=~\"$host\"}\n- \n(\n    vmware_host_mem_consumed_bytes{vcenter=~\"$vcenter\", host=~\"$host\"}\n)",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,

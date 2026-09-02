@@ -1,0 +1,592 @@
+[
+  {
+    "counter": "(static)",
+    "factor": 1,
+    "new": "vmware_datastore_capacity_bytes",
+    "old": "vmware_datastore_capacity",
+    "stats_type": "absolute",
+    "subsystem": "",
+    "type": "gauge",
+    "unit": ""
+  },
+  {
+    "counter": "disk.provisioned.latest",
+    "factor": 1024,
+    "new": "vmware_datastore_disk_provisioned_bytes",
+    "old": "vmware_datastore_disk_provisioned_latest",
+    "stats_type": "absolute",
+    "subsystem": "datastore",
+    "type": "gauge",
+    "unit": "kiloBytes"
+  },
+  {
+    "counter": "disk.used.latest",
+    "factor": 1024,
+    "new": "vmware_datastore_disk_used_bytes",
+    "old": "vmware_datastore_disk_used_latest",
+    "stats_type": "absolute",
+    "subsystem": "datastore",
+    "type": "gauge",
+    "unit": "kiloBytes"
+  },
+  {
+    "counter": "(static)",
+    "factor": 1,
+    "new": "vmware_datastore_free_bytes",
+    "old": "vmware_datastore_free",
+    "stats_type": "absolute",
+    "subsystem": "",
+    "type": "gauge",
+    "unit": ""
+  },
+  {
+    "counter": "(static)",
+    "factor": 1000000,
+    "new": "vmware_host_cpu_capacity_hertz",
+    "old": "vmware_host_cpu_capacity",
+    "stats_type": "absolute",
+    "subsystem": "",
+    "type": "gauge",
+    "unit": ""
+  },
+  {
+    "counter": "(static)",
+    "factor": 1000000,
+    "new": "vmware_host_cpu_capacity_hertz",
+    "old": "vmware_host_cpu_capacity_mhz",
+    "stats_type": "absolute",
+    "subsystem": "",
+    "type": "gauge",
+    "unit": ""
+  },
+  {
+    "counter": "cpu.costop.summation",
+    "factor": 0.001,
+    "new": "vmware_host_cpu_costop_seconds_total",
+    "old": "vmware_host_cpu_costop_summation",
+    "stats_type": "delta",
+    "subsystem": "host",
+    "type": "counter",
+    "unit": "millisecond"
+  },
+  {
+    "counter": "cpu.demand.average",
+    "factor": 1000000,
+    "new": "vmware_host_cpu_demand_hertz",
+    "old": "vmware_host_cpu_demand_average",
+    "stats_type": "absolute",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "megaHertz"
+  },
+  {
+    "counter": "cpu.entitlement.latest",
+    "factor": 1000000,
+    "new": "vmware_host_cpu_entitlement_hertz",
+    "old": "vmware_host_cpu_entitlement_latest",
+    "stats_type": "absolute",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "megaHertz"
+  },
+  {
+    "counter": "cpu.latency.average",
+    "factor": 0.0001,
+    "new": "vmware_host_cpu_latency_ratio",
+    "old": "vmware_host_cpu_latency_average",
+    "stats_type": "rate",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "percent"
+  },
+  {
+    "counter": "cpu.maxlimited.summation",
+    "factor": 0.001,
+    "new": "vmware_host_cpu_maxlimited_seconds_total",
+    "old": "vmware_host_cpu_maxlimited_summation",
+    "stats_type": "delta",
+    "subsystem": "host",
+    "type": "counter",
+    "unit": "millisecond"
+  },
+  {
+    "counter": "cpu.readiness.average",
+    "factor": 0.0001,
+    "new": "vmware_host_cpu_readiness_ratio",
+    "old": "vmware_host_cpu_readiness_average",
+    "stats_type": "rate",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "percent"
+  },
+  {
+    "counter": "cpu.ready.summation",
+    "factor": 0.001,
+    "new": "vmware_host_cpu_ready_seconds_total",
+    "old": "vmware_host_cpu_ready_summation",
+    "stats_type": "delta",
+    "subsystem": "host",
+    "type": "counter",
+    "unit": "millisecond"
+  },
+  {
+    "counter": "cpu.usagemhz.average",
+    "factor": 1000000,
+    "new": "vmware_host_cpu_usage_hertz",
+    "old": "vmware_host_cpu_usagemhz_average",
+    "stats_type": "rate",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "megaHertz"
+  },
+  {
+    "counter": "datastore.numberReadAveraged.average",
+    "factor": 1,
+    "new": "vmware_host_datastore_read_operations",
+    "old": "vmware_host_datastore_numberReadAveraged_average",
+    "stats_type": "rate",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "number"
+  },
+  {
+    "counter": "datastore.numberWriteAveraged.average",
+    "factor": 1,
+    "new": "vmware_host_datastore_write_operations",
+    "old": "vmware_host_datastore_numberWriteAveraged_average",
+    "stats_type": "rate",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "number"
+  },
+  {
+    "counter": "datastore.read.average",
+    "factor": 1024,
+    "new": "vmware_host_datastore_read_bytes_per_second",
+    "old": "vmware_host_datastore_read_average",
+    "stats_type": "rate",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "kiloBytesPerSecond"
+  },
+  {
+    "counter": "datastore.totalReadLatency.average",
+    "factor": 0.001,
+    "new": "vmware_host_datastore_read_latency_seconds",
+    "old": "vmware_host_datastore_totalReadLatency_average",
+    "stats_type": "absolute",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "millisecond"
+  },
+  {
+    "counter": "datastore.totalWriteLatency.average",
+    "factor": 0.001,
+    "new": "vmware_host_datastore_write_latency_seconds",
+    "old": "vmware_host_datastore_totalWriteLatency_average",
+    "stats_type": "absolute",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "millisecond"
+  },
+  {
+    "counter": "datastore.write.average",
+    "factor": 1024,
+    "new": "vmware_host_datastore_write_bytes_per_second",
+    "old": "vmware_host_datastore_write_average",
+    "stats_type": "rate",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "kiloBytesPerSecond"
+  },
+  {
+    "counter": "mem.active.average",
+    "factor": 1024,
+    "new": "vmware_host_mem_active_bytes",
+    "old": "vmware_host_mem_active_average",
+    "stats_type": "absolute",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "kiloBytes"
+  },
+  {
+    "counter": "(static)",
+    "factor": 1,
+    "new": "vmware_host_mem_capacity_bytes",
+    "old": "vmware_host_mem_capacity",
+    "stats_type": "absolute",
+    "subsystem": "",
+    "type": "gauge",
+    "unit": ""
+  },
+  {
+    "counter": "mem.consumed.average",
+    "factor": 1024,
+    "new": "vmware_host_mem_consumed_bytes",
+    "old": "vmware_host_mem_consumed_average",
+    "stats_type": "absolute",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "kiloBytes"
+  },
+  {
+    "counter": "mem.entitlement.average",
+    "factor": 1024,
+    "new": "vmware_host_mem_entitlement_bytes",
+    "old": "vmware_host_mem_entitlement_average",
+    "stats_type": "absolute",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "kiloBytes"
+  },
+  {
+    "counter": "mem.shared.average",
+    "factor": 1024,
+    "new": "vmware_host_mem_shared_bytes",
+    "old": "vmware_host_mem_shared_average",
+    "stats_type": "absolute",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "kiloBytes"
+  },
+  {
+    "counter": "mem.swapped.average",
+    "factor": 1024,
+    "new": "vmware_host_mem_swapped_bytes",
+    "old": "vmware_host_mem_swapped_average",
+    "stats_type": "absolute",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "kiloBytes"
+  },
+  {
+    "counter": "mem.vmmemctl.average",
+    "factor": 1024,
+    "new": "vmware_host_mem_balloon_bytes",
+    "old": "vmware_host_mem_vmmemctl_average",
+    "stats_type": "absolute",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "kiloBytes"
+  },
+  {
+    "counter": "net.bytesRx.average",
+    "factor": 1024,
+    "new": "vmware_host_net_receive_bytes_per_second",
+    "old": "vmware_host_net_bytesRx_average",
+    "stats_type": "rate",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "kiloBytesPerSecond"
+  },
+  {
+    "counter": "net.bytesTx.average",
+    "factor": 1024,
+    "new": "vmware_host_net_transmit_bytes_per_second",
+    "old": "vmware_host_net_bytesTx_average",
+    "stats_type": "rate",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "kiloBytesPerSecond"
+  },
+  {
+    "counter": "net.droppedRx.summation",
+    "factor": 1,
+    "new": "vmware_host_net_receive_dropped_total",
+    "old": "vmware_host_net_droppedRx_summation",
+    "stats_type": "delta",
+    "subsystem": "host",
+    "type": "counter",
+    "unit": "number"
+  },
+  {
+    "counter": "net.droppedTx.summation",
+    "factor": 1,
+    "new": "vmware_host_net_transmit_dropped_total",
+    "old": "vmware_host_net_droppedTx_summation",
+    "stats_type": "delta",
+    "subsystem": "host",
+    "type": "counter",
+    "unit": "number"
+  },
+  {
+    "counter": "net.errorsRx.summation",
+    "factor": 1,
+    "new": "vmware_host_net_receive_errors_total",
+    "old": "vmware_host_net_errorsRx_summation",
+    "stats_type": "delta",
+    "subsystem": "host",
+    "type": "counter",
+    "unit": "number"
+  },
+  {
+    "counter": "net.errorsTx.summation",
+    "factor": 1,
+    "new": "vmware_host_net_transmit_errors_total",
+    "old": "vmware_host_net_errorsTx_summation",
+    "stats_type": "delta",
+    "subsystem": "host",
+    "type": "counter",
+    "unit": "number"
+  },
+  {
+    "counter": "sys.uptime.latest",
+    "factor": 1,
+    "new": "vmware_host_sys_uptime_seconds",
+    "old": "vmware_host_sys_uptime_latest",
+    "stats_type": "absolute",
+    "subsystem": "host",
+    "type": "gauge",
+    "unit": "second"
+  },
+  {
+    "counter": "cpu.costop.summation",
+    "factor": 0.001,
+    "new": "vmware_vm_cpu_costop_seconds_total",
+    "old": "vmware_vm_cpu_costop_summation",
+    "stats_type": "delta",
+    "subsystem": "vm",
+    "type": "counter",
+    "unit": "millisecond"
+  },
+  {
+    "counter": "cpu.demand.average",
+    "factor": 1000000,
+    "new": "vmware_vm_cpu_demand_hertz",
+    "old": "vmware_vm_cpu_demand_average",
+    "stats_type": "absolute",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "megaHertz"
+  },
+  {
+    "counter": "cpu.entitlement.latest",
+    "factor": 1000000,
+    "new": "vmware_vm_cpu_entitlement_hertz",
+    "old": "vmware_vm_cpu_entitlement_latest",
+    "stats_type": "absolute",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "megaHertz"
+  },
+  {
+    "counter": "cpu.latency.average",
+    "factor": 0.0001,
+    "new": "vmware_vm_cpu_latency_ratio",
+    "old": "vmware_vm_cpu_latency_average",
+    "stats_type": "rate",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "percent"
+  },
+  {
+    "counter": "cpu.maxlimited.summation",
+    "factor": 0.001,
+    "new": "vmware_vm_cpu_maxlimited_seconds_total",
+    "old": "vmware_vm_cpu_maxlimited_summation",
+    "stats_type": "delta",
+    "subsystem": "vm",
+    "type": "counter",
+    "unit": "millisecond"
+  },
+  {
+    "counter": "cpu.readiness.average",
+    "factor": 0.0001,
+    "new": "vmware_vm_cpu_readiness_ratio",
+    "old": "vmware_vm_cpu_readiness_average",
+    "stats_type": "rate",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "percent"
+  },
+  {
+    "counter": "cpu.ready.summation",
+    "factor": 0.001,
+    "new": "vmware_vm_cpu_ready_seconds_total",
+    "old": "vmware_vm_cpu_ready_summation",
+    "stats_type": "delta",
+    "subsystem": "vm",
+    "type": "counter",
+    "unit": "millisecond"
+  },
+  {
+    "counter": "cpu.usagemhz.average",
+    "factor": 1000000,
+    "new": "vmware_vm_cpu_usage_hertz",
+    "old": "vmware_vm_cpu_usagemhz_average",
+    "stats_type": "rate",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "megaHertz"
+  },
+  {
+    "counter": "(static)",
+    "factor": 1,
+    "new": "vmware_vm_datastore_capacity_used_bytes",
+    "old": "vmware_vm_datastore_capacity_used",
+    "stats_type": "absolute",
+    "subsystem": "",
+    "type": "gauge",
+    "unit": ""
+  },
+  {
+    "counter": "datastore.numberReadAveraged.average",
+    "factor": 1,
+    "new": "vmware_vm_datastore_read_operations",
+    "old": "vmware_vm_datastore_numberReadAveraged_average",
+    "stats_type": "rate",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "number"
+  },
+  {
+    "counter": "datastore.numberWriteAveraged.average",
+    "factor": 1,
+    "new": "vmware_vm_datastore_write_operations",
+    "old": "vmware_vm_datastore_numberWriteAveraged_average",
+    "stats_type": "rate",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "number"
+  },
+  {
+    "counter": "datastore.read.average",
+    "factor": 1024,
+    "new": "vmware_vm_datastore_read_bytes_per_second",
+    "old": "vmware_vm_datastore_read_average",
+    "stats_type": "rate",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "kiloBytesPerSecond"
+  },
+  {
+    "counter": "datastore.totalReadLatency.average",
+    "factor": 0.001,
+    "new": "vmware_vm_datastore_read_latency_seconds",
+    "old": "vmware_vm_datastore_totalReadLatency_average",
+    "stats_type": "absolute",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "millisecond"
+  },
+  {
+    "counter": "datastore.totalWriteLatency.average",
+    "factor": 0.001,
+    "new": "vmware_vm_datastore_write_latency_seconds",
+    "old": "vmware_vm_datastore_totalWriteLatency_average",
+    "stats_type": "absolute",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "millisecond"
+  },
+  {
+    "counter": "datastore.write.average",
+    "factor": 1024,
+    "new": "vmware_vm_datastore_write_bytes_per_second",
+    "old": "vmware_vm_datastore_write_average",
+    "stats_type": "rate",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "kiloBytesPerSecond"
+  },
+  {
+    "counter": "mem.active.average",
+    "factor": 1024,
+    "new": "vmware_vm_mem_active_bytes",
+    "old": "vmware_vm_mem_active_average",
+    "stats_type": "absolute",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "kiloBytes"
+  },
+  {
+    "counter": "(static)",
+    "factor": 1048576,
+    "new": "vmware_vm_mem_capacity_bytes",
+    "old": "vmware_vm_mem_capacity",
+    "stats_type": "absolute",
+    "subsystem": "",
+    "type": "gauge",
+    "unit": ""
+  },
+  {
+    "counter": "mem.consumed.average",
+    "factor": 1024,
+    "new": "vmware_vm_mem_consumed_bytes",
+    "old": "vmware_vm_mem_consumed_average",
+    "stats_type": "absolute",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "kiloBytes"
+  },
+  {
+    "counter": "mem.entitlement.average",
+    "factor": 1024,
+    "new": "vmware_vm_mem_entitlement_bytes",
+    "old": "vmware_vm_mem_entitlement_average",
+    "stats_type": "absolute",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "kiloBytes"
+  },
+  {
+    "counter": "mem.shared.average",
+    "factor": 1024,
+    "new": "vmware_vm_mem_shared_bytes",
+    "old": "vmware_vm_mem_shared_average",
+    "stats_type": "absolute",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "kiloBytes"
+  },
+  {
+    "counter": "mem.swapped.average",
+    "factor": 1024,
+    "new": "vmware_vm_mem_swapped_bytes",
+    "old": "vmware_vm_mem_swapped_average",
+    "stats_type": "absolute",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "kiloBytes"
+  },
+  {
+    "counter": "mem.vmmemctl.average",
+    "factor": 1024,
+    "new": "vmware_vm_mem_balloon_bytes",
+    "old": "vmware_vm_mem_vmmemctl_average",
+    "stats_type": "absolute",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "kiloBytes"
+  },
+  {
+    "counter": "net.bytesRx.average",
+    "factor": 1024,
+    "new": "vmware_vm_net_receive_bytes_per_second",
+    "old": "vmware_vm_net_bytesRx_average",
+    "stats_type": "rate",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "kiloBytesPerSecond"
+  },
+  {
+    "counter": "net.bytesTx.average",
+    "factor": 1024,
+    "new": "vmware_vm_net_transmit_bytes_per_second",
+    "old": "vmware_vm_net_bytesTx_average",
+    "stats_type": "rate",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "kiloBytesPerSecond"
+  },
+  {
+    "counter": "sys.uptime.latest",
+    "factor": 1,
+    "new": "vmware_vm_sys_uptime_seconds",
+    "old": "vmware_vm_sys_uptime_latest",
+    "stats_type": "absolute",
+    "subsystem": "vm",
+    "type": "gauge",
+    "unit": "second"
+  }
+]

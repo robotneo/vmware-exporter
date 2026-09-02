@@ -176,7 +176,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_vm_cpu_usagemhz_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} / \n(\n  scalar(vmware_host_cpu_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}) *\n  scalar(vmware_vm_cpu_corecount{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"})\n) \n* 100\n",
+          "expr": "vmware_vm_cpu_usage_hertz{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} / \n(\n  scalar(vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}) *\n  scalar(vmware_vm_cpu_corecount{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"})\n) \n* 100\n",
           "interval": "20s",
           "legendFormat": "__auto",
           "range": true,
@@ -253,7 +253,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "scalar(\n    vmware_vm_mem_active_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n) / \n(\n    vmware_vm_mem_capacity{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * 1024\n)\n* 100\n",
+          "expr": "scalar(\n    vmware_vm_mem_active_bytes{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n) / \n(\n    vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n)\n* 100\n",
           "interval": "20s",
           "legendFormat": "{{vm}}",
           "range": true,
@@ -321,7 +321,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_vm_cpu_usagemhz_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * 1000 * 1000",
+          "expr": "vmware_vm_cpu_usage_hertz{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}",
           "interval": "20s",
           "legendFormat": "{{vm}}",
           "range": true,
@@ -396,7 +396,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_vm_cpu_demand_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} / \nvmware_vm_cpu_entitlement_latest{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}",
+          "expr": "vmware_vm_cpu_demand_hertz{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} / \nvmware_vm_cpu_entitlement_hertz{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}",
           "interval": "20s",
           "legendFormat": "{{vm}}",
           "range": true,
@@ -418,7 +418,7 @@
           },
           "decimals": 2,
           "mappings": [],
-          "max": 100,
+          "max": 1.0,
           "min": 0,
           "noValue": "0",
           "thresholds": {
@@ -430,15 +430,15 @@
               },
               {
                 "color": "orange",
-                "value": 60
+                "value": 0.6
               },
               {
                 "color": "red",
-                "value": 80
+                "value": 0.8
               }
             ]
           },
-          "unit": "percent"
+          "unit": "percentunit"
         },
         "overrides": []
       },
@@ -473,7 +473,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_vm_cpu_latency_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} / 100 ",
+          "expr": "vmware_vm_cpu_latency_ratio{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} ",
           "interval": "20s",
           "legendFormat": "{{vm}}",
           "range": true,
@@ -540,7 +540,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_vm_datastore_capacity_used{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}",
+          "expr": "vmware_vm_datastore_capacity_used_bytes{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}",
           "interval": "20s",
           "legendFormat": "{{vm}}",
           "range": true,
@@ -647,7 +647,7 @@
               }
             ]
           },
-          "unit": "mbytes"
+          "unit": "bytes"
         },
         "overrides": []
       },
@@ -682,7 +682,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_vm_mem_capacity{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}",
+          "expr": "vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}",
           "interval": "20s",
           "legendFormat": "{{vm}}",
           "range": true,
@@ -715,7 +715,7 @@
               }
             ]
           },
-          "unit": "kbytes"
+          "unit": "bytes"
         },
         "overrides": []
       },
@@ -750,7 +750,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_vm_mem_active_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}",
+          "expr": "vmware_vm_mem_active_bytes{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}",
           "interval": "20s",
           "legendFormat": "{{vm}}",
           "range": true,
@@ -818,7 +818,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "vmware_vm_sys_uptime_latest{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}  ",
+          "expr": "vmware_vm_sys_uptime_seconds{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}  ",
           "format": "time_series",
           "instant": false,
           "interval": "20s",
@@ -921,7 +921,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_vm_cpu_usagemhz_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} / \n(\n  scalar(\n    vmware_host_cpu_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n  ) *\n  scalar(\n    vmware_vm_cpu_corecount{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n  )\n) \n* 100",
+          "expr": "vmware_vm_cpu_usage_hertz{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} / \n(\n  scalar(\n    vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n  ) *\n  scalar(\n    vmware_vm_cpu_corecount{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n  )\n) \n* 100",
           "interval": "20s",
           "legendFormat": "Usage",
           "range": true,
@@ -933,7 +933,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_vm_cpu_latency_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} / 100",
+          "expr": "(vmware_vm_cpu_latency_ratio{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}) * 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Latency",
@@ -946,7 +946,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "(\n    scalar(\n        vmware_vm_cpu_ready_summation{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} \n    ) / (20 * 1000)\n) /\nvmware_vm_cpu_corecount{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * 100",
+          "expr": "(\n(\n    scalar(\n        rate(vmware_vm_cpu_ready_seconds_total{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}[$__rate_interval]) \n    )\n) /\nvmware_vm_cpu_corecount{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n) * 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Ready",
@@ -959,7 +959,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "(\n    vmware_vm_cpu_costop_summation{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} \n    / (20 * 1000)\n) * 100",
+          "expr": "(\n(\n    rate(vmware_vm_cpu_costop_seconds_total{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}[$__rate_interval])\n)\n) * 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Costop",
@@ -972,7 +972,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_host_cpu_capacity{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * 1000 * 1000",
+          "expr": "vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}",
           "hide": true,
           "interval": "20s",
           "legendFormat": "Usage MHz",
@@ -985,7 +985,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_vm_cpu_usagemhz_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * 1000 * 1000",
+          "expr": "vmware_vm_cpu_usage_hertz{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}",
           "hide": true,
           "interval": "20s",
           "legendFormat": "MHz Used",
@@ -1111,7 +1111,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "scalar(\nvmware_vm_mem_consumed_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n) / \n(\n    vmware_vm_mem_capacity{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * 1024\n)\n* 100",
+          "expr": "scalar(\nvmware_vm_mem_consumed_bytes{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n) / \n(\n    vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n)\n* 100",
           "interval": "20s",
           "legendFormat": "Consumed",
           "range": true,
@@ -1123,7 +1123,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "scalar(\n    vmware_vm_mem_active_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n) / \n(\n    vmware_vm_mem_capacity{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * 1024\n)\n* 100",
+          "expr": "scalar(\n    vmware_vm_mem_active_bytes{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n) / \n(\n    vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n)\n* 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Active",
@@ -1136,7 +1136,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "scalar(\n    vmware_vm_mem_entitlement_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n) / \n(\n    vmware_vm_mem_capacity{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * 1024\n)\n* 100",
+          "expr": "scalar(\n    vmware_vm_mem_entitlement_bytes{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n) / \n(\n    vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n)\n* 100",
           "hide": true,
           "interval": "20s",
           "legendFormat": "Entitlement",
@@ -1149,7 +1149,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "scalar(\n    vmware_vm_mem_shared_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n) / \n(\n    vmware_vm_mem_capacity{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * 1024\n)\n* 100",
+          "expr": "scalar(\n    vmware_vm_mem_shared_bytes{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n) / \n(\n    vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n)\n* 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Shared",
@@ -1162,7 +1162,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "scalar(\n    vmware_vm_mem_vmmemctl_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} \n) / \n(\n    vmware_vm_mem_capacity{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * 1024\n)\n* 100",
+          "expr": "scalar(\n    vmware_vm_mem_balloon_bytes{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} \n) / \n(\n    vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n)\n* 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Ballooned",
@@ -1175,7 +1175,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "scalar(\n    vmware_vm_mem_swapped_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} \n) / \n(\n    vmware_vm_mem_capacity{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * 1024\n)\n* 100",
+          "expr": "scalar(\n    vmware_vm_mem_swapped_bytes{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} \n) / \n(\n    vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"}\n)\n* 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Swapped",
@@ -1273,7 +1273,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "label_replace(\n  (vmware_vm_net_bytesRx_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\", pfinstance!~\"vmnic.*|^vusb.*\"} * 8192),\n  \"nic\", \"vNIC$1\", \"pfinstance\", \".*([0-9]{1}$)\"\n)",
+          "expr": "label_replace(\n  (vmware_vm_net_receive_bytes_per_second{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\", pfinstance!~\"vmnic.*|^vusb.*\"} * 8),\n  \"nic\", \"vNIC$1\", \"pfinstance\", \".*([0-9]{1}$)\"\n)",
           "interval": "20s",
           "legendFormat": "rx: {{nic}} ",
           "range": true,
@@ -1285,7 +1285,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "label_replace(\n  (vmware_vm_net_bytesTx_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\", pfinstance!~\"vmnic.*|^vusb.*\"} * -8192),\n  \"nic\", \"vNIC$1\", \"pfinstance\", \".*([0-9]{1}$)\"\n)",
+          "expr": "label_replace(\n  (vmware_vm_net_transmit_bytes_per_second{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\", pfinstance!~\"vmnic.*|^vusb.*\"} * -8),\n  \"nic\", \"vNIC$1\", \"pfinstance\", \".*([0-9]{1}$)\"\n)",
           "hide": false,
           "interval": "20s",
           "legendFormat": "tx: {{nic}}",
@@ -1349,7 +1349,7 @@
               }
             ]
           },
-          "unit": "ms"
+          "unit": "s"
         },
         "overrides": []
       },
@@ -1383,7 +1383,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_vm_datastore_totalReadLatency_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * \non (pfinstance) group_left(ds)\nvmware_datastore_info{vcenter=~\"$vcenter\"}",
+          "expr": "vmware_vm_datastore_read_latency_seconds{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * \non (pfinstance) group_left(ds)\nvmware_datastore_info{vcenter=~\"$vcenter\"}",
           "interval": "20s",
           "legendFormat": "read: {{ds}} ",
           "range": true,
@@ -1395,7 +1395,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_vm_datastore_totalWriteLatency_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * \non (pfinstance) group_left(ds)\nvmware_datastore_info{vcenter=~\"$vcenter\"} * -1",
+          "expr": "vmware_vm_datastore_write_latency_seconds{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * \non (pfinstance) group_left(ds)\nvmware_datastore_info{vcenter=~\"$vcenter\"} * -1",
           "hide": false,
           "interval": "20s",
           "legendFormat": "write: {{ds}}",
@@ -1459,7 +1459,7 @@
               }
             ]
           },
-          "unit": "KiBs"
+          "unit": "Bps"
         },
         "overrides": []
       },
@@ -1493,7 +1493,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_vm_datastore_read_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * \non (pfinstance) group_left(ds)\nvmware_datastore_info{vcenter=~\"$vcenter\"}",
+          "expr": "vmware_vm_datastore_read_bytes_per_second{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * \non (pfinstance) group_left(ds)\nvmware_datastore_info{vcenter=~\"$vcenter\"}",
           "interval": "20s",
           "legendFormat": "read: {{ds}} ",
           "range": true,
@@ -1505,7 +1505,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_vm_datastore_write_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * \non (pfinstance) group_left(ds)\nvmware_datastore_info{vcenter=~\"$vcenter\"} * -1",
+          "expr": "vmware_vm_datastore_write_bytes_per_second{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * \non (pfinstance) group_left(ds)\nvmware_datastore_info{vcenter=~\"$vcenter\"} * -1",
           "hide": false,
           "interval": "20s",
           "legendFormat": "write: {{ds}}",
@@ -1603,7 +1603,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_vm_datastore_numberReadAveraged_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * \non (pfinstance) group_left(ds)\nvmware_datastore_info{vcenter=~\"$vcenter\"}",
+          "expr": "vmware_vm_datastore_read_operations{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * \non (pfinstance) group_left(ds)\nvmware_datastore_info{vcenter=~\"$vcenter\"}",
           "interval": "20s",
           "legendFormat": "read: {{ds}} ",
           "range": true,
@@ -1615,7 +1615,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "vmware_vm_datastore_numberWriteAveraged_average{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * \non (pfinstance) group_left(ds)\nvmware_datastore_info{vcenter=~\"$vcenter\"} * -1",
+          "expr": "vmware_vm_datastore_write_operations{vcenter=~\"$vcenter\", vmmo=~\"$vmmo\"} * \non (pfinstance) group_left(ds)\nvmware_datastore_info{vcenter=~\"$vcenter\"} * -1",
           "hide": false,
           "interval": "20s",
           "legendFormat": "write: {{ds}}",

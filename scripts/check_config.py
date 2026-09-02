@@ -44,12 +44,21 @@ documentation check:
    Every ecosystem the repository actually contains must be declared, so drift
    arrives as a pull request rather than as a broken release.
 
+6. **Dashboards querying metrics that no longer exist.** The bundled dashboards
+   were migrated to the renamed metrics, and the unit conversions the exporter
+   now applies internally were removed from the queries. Both failure modes are
+   silent in Grafana: a stale metric name draws an empty panel, and a leftover
+   `* 1024` draws a number that is wrong by three orders of magnitude. The rules
+   are reused from scripts/migrate_dashboards.py rather than duplicated.
+
 Exit code is 0 when clean, 1 when any check fails, 2 on a missing dependency.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import os
+import pathlib
 import re
 import shutil
 import subprocess
@@ -423,6 +432,48 @@ def check_conf(failures: list[str], flags: set[str]) -> None:
                     )
 
 
+def check_dashboards(failures: list[str]) -> None:
+    """Assert the bundled dashboards match the metrics the exporter emits.
+
+    The dashboards were migrated to the renamed metrics by
+    scripts/migrate_dashboards.py, which also cancelled the unit conversions the
+    exporter now applies itself. Both are invisible failures: a panel querying a
+    metric that no longer exists renders an empty graph, and one that keeps a
+    stale * 1024 renders a number that is wrong by three orders of magnitude. No
+    error appears in either case, so nothing but a check like this catches a
+    regression from a hand-edit.
+
+    The checks live in migrate_dashboards.py rather than being duplicated here --
+    a second copy of the rules would only drift from the first.
+    """
+    script = pathlib.Path(REPO) / "scripts" / "migrate_dashboards.py"
+    dashboards = pathlib.Path(REPO) / "dashboards"
+    if not script.exists() or not dashboards.is_dir():
+        return
+
+    spec = importlib.util.spec_from_file_location("migrate_dashboards", script)
+    if spec is None or spec.loader is None:
+        failures.append(f"could not load {script.name} to check the dashboards")
+        return
+
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+        by_old = module.load_map()
+    except Exception as exc:  # noqa: BLE001 - report, do not crash the whole check
+        failures.append(f"could not load {script.name} to check the dashboards: {exc}")
+        return
+
+    for path in sorted(dashboards.glob("*.json")):
+        try:
+            problems = module.check(path, by_old)
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"{path.name}: could not be checked: {exc}")
+            continue
+        for problem in problems:
+            failures.append(f"{path.name}: {problem}")
+
+
 def main() -> int:
     flags, source = registered_flags()
     if not flags:
@@ -450,6 +501,7 @@ def main() -> int:
     check_conf(failures, flags)
     check_readme_flags(failures, flags, source)
     check_dependabot(failures)
+    check_dashboards(failures)
 
     if failures:
         print("config check FAILED:\n")

@@ -89,10 +89,9 @@ Run with `-metrics.legacy` to get the old names back alongside the new ones
 during migration. See the migration guide in `README.md` for recording rules that
 reconstruct the old names, which is a better long-term position than the flag.
 
-> **The dashboards in `dashboards/` still reference the old names.** They will
-> render empty until either you pass `-metrics.legacy` or a later release
-> migrates them. Grafana cannot distinguish a renamed metric from one with no
-> data, so there is no error — just blank panels.
+> **The dashboards in `dashboards/` were migrated to the new names** — see
+> *Bundled dashboards migrated to the new metric names* below. `-metrics.legacy`
+> is only needed for dashboards and alerting rules of your own.
 
 **Performance counters.** Names are derived from the counter metadata vCenter
 reports, not from a hand-maintained list, so adding a counter cannot silently
@@ -177,6 +176,59 @@ plausible number:
 Counters whose unit is not in the conversion table are emitted under the **old**
 name with a warning logged, rather than guessing a suffix. A wrong unit suffix
 would put wrong numbers into the TSDB with nothing to signal it.
+
+#### Bundled dashboards migrated to the new metric names
+
+The five dashboards in `dashboards/` now query the new names and work against a
+default exporter with no flags. The migration is scripted in
+`scripts/migrate_dashboards.py` so it is reproducible and reviewable; the script
+takes `--check` (verify only) and `--revert` (restore from its backups).
+
+The names were the easy half. Three other things had to move with them, and every
+one of them is invisible in Grafana when it goes wrong:
+
+- **Unit conversions were removed from 126 expressions.** Panels multiplied by
+  `1024`, `1000 * 1000`, `1048576` or `8192` to convert the exporter's kiloBytes
+  and MHz into bytes and hertz. The exporter now emits base units, so a surviving
+  factor would have multiplied the panel by that factor with nothing to indicate
+  it. The script therefore refuses to finish if any such factor is left, rather
+  than trusting its own rewrite.
+- **Panel units were updated to match** — `kbytes`/`mbytes` → `bytes`,
+  `KiBs` → `Bps`, `ms` → `s`. Leaving these alone would have relabelled a correct
+  number with the wrong suffix: a 32 GiB host reading as "32 EB".
+- **The CPU ready and costop panels were rewritten to use `rate()`.** Eight
+  expressions divided a summation counter by a hardcoded `20 * 1000` — an assumed
+  20-second vSphere granularity — and the input to that division was already
+  wrong because of the `*_summation` aggregation bug described below. They now use
+  `rate(..._seconds_total[$__rate_interval])`, deriving the window from the query
+  step. This is the reason the migration could not be validated by "the numbers
+  must match before and after": the old numbers were wrong.
+
+Metric-to-metric mappings are not maintained by hand in the script. They are
+generated from the exporter's own `translatePerfCounter` into
+`scripts/metric_migration_map.json`, and `TestMigrationMapMatchesImplementation`
+fails if the two ever disagree. `scripts/check_config.py` re-runs the dashboard
+checks in CI, so a hand-edit that reintroduces an old name or a stale factor is
+caught there too.
+
+#### Two pre-existing dashboard bugs fixed
+
+Found while migrating, and unrelated to the rename — both were wrong before this
+release too:
+
+- **Network error and drop counts were inflated 8192x.** In `vmware-host-view`'s
+  *Network Errors and Drops* panel, all four series (`errorsRx`, `errorsTx`,
+  `droppedRx`, `droppedTx`) multiplied by `8192`, which is `1024`
+  (kiloBytes → bytes) × `8` (bytes → bits). That is the correct conversion for a
+  throughput panel, and this one was evidently copied from the *Network
+  Throughput* panel above it — but these series count *packets*, which have no
+  such conversion. Now plotted as-is.
+- **Panel units did not match the values.** Several panels declared `kbytes`,
+  `mbytes`, `KiBs` or `ms` while the queries produced base units, and
+  `vmware-vm-view`'s CPU Latency panel kept `max: 100` and thresholds at 60/80
+  after moving to `percentunit`, which would have pinned a 0..1 ratio to the
+  bottom of a 0..100 axis and left it permanently green. Bounds and thresholds are
+  now rescaled with the unit.
 
 #### `*_summation` counters: aggregation was wrong, and they were the wrong type
 
