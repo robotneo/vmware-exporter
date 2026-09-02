@@ -184,6 +184,36 @@ class of breaking change.
   generates on its own: that one only reports whether the HTTP request succeeded,
   and for a multi-target exporter *HTTP fine, vCenter login rejected* is a
   routine outcome that the built-in `up` reports as success.
+- **`vmware_scrape_errors_total{collector}`** — cumulative scrape failure count,
+  and the first counter this exporter has ever had. Every one of the 45+ metrics
+  before it was a gauge, `vmware_scrape_collector_success` included — and
+  `success` can only answer *did the last scrape work*, never *how many times did
+  this fail in the last hour*. An intermittently failing vCenter shows up on a
+  gauge as flicker between scrapes, and Prometheus samples on `scrape_interval`:
+  anything that fails and recovers between two samples is invisible. A counter
+  cannot miss it.
+
+  The `collector="login"` series covers authentication failures. Those are
+  deliberately **not** attributed to the individual collectors — if they were,
+  one expired password would read as N+1 separate failures and drown out the
+  signal you actually want, which is *one specific collector is broken*.
+
+  Collectors that have never failed are emitted with the value `0` rather than
+  omitted. That matters more than it looks: a series that does not exist while
+  everything is healthy makes your alert read *no data* instead of *zero*, and
+  when the first failure finally creates the series, `increase()` has nothing to
+  compute a delta against — so the very first outage is the one you miss.
+
+  Counts are bucketed by target, so in `/probe` mode a rejected password on one
+  vCenter cannot inflate the error count of another.
+
+  ```promql
+  # a single collector failing repeatedly
+  increase(vmware_scrape_errors_total{collector!="login"}[15m]) > 3
+
+  # credentials rejected
+  increase(vmware_scrape_errors_total{collector="login"}[15m]) > 0
+  ```
 - **`vmware_scrape_duration_seconds`** (no labels) — total scrape duration
   including login and logout. The framework only produced
   `vmware_scrape_collector_duration_seconds{collector="all_collectors"}`, which
@@ -239,6 +269,45 @@ class of breaking change.
 - A *Securing the exporter* section in both READMEs, covering the distinction
   between the vCenter-facing connection and the exporter's own listener, and
   documenting the envflag case rule.
+- **`vmware_exporter_build_info` now carries real values.** The metric was always
+  exported, but with `version=""` and `branch=""` — because nothing ever passed
+  the `-X github.com/prometheus/common/version.*` linker flags. Both
+  `.goreleaser.yaml` and the `Dockerfile` now set them.
+
+  The trap here is `revision`: Go stamps it from VCS metadata on its own (1.24
+  onwards), so a plain `go build` produces
+  `build_info{revision="8b75e41…-modified", version=""}` — populated enough to
+  look like it works. It does not. *Which build is this host running* is the most
+  common operational question there is, and until now monitoring could not answer
+  it.
+
+  The `Dockerfile` takes them as build args, since `.dockerignore` excludes
+  `.git` and the build has no access to git metadata:
+
+  ```sh
+  docker build --build-arg VERSION=0.2.0 \
+               --build-arg REVISION=$(git rev-parse HEAD) \
+               --build-arg BRANCH=$(git rev-parse --abbrev-ref HEAD) \
+               --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) .
+  ```
+
+  Omitting them falls back to empty values — the state before this change, not a
+  build failure. A forgotten `--build-arg` should not stop somebody from building
+  the image locally.
+- **`promlint` gates every metric this exporter emits**, via
+  `testutil.CollectAndLint` in two places: `internal/collector` for the
+  self-monitoring metrics, and `vmware/collectors` for the 53 business metrics
+  (the latter reachable because the test suite already had a govmomi simulator).
+  It is Prometheus's own convention checker — missing `_total` on a counter, a
+  `_total` on a gauge, non-base units (`milliseconds`, `kilobytes`), camelCase,
+  absent help text. None of those break anything at runtime; they break the
+  people writing PromQL against them, and by then a rename is a breaking change.
+
+  Four pre-existing violations are exempted with a written reason
+  (`vmware_{host,vm}_net_bytes{Rx,Tx}_average` — the camelCase comes straight
+  from vCenter's own counter names via `net.bytesRx.average`). The exemption list
+  is itself checked: an entry that no longer triggers fails the test, so it
+  cannot linger and silently excuse a future regression.
 
 ### Fixed
 

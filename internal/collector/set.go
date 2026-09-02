@@ -11,6 +11,15 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// loginBucket 是登录阶段在 collector 标签下使用的取值。
+//
+// 登录不是一个 collector，但它需要出现在 errors_total 与
+// collector_duration_seconds 的 collector 标签里 —— 它是最常见的失败点。
+// 提成常量是因为这个字符串出现在三处（duration、errors、Snapshot 的 seed），
+// 手写三遍时改动一处漏掉另两处不会有任何编译错误，只会让某条序列
+// 悄悄用上另一个标签值。
+const loginBucket = "login"
+
 // ScrapeMetrics 是自监控指标的描述符集合。
 //
 // 名称与标签必须与框架产出的完全一致（框架 collector.go:84-96），
@@ -21,6 +30,7 @@ type ScrapeMetrics struct {
 	duration         *prometheus.Desc
 	collectorSuccess *prometheus.Desc
 	collectorSeconds *prometheus.Desc
+	errorsTotal      *prometheus.Desc
 }
 
 // Login 抽象登录/登出，由 vmware/api 实现。
@@ -73,6 +83,22 @@ func newScrapeMetrics(namespace string) ScrapeMetrics {
 			[]string{"collector"},
 			nil,
 		),
+
+		// errors_total 是全库第一个 counter。此前 45+ 个指标全是 gauge，
+		// 包括 collector_success —— 而 success 只能回答「最近一轮成不成」，
+		// 答不出「过去一小时失败了几次」。间歇性故障（vCenter 偶发超时）
+		// 在 gauge 上表现为抓取之间的抖动，Prometheus 按 scrape_interval
+		// 取样，两次采样之间的失败完全看不见；counter 不会漏。
+		//
+		// collector="login" 是登录失败的桶。登录不属于任何 collector，
+		// 但它是最需要计数的失败点，且这个标签值与
+		// collector_duration_seconds{collector="login"} 已有的用法一致。
+		errorsTotal: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "scrape", "errors_total"),
+			"Total number of scrape errors, by collector. The value \"login\" covers failures to authenticate against the target.",
+			[]string{"collector"},
+			nil,
+		),
 	}
 }
 
@@ -98,6 +124,11 @@ type CollectorSet struct {
 	// 见 Collect 里的说明。
 	namespace      string
 	maxConcurrency int
+
+	// errors 是跨请求共享的错误计数器，由调用方持有并注入。
+	// 不能是本结构体拥有的状态 —— 见 errors.go 顶部关于「每请求一实例」
+	// 与 counter 单调性的说明。
+	errors *ScrapeErrors
 }
 
 // Options 是构造 CollectorSet 所需的参数。
@@ -116,12 +147,24 @@ type Options struct {
 
 	// MaxConcurrency 是同时运行的 collector 上限。<= 0 表示不限制。
 	MaxConcurrency int
+
+	// Errors 是跨请求累积的错误计数器。必填。
+	//
+	// 必填而不是「nil 时自动新建一个」：自动新建会让每个请求得到一个
+	// 独立的计数器，于是 errors_total 每轮都从 0 开始 —— 一个坏得很
+	// 安静的 counter，测试与人眼都不容易发现。宁可让忘记传的调用方
+	// 在构造时就拿到 error。
+	Errors *ScrapeErrors
 }
 
 // NewCollectorSet 按 definitions 与 opts.Enabled 构造本轮要运行的 collector 集合。
 func NewCollectorSet(ctx context.Context, definitions []Definition, opts Options) (*CollectorSet, error) {
 	if opts.Login == nil {
 		return nil, fmt.Errorf("collector set requires a Login implementation")
+	}
+
+	if opts.Errors == nil {
+		return nil, fmt.Errorf("collector set requires a ScrapeErrors counter")
 	}
 
 	logger := opts.Logger
@@ -164,6 +207,7 @@ func NewCollectorSet(ctx context.Context, definitions []Definition, opts Options
 		maxConcurrency: opts.MaxConcurrency,
 		logger:         logger,
 		metrics:        newScrapeMetrics(opts.Namespace),
+		errors:         opts.Errors,
 	}, nil
 }
 
@@ -189,6 +233,7 @@ func (cs *CollectorSet) Describe(ch chan<- *prometheus.Desc) {
 	ch <- cs.metrics.duration
 	ch <- cs.metrics.collectorSeconds
 	ch <- cs.metrics.collectorSuccess
+	ch <- cs.metrics.errorsTotal
 }
 
 // Collect 实现 prometheus.Collector：登录、并发跑所有 collector、登出。
@@ -210,8 +255,15 @@ func (cs *CollectorSet) Collect(ch chan<- prometheus.Metric) {
 
 	// duration 无论走哪条路径都要产出，否则「抓取有多慢」这个问题在失败
 	// 的情况下反而没有数据 —— 而那正是最需要它的时候。
+	//
+	// errors_total 同样放在这里，且必须放在这个 defer 而不是散布在各条
+	// 返回路径上：它是本函数注册的第一个 defer，所以 LIFO 下它最后执行,
+	// 此时无论走登录失败分支还是走完 g.Wait()，所有 Add 都已经发生。
+	// 换成「每条 return 之前手写一次」则新增一条提前返回就会漏掉。
 	defer func() {
 		ch <- prometheus.MustNewConstMetric(cs.metrics.duration, prometheus.GaugeValue, time.Since(begin).Seconds())
+
+		cs.emitErrors(ch)
 	}()
 
 	loginBegin := time.Now()
@@ -222,10 +274,12 @@ func (cs *CollectorSet) Collect(ch chan<- prometheus.Metric) {
 	}
 
 	ch <- prometheus.MustNewConstMetric(cs.metrics.collectorSeconds, prometheus.GaugeValue,
-		time.Since(loginBegin).Seconds(), "login")
+		time.Since(loginBegin).Seconds(), loginBucket)
 
 	if err != nil {
 		cs.logger.Error("login failed", "target", cs.target, "error", err)
+
+		cs.errors.Add(cs.target, loginBucket)
 
 		// up=0 加上每个 collector 的 success=0。两者都需要：up 回答
 		// 「这个 target 能不能连上」，success 回答「哪些采集没跑成」。
@@ -282,6 +336,7 @@ func (cs *CollectorSet) Collect(ch chan<- prometheus.Metric) {
 			success := float64(1)
 			if err != nil {
 				success = 0
+				cs.errors.Add(cs.target, name)
 				cs.logger.Error("collector failed", "collector", name,
 					"duration_seconds", duration.Seconds(), "error", err)
 			} else {
@@ -308,4 +363,21 @@ func (cs *CollectorSet) Collect(ch chan<- prometheus.Metric) {
 	// 它与新增的无标签 scrape_duration_seconds 的差别是不含 login/logout。
 	ch <- prometheus.MustNewConstMetric(cs.metrics.collectorSeconds, prometheus.GaugeValue,
 		time.Since(begin).Seconds(), "all_collectors")
+}
+
+// emitErrors 导出本 target 下的累计错误数。
+//
+// seed 覆盖「所有启用的 collector + login」，而不只是本轮真的出过错的那些。
+// 理由见 ScrapeErrors.Snapshot 的说明：不导出 0 会让正常状态下的序列缺失，
+// 于是第一次故障反而是漏报的 —— increase() 对一条刚出现的序列算不出增量。
+func (cs *CollectorSet) emitErrors(ch chan<- prometheus.Metric) {
+	seed := make([]string, 0, len(cs.collectors)+1)
+	seed = append(seed, loginBucket)
+	seed = append(seed, cs.Names()...)
+
+	for name, count := range cs.errors.Snapshot(cs.target, seed) {
+		// CounterValue 而不是 GaugeValue。这是全库唯一一处 —— 类型选错
+		// 不会有任何报错，只会让 promtool 的 lint 与 rate() 的语义悄悄失效。
+		ch <- prometheus.MustNewConstMetric(cs.metrics.errorsTotal, prometheus.CounterValue, count, name)
+	}
 }

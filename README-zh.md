@@ -323,6 +323,66 @@ scrape_configs:
 
 ---
 
+## 自监控指标
+
+每次抓取都会附带一组自监控指标，让「某个采集器悄悄失败了」不必翻日志才能发现：
+
+```
+vmware_up 1
+vmware_scrape_duration_seconds 1.512
+vmware_scrape_collector_duration_seconds{collector="host"} 1.284
+vmware_scrape_collector_success{collector="host"} 1
+vmware_scrape_errors_total{collector="host"} 0
+vmware_scrape_errors_total{collector="login"} 0
+```
+
+| 指标 | 类型 | 回答的问题 |
+| --- | --- | --- |
+| `vmware_up` | gauge | 目标到底登上去了没有？`0` 表示这轮完全没拿到清单数据。它和 Prometheus 自带的 `up` 不是一回事 —— 自带的那个只反映 HTTP 请求成不成功，而对多目标 exporter 来说「HTTP 正常、vCenter 拒绝登录」是常态 |
+| `vmware_scrape_duration_seconds` | gauge | 整轮抓取耗时，含登录与登出 |
+| `vmware_scrape_collector_duration_seconds{collector}` | gauge | 单个采集器耗时，`collector="login"` 是登录阶段 |
+| `vmware_scrape_collector_success{collector}` | gauge | **最近一轮**成不成功 |
+| `vmware_scrape_errors_total{collector}` | **counter** | 一共失败了多少次，`collector="login"` 记登录失败 |
+| `vmware_exporter_build_info` | gauge | 当前跑的是哪个构建（`version` / `revision` / `branch` / `goversion`） |
+
+`success` 与 `errors_total` 回答的是两个不同的问题，两个都要看。`success` 是快照
+—— 它答不出「过去一小时里失败了十二次、只是恰好在最后一次抓取前恢复了」。
+偶发超时的 vCenter 在 gauge 上表现为抓取之间的抖动，而 Prometheus 按
+`scrape_interval` 取样，两次采样之间的失败它完全看不见；counter 不会漏。
+
+```promql
+# 目标不可达或凭证被拒
+vmware_up == 0
+
+# 整轮抓取成功、但某个采集器一直失败
+min_over_time(vmware_scrape_collector_success[5m]) == 0
+
+# 某个采集器持续失败
+increase(vmware_scrape_errors_total{collector!="login"}[15m]) > 3
+
+# 凭证被拒
+increase(vmware_scrape_errors_total{collector="login"}[15m]) > 0
+```
+
+**从未失败过的采集器会导出 `0`，而不是干脆不出现**。这不是可有可无的细节：
+一条在「一切正常」时根本不存在的序列，会让上面那条告警在正常状态下是
+「无数据」而不是「值为 0」；等到第一次失败序列才凭空出现，而 `increase()`
+对一条刚出现的序列算不出增量 —— **第一次故障恰好就是漏报的那次**。
+
+登录失败只记在 `collector="login"` 名下，不会摊到每个采集器头上。否则一次
+凭证过期会在 `errors_total` 上表现为 N+1 次故障，把真正想看的信号
+（某个采集器单独坏了）埋掉。
+
+`/probe` 模式下计数按 target 分桶，所以 A 的凭证错误不会抬高 B 的计数。
+
+`vmware_exporter_build_info` 只有在构建时注入了 version 相关的 linker flag
+才有真实取值 —— 发布构建与 `Dockerfile` 都已注入（见 Dockerfile 的
+`--build-arg`），直接 `go build` 出来的二进制则是空值。
+
+通过 `collect[]` 传入不存在的采集器名会返回 HTTP 400，而不是被静默忽略。
+
+---
+
 ## 安全加固
 
 有两件需要分开看的事，很容易混淆：
