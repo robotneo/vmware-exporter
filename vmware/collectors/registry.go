@@ -39,6 +39,12 @@ var definitions = []Definition{
 	// esxcli collectors 逐主机串行发 SOAP 调用，开销显著，默认禁用。
 	{Name: "esxcli.host.nic", Creator: NewesxcliHostNICCollector, DefaultEnabled: collector.DefaultDisabled},
 	{Name: "esxcli.storage", Creator: NewesxcliStorageListCCollector, DefaultEnabled: collector.DefaultDisabled},
+
+	// vsan 默认禁用，这不只是保守而是正确的默认：绝大多数 vSphere 环境
+	// 没有启用 vSAN，默认开启会让这些环境每轮 scrape 都白跑一遍容量与
+	// 健康查询。未启用的集群会优雅降级（只输出一条 enabled 0），但 SOAP
+	// 往返是实打实花掉的。
+	{Name: "vsan", Creator: NewvsanCollector, DefaultEnabled: collector.DefaultDisabled},
 }
 
 // Definitions 返回 collector 清单的副本，按 Name 排序以保证调度顺序稳定

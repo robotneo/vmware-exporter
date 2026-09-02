@@ -143,6 +143,30 @@ type resourcePoolDescs struct {
 	memShares *prometheus.Desc
 }
 
+// vsanDescs 覆盖 vsan collector（组 A：健康与容量）的全部指标。
+//
+// !!! 每个字段上方注释里的 label 顺序即 MustNewConstMetric 的传值顺序 !!!
+type vsanDescs struct {
+	// 集群级，label 集合同为 cmo, vmwcluster, vcenter
+	enabled           *prometheus.Desc
+	dedupEnabled      *prometheus.Desc
+	capacityBytes     *prometheus.Desc
+	capacityFreeBytes *prometheus.Desc
+	capacityUsedBytes *prometheus.Desc
+
+	// cmo, vmwcluster, status, vcenter
+	healthStatus *prometheus.Desc
+
+	// cmo, vmwcluster, host, device, uuid, state, vcenter
+	diskHealth *prometheus.Desc
+
+	// 盘级容量。label 集合同为 cmo, vmwcluster, host, device, vcenter
+	// —— 刻意不含 uuid 与 state：容量是数值指标，把会变化的 state 放进
+	// label 会让盘状态一变就产生一条新序列，旧序列变僵尸。
+	diskCapacityBytes     *prometheus.Desc
+	diskCapacityUsedBytes *prometheus.Desc
+}
+
 // collectorDescs 按 namespace 缓存。namespace 是 Update() 的运行时入参而非编译期
 // 常量，所以不能用包级 var 直接构造；上游框架允许调用方覆盖它，把它当常量是错的。
 // 实践中全程只有 "vmware" 一个值，测试里会用别的值。
@@ -151,6 +175,7 @@ type collectorDescs struct {
 	vm           vmDescs
 	datastore    datastoreDescs
 	resourcePool resourcePoolDescs
+	vsan         vsanDescs
 }
 
 var (
@@ -183,6 +208,7 @@ func buildDescs(namespace string) *collectorDescs {
 		vm:           buildVMDescs(namespace),
 		datastore:    buildDatastoreDescs(namespace),
 		resourcePool: buildResourcePoolDescs(namespace),
+		vsan:         buildVsanDescs(namespace),
 	}
 }
 
@@ -461,6 +487,69 @@ func buildResourcePoolDescs(namespace string) resourcePoolDescs {
 			"Configured memory shares of the resource pool. "+
 				"The level label is the vSphere allocation level: low, normal, high or custom.",
 			"rpmo", "rp", "level", "vcenter"),
+	}
+}
+
+func buildVsanDescs(namespace string) vsanDescs {
+	d := func(name, help string, labels ...string) *prometheus.Desc {
+		return prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, vsanSubsystem, name),
+			help, labels, nil,
+		)
+	}
+
+	// cmo / vmwcluster 与 cluster.go:52 的 vmware_cluster_info 完全一致，
+	// 这是刻意的：vSAN 指标必须能与集群信息 join，否则它们就是一座孤岛
+	// —— 用户拿到 cmo 却无法关联到集群名、父文件夹与 datastore。
+	return vsanDescs{
+		enabled: d("enabled",
+			"Whether vSAN is enabled on the cluster (1) or not (0). "+
+				"Emitted for every cluster, so a value of 0 distinguishes "+
+				"\"vSAN is off\" from \"the vsan collector is not running\".",
+			"cmo", "vmwcluster", "vcenter"),
+
+		dedupEnabled: d("dedup_enabled",
+			"Whether vSAN deduplication and compression is enabled on the cluster (1) or not (0).",
+			"cmo", "vmwcluster", "vcenter"),
+
+		capacityBytes: d("capacity_bytes",
+			"Total vSAN datastore capacity of the cluster, in bytes.",
+			"cmo", "vmwcluster", "vcenter"),
+
+		capacityFreeBytes: d("capacity_free_bytes",
+			"Free vSAN datastore capacity of the cluster, in bytes. "+
+				"This is the raw value reported by the API.",
+			"cmo", "vmwcluster", "vcenter"),
+
+		// 推导值。API 只给 total 与 free，used 是我们算的 —— help 里说明
+		// 这一点，这样用户排查数值可疑时知道该去核对哪两条原始序列。
+		capacityUsedBytes: d("capacity_used_bytes",
+			"Used vSAN datastore capacity of the cluster, in bytes. "+
+				"Derived as capacity_bytes minus capacity_free_bytes; "+
+				"the API reports no used value directly.",
+			"cmo", "vmwcluster", "vcenter"),
+
+		// 状态进 label、值恒为 1，与 resourcepool_overall_status 同一形态。
+		// 不映射成数字（telegraf 用 green=0/yellow=1/red=2）：那个映射把
+		// "未知"和"健康"都压进数轴，而 unknown 恰恰是最该告警的状态之一。
+		healthStatus: d("health_status",
+			"vSAN cluster health, as a label. "+
+				"The status label is green, yellow, red or unknown; "+
+				"unknown means the health service returned no usable value.",
+			"cmo", "vmwcluster", "status", "vcenter"),
+
+		diskHealth: d("disk_health",
+			"vSAN physical disk health, as a label. "+
+				"The state label is the summary health reported by vSAN.",
+			"cmo", "vmwcluster", "host", "device", "uuid", "state", "vcenter"),
+
+		diskCapacityBytes: d("disk_capacity_bytes",
+			"Capacity of a vSAN physical disk, in bytes.",
+			"cmo", "vmwcluster", "host", "device", "vcenter"),
+
+		diskCapacityUsedBytes: d("disk_capacity_used_bytes",
+			"Used capacity of a vSAN physical disk, in bytes.",
+			"cmo", "vmwcluster", "host", "device", "vcenter"),
 	}
 }
 

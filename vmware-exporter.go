@@ -392,6 +392,7 @@ var collectorDescriptions = map[string]string{
 	"resourcepool":    "Resource pool limits, reservations and usage",
 	"esxcli.host.nic": "ESXi NIC driver info",
 	"esxcli.storage":  "ESXi storage info",
+	"vsan":            "vSAN cluster health and capacity",
 }
 
 // collectorListHTML 从 collector 清单生成首页的可用 collector 列表。

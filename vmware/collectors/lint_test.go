@@ -11,6 +11,7 @@ import (
 	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	vsantypes "github.com/vmware/govmomi/vsan/types"
 )
 
 // lintAdapter 把 collector.Collector 包成 prometheus.Collector，好让 promlint
@@ -52,6 +53,50 @@ func (a *lintAdapter) Collect(ch chan<- prometheus.Metric) {
 // 目前为空：10b 的双写改名把 net.bytes{Rx,Tx} 系列的驼峰一并解决了。
 var knownProblems = map[string]string{}
 
+// newLintVsanCollector 造一个注入了替身的 vsan collector，专门给 promlint 用。
+//
+// 为什么不能直接用 NewvsanCollector：那样这道门只会覆盖 9 个 vSAN 指标里的
+// 1 个。vcsim 的 vsan/simulator.go 虽然实现了 VsanClusterGetConfig，但返回的
+// 是空的 VsanConfigInfoEx（simulator.go:72），其 Enabled 为 nil —— collector
+// 会正确地走降级 2 提前返回，只产出 vsan_enabled 0。剩下 8 个指标（含盘级
+// 那 3 个 label 最多的）就完全逃过了 promlint 的规范检查。
+//
+// 这不是钻空子：promlint 检查的是指标名与 help 的静态规范（单位、后缀、
+// 驼峰、help 缺失），跟数据是真是假无关。用替身喂一份"全字段都有值"的响应，
+// 恰好是让这道门覆盖面最大的做法。
+//
+// 替身响应刻意包含物理盘且 Capacity > 0 —— 否则 disk_capacity_bytes 与
+// disk_capacity_used_bytes 不会被输出（vsan.go 的 Capacity > 0 判断），
+// 又少覆盖 2 个。
+func newLintVsanCollector(logger *slog.Logger) (collector.Collector, error) {
+	stub := &vsanStub{
+		config: vsanEnabledConfig(true),
+		space: &vsantypes.VsanQuerySpaceUsageResponse{
+			Returnval: vsantypes.VsanSpaceUsage{
+				TotalCapacityB: 10 << 40,
+				FreeCapacityB:  3 << 40,
+			},
+		},
+		health: vsanHealthResponse("green", []vsantypes.VsanPhysicalDiskHealthSummary{{
+			Hostname: "esx1.example.com",
+			Disks: []vsantypes.VsanPhysicalDiskHealth{{
+				Name:          "naa.disk1",
+				Uuid:          "52a1-0001",
+				SummaryHealth: "green",
+				Capacity:      2 << 40,
+				UsedCapacity:  1 << 40,
+			}},
+		}}),
+	}
+
+	return &vsanCollector{
+		logger: logger,
+		newClient: func(context.Context, *collector.Scrape) (vsanRoundTripper, error) {
+			return stub, nil
+		},
+	}, nil
+}
+
 // TestBusinessMetricsPassPromlint 把业务指标交给 Prometheus 官方的规范检查器。
 //
 // 这道门开在这里才有意义。internal/collector 里的那个 lint 测试只覆盖 6 个
@@ -82,6 +127,7 @@ func TestBusinessMetricsPassPromlint(t *testing.T) {
 		"host":         NewhostCollector,
 		"vm":           NewvmCollector,
 		"resourcepool": NewresourcepoolCollector,
+		"vsan":         newLintVsanCollector,
 	}
 
 	names := make([]string, 0, len(creators))

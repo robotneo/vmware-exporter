@@ -211,6 +211,7 @@ scrape_configs:
 | Datastore 性能计数器 | 完整 | 受限 | `disk.provisioned.latest` 等计数器依赖 vCenter 的历史汇总，ESXi 不做汇总 |
 | 采样间隔 | 可选实时或 5 分钟汇总 | **仅实时** | ESXi 不聚合历史统计，`-vmware.interval` 的期望值会被服务端 `RefreshRate` 覆盖 |
 | esxcli 采集 | 经 vCenter 转发 | 直连 | 走 SOAP 的 `vim.EsxCLI.*` 接口，**不是 SSH** |
+| vSAN 指标 | 完整 | **完全没有** | vSAN 的管理端点在 vCenter 上（`/vsanHealth`），单台 ESXi 不提供。`vsan` collector 会识别出这种情况并整体跳过，只打 debug 日志，不会报错 |
 
 **关于 `synthetic` label**：ESXi 上仍然输出 `vmware_datacenter_info` 与
 `vmware_compute_info`，是为了让依赖 `dcmo` / `cmo` 关联的 dashboard 查询不断链；
@@ -246,6 +247,7 @@ scrape_configs:
 | `-collector.host` | bool | 开启 ESXi 主机 (Host) 数据采集。 | `true` |
 | `-collector.vm` | bool | 开启虚拟机 (VM) 数据采集。 | `true` |
 | `-collector.resourcepool` | bool | 开启资源池 (Resource Pool) 数据采集：limit、reservation、shares 与瞬时用量。 | `true` |
+| `-collector.vsan` | bool | 开启 vSAN 数据采集：启用状态、去重压缩、集群容量与健康、物理盘健康。需要连接 vCenter；直连 ESXi 时整体跳过。 | `false` |
 | `-collector.esxcli.host.nic` | bool | 开启基于 esxcli 的主机网卡采集。 | `false` |
 | `-collector.esxcli.storage` | bool | 开启基于 esxcli 的存储采集。 | `false` |
 
@@ -256,6 +258,34 @@ scrape_configs:
 >
 > `scripts/check_config.py` 现在会对「出现在参考表里但代码未注册」的 flag
 > 报错，所以这类文档漂移不会再回来。
+
+#### 关于 vSAN 采集器
+
+`-collector.vsan` 是**默认关闭**的，与其余非 esxcli 采集器相反。这不是单纯的
+保守：多数 vSphere 环境并没有启用 vSAN，在这些环境上开着它，每个集群每轮抓取
+都要多花两次 SOAP 往返（容量与健康）却什么也拿不到。即便 vSAN 不存在，它仍会
+为每个集群输出 `vmware_vsan_enabled 0` 然后就此停下 —— 也就是说 `0` 的含义是
+「vSAN 没开」，而不是「采集器没跑」。
+
+**权限：只读账号就够。** 采集器刻意绕开了
+`VsanQueryClusterPhysicalDiskHealthSummary` —— 那个接口的请求体要求
+`EsxRootPassword`，也就是集群内每台主机的 root 密码。物理盘健康改从集群健康
+摘要里读取，不需要任何主机凭据。详见 `docs/DESIGN-resourcepool-vsan.md` 2.2.1 节。
+
+写告警之前需要知道的两个行为：
+
+- **`vmware_vsan_health_status` 可能报 `status="unknown"`。** vCenter 会缓存健康
+  摘要，而在重启后、或 vSAN 刚启用时，这个缓存有一段时间是空的。此时采集器会
+  关掉缓存再查一次，强制 vCenter 真的跑一遍健康检查。两次都失败才输出
+  `unknown`，而不是让序列消失 —— 「健康服务坏了」和「没有这个集群」在
+  dashboard 上不该长得一样。
+- **盘级指标可能缺失，而集群健康正常。** 盘数据是健康摘要响应里的可选部分。
+  如果你的 vCenter 返回为空，`vmware_vsan_disk_health` 与两个
+  `vmware_vsan_disk_capacity_*` 序列都不会出现，但
+  `vmware_vsan_health_status` 照常工作。
+
+`vmware_vsan_capacity_used_bytes` 是由 `capacity_bytes - capacity_free_bytes`
+推导出来的，接口本身不直接给已用量。三条都导出，便于你用原始值核对这个推导。
 
 ### 3. 性能与采样设置
 | 参数 | 类型 | 说明 | 默认值 |

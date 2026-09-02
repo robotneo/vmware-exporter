@@ -573,20 +573,23 @@ R1/R2 实测这次检索的体积增长，若明显则改回独立调用。**这
 
 | API | 用途 |
 |---|---|
-| `VsanQuerySpaceUsage` | 集群容量：总量、已用、去重压缩节省 |
-| `VsanQueryVcClusterHealthSummary` | 集群整体健康（含各项 health check 结果） |
-| `VsanQueryClusterPhysicalDiskHealthSummary` | 物理盘健康 |
-| `VsanQueryObjectIdentities` | 对象健康与 resync 状态 |
-| ~~`Client.VsanClusterGetConfig`~~ | ~~vSAN 是否启用~~ → **改用属性检索，见 2.1.4** |
+| `VsanClusterGetConfig` | vSAN 是否启用、去重压缩是否启用 |
+| `VsanQuerySpaceUsage` | 集群容量：总量、可用 |
+| `VsanQueryVcClusterHealthSummary` | 集群整体健康 **+ 物理盘健康**（一次拿两样） |
+| ~~`VsanQueryClusterPhysicalDiskHealthSummary`~~ | ~~物理盘健康~~ → **要 ESXi root 密码，走不通，见 2.2.1** |
+| ~~`VsanQueryObjectIdentities`~~ | ~~对象健康与 resync 状态~~ → 推迟到 R3 |
 
 指标设计：
 
 ```
 vmware_vsan_enabled{cmo, vmwcluster, vcenter}                                  0|1
 vmware_vsan_capacity_bytes{cmo, vmwcluster, vcenter}
-vmware_vsan_capacity_used_bytes{cmo, vmwcluster, vcenter}
+vmware_vsan_capacity_free_bytes{cmo, vmwcluster, vcenter}
+vmware_vsan_capacity_used_bytes{cmo, vmwcluster, vcenter}      # = total - free，见 2.2.2
 vmware_vsan_health_status{cmo, vmwcluster, status="green|yellow|red|unknown", vcenter}   1
-vmware_vsan_disk_health{cmo, vmwcluster, host, device, state, vcenter}          1
+vmware_vsan_disk_health{cmo, vmwcluster, host, device, uuid, state, vcenter}    1
+vmware_vsan_disk_capacity_bytes{cmo, vmwcluster, host, device, vcenter}
+vmware_vsan_disk_capacity_used_bytes{cmo, vmwcluster, host, device, vcenter}
 vmware_vsan_dedup_enabled{cmo, vmwcluster, vcenter}                            0|1
 
 # 以下三条推迟到 R3，理由见 2.1.1 节②（版本门槛 + 拼 MoRef + 依赖主机可达）
@@ -594,6 +597,86 @@ vmware_vsan_resync_bytes{cmo, vmwcluster, vcenter}
 vmware_vsan_resync_objects{cmo, vmwcluster, vcenter}
 vmware_vsan_resync_eta{cmo, vmwcluster, vcenter}     # 单位待查证，见下文
 ```
+
+#### 2.2.1 盘健康不能用 `VsanQueryClusterPhysicalDiskHealthSummary`（R2 实测发现）
+
+这是对本设计稿的**实质修正**。初稿把该 API 列进组 A，但核对 v0.56.0 的请求
+体之后发现它走不通：
+
+```go
+// vsan/types/types.go:4081
+type VsanQueryClusterPhysicalDiskHealthSummaryRequestType struct {
+    This            types.ManagedObjectReference `xml:"_this"`
+    Hosts           []string                     `xml:"hosts"`
+    EsxRootPassword string                       `xml:"esxRootPassword"`   // ← 硬阻断
+}
+```
+
+**它要 ESXi 的 root 密码。** 本项目的采集账号是只读 vCenter 账号（README 的
+权限章节就是这么写的），拿不到也不该拿 ESXi root 密码 —— 让一个 exporter
+持有集群所有主机的 root 凭据，是比"少一个指标"严重得多的问题。而且这会引入
+一个新的必填配置项，与"只读账号即可运行"的定位冲突。
+
+**不需要它。** `VsanQueryVcClusterHealthSummary` 的响应里已经带了盘健康：
+
+```go
+// vsan/types/types.go:7385 VsanClusterHealthSummary
+PhysicalDisksHealth []VsanPhysicalDiskHealthSummary `xml:"physicalDisksHealth,omitempty"`
+
+// vsan/types/types.go:7432 VsanPhysicalDiskHealthSummary
+Hostname string                   // 主机名
+Disks    []VsanPhysicalDiskHealth // 该主机的盘
+
+// vsan/types/types.go:5389 VsanPhysicalDiskHealth
+Name           string  // 设备名，如 mpx.vmhba1:C0:T1:L0
+Uuid           string  // vSAN 盘 UUID
+SummaryHealth  string  // 汇总健康（非 omitempty，必有值）
+CapacityHealth string  // 容量健康
+Capacity       int64   // 容量，字节
+UsedCapacity   int64   // 已用，字节
+```
+
+所以盘健康是**零额外往返**的：健康摘要那一次调用同时给出集群健康与盘健康。
+比初稿的方案严格更优 —— 少一次 SOAP 往返、不需要 root 密码、还多拿到了
+每盘容量。
+
+一个前提：`Fields` 参数要包含 `physicalDisksHealth`。telegraf 只传
+`["overallHealth", "overallHealthDescription"]`，因为它不采盘级指标。我们要
+多传一个字段名。**这一处是 R2 唯一无法用 vcsim 验证的假设**（vcsim 不实现
+这个方法），替身测试只能验证"我们正确解析了响应"，不能验证"vCenter 真的会
+按这个 Fields 值返回盘健康"。已在 README 的前提条件里记下这一点。
+
+另外 CMMDS 那条路（2.1.1 节③）也因此不必进 R2：盘的 hostname 与 devicename
+从健康摘要里就能拿到，不需要逐台主机轮询 CMMDS。**这把组 B 的一个前置依赖
+提前解决了**。
+
+#### 2.2.2 容量：API 只给 total 与 free，used 要自己算
+
+`VsanSpaceUsage`（`vsan/types/types.go:5050`）的字段是：
+
+```go
+TotalCapacityB int64 `xml:"totalCapacityB"`            // 非 omitempty
+FreeCapacityB  int64 `xml:"freeCapacityB,omitempty"`   // omitempty
+```
+
+**没有 used 字段。** telegraf 也只导出 `total_capacity_byte` 与
+`free_capacity_byte` 两个原始值，不做推导。
+
+本项目**两个都导出，再加一条推导出来的 used**：
+
+- `capacity_bytes` = `TotalCapacityB`（原始值）
+- `capacity_free_bytes` = `FreeCapacityB`（原始值）
+- `capacity_used_bytes` = `TotalCapacityB - FreeCapacityB`（推导）
+
+为什么三条都要：原始值不会因为我们的推导逻辑出错而失真，是可信的基准；
+而 `used` 是运维实际要看的那个数（容量告警写的是"已用超过 80%"，不是
+"剩余低于 20%"）。只导原始值会让每个用户在 PromQL 里重复写同一个减法，
+而那正是最容易写错 label matcher 的地方。
+
+推导的边界情况：`FreeCapacityB` 是 `omitempty`，缺失时为 0，此时 used 会
+等于 total。这在语义上是对的（"没有可用空间"就是"全部已用"），但要注意它
+与"真的用满了"在指标上不可区分。不额外加标志位 —— total 为 0 时（vSAN 未
+就绪）三条都是 0，用户看到的是"没有容量"，不会误判。
 
 `cmo` / `vmwcluster` 沿用 `cluster.go:52` 已有的 label 名，**保证能与
 `vmware_cluster_info` join**。这点必须一致，否则 vSAN 指标成了孤岛。
@@ -1108,6 +1191,48 @@ cluster collector 已经在检索 `ClusterComputeResource`（`cluster.go:38`）�
 
 **需要你定**：A（发现性好、动了默认路径）、B（保守）、
 或"先按 B 做、R2 实测后再考虑 A"（我推荐这个）。
+
+**已拍板（R2）**：走 B —— `vsan` collector 输出 `vmware_vsan_enabled`，
+数据源是 `VsanClusterGetConfig`（vsan 端点）而非 `configurationEx` 属性。
+
+R2 实测下来 B 反而比 A 更有理由，不只是"保守"：
+
+1. **A 方案拿不到 dedup**。`ClusterConfigInfoEx.VsanConfigInfo` 的类型是
+   **vim25 的** `types.VsanClusterConfigInfo`（`vim25/types/types.go:99410`），
+   它只有 `Enabled *bool` 与主机默认配置，**没有 `DataEfficiencyConfig`**。
+   去重压缩状态只存在于 **vsan 包的** `VsanConfigInfoEx`
+   （`vsan/types/types.go:8442`），那是 `VsanClusterGetConfig` 的返回类型。
+   所以走 A 之后仍要为 dedup 单独调一次 `VsanClusterGetConfig` ——
+   "零额外往返"的好处在 R2 的指标集下不成立。
+2. 走 B 之后 `vmware_vsan_enabled` 与 `vmware_vsan_dedup_enabled` 同源，
+   两条指标不会出现"一个说启用、另一个说没有"的不一致窗口。
+
+代价照旧：不开 `-collector.vsan` 就看不到"我有没有 vSAN"。这个发现性问题
+留给文档解决 —— README 里写明"想知道有没有 vSAN，开一次 `-collector.vsan`
+即可，未启用的集群只会输出一条 `enabled 0` 且不再发任何后续请求"。
+真要做 A，等 R3 有了 `configurationEx` 的实测体积数据再议。
+
+### D9：两个 MoRef 常量 govmomi 没有提供（R2 实测新增）
+
+`vsan/client.go` 只定义了四个 MoRef 常量：`VsanVcClusterConfigSystemInstance`、
+`VsanPerformanceManagerInstance`、`VsanQueryObjectIdentitiesInstance`、
+`VsanVcStretchedClusterSystem`（外加一个 `VsanPropertyCollectorInstance`）。
+
+**容量与健康这两个系统的 MoRef 不在其中** —— 因为 govmomi 的 `vsan.Client`
+没有包装这两个方法，只有包级的 `methods.VsanQuerySpaceUsage` 等函数，而
+`This` 参数要调用方自己填。
+
+取值不能猜。从 telegraf 源码逐字取到（`plugins/inputs/vsphere/vsan.go`，
+`queryDiskUsage` 与 `queryHealthSummary` 两个函数的局部变量）：
+
+| 用途 | Type | Value |
+|---|---|---|
+| 容量 | `VsanSpaceReportSystem` | `vsan-cluster-space-report-system` |
+| 健康 | `VsanVcClusterHealthSystem` | `vsan-cluster-health-system` |
+
+**这两个字面量是 R2 唯一"抄来的魔法值"**，无法从 govmomi 的类型系统推导，
+也无法用 vcsim 验证（vcsim 不注册这两个管理对象）。实现时必须在常量定义处
+写明出处，否则将来没人知道这串字符串是怎么来的、改错了怎么发现。
 
 ---
 

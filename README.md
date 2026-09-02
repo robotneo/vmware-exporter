@@ -84,6 +84,7 @@ These gaps come from the vSphere object model, not from the exporter:
 | Datastore performance counters | Full | Limited | Counters such as `disk.provisioned.latest` rely on vCenter's historical rollup, which ESXi does not run |
 | Sampling interval | Real-time or 5-minute rollup | **Real-time only** | ESXi keeps no historical statistics, so the requested `-vmware.interval` is overridden by the server's `RefreshRate` |
 | esxcli collection | Proxied through vCenter | Direct | Uses the SOAP `vim.EsxCLI.*` interface — **not SSH** |
+| vSAN metrics | Full | **None** | The vSAN management endpoints live on vCenter (`/vsanHealth`); a standalone ESXi host does not serve them. The `vsan` collector detects this and skips itself, logging at debug level rather than producing errors |
 
 **About the `synthetic` label**: `vmware_datacenter_info` and `vmware_compute_info`
 are still emitted on ESXi so that dashboard queries joining on `dcmo` / `cmo` keep
@@ -114,6 +115,7 @@ The options available are:
 | -collector.host | Enables or disables Host metrics collection (default: enabled) |
 | -collector.vm | Enables or disables Virtual Machine metrics collection (default: enabled) |
 | -collector.resourcepool | Enables or disables Resource Pool metrics collection: limits, reservations, shares and instantaneous usage (default: enabled) |
+| -collector.vsan | Enables or disables vSAN metrics collection: enablement, deduplication, cluster capacity and health, physical disk health (default: **disabled**). Requires a vCenter connection; skipped entirely when connected directly to an ESXi host |
 | -collector.esxcli.host.nic | Collects ESXi NIC firmware information using esxcli over the SOAP API (proxied by vCenter, or direct when connected to an ESXi host) (default: disabled) |
 | -collector.esxcli.storage | Collects ESXi storage firmware information using esxcli over the SOAP API (proxied by vCenter, or direct when connected to an ESXi host) (default: disabled) |
 
@@ -137,6 +139,38 @@ The options available are:
 Invalid values (for example `-vmware.granularity=0`, or a granularity larger than
 the interval) make the process exit at startup with an explicit reason instead of
 running with a broken configuration.
+
+### The vSAN collector
+
+`-collector.vsan` is **off by default**, unlike every other non-esxcli collector.
+That is not caution for its own sake: most vSphere estates do not run vSAN, and on
+those the collector would spend two extra SOAP round trips per cluster per scrape
+(capacity and health) to learn nothing. When vSAN *is* absent it still emits
+`vmware_vsan_enabled 0` for each cluster and stops there, so `0` means "vSAN is
+off" rather than "the collector is not running".
+
+Permissions: a **read-only** account is enough. The collector deliberately avoids
+`VsanQueryClusterPhysicalDiskHealthSummary`, whose request body requires
+`EsxRootPassword` — the root password of every host in the cluster. Physical disk
+health is read out of the cluster health summary instead, which needs no host
+credentials. See `docs/DESIGN-resourcepool-vsan.md` §2.2.1.
+
+Two behaviours worth knowing before you write alerts on this:
+
+- **`vmware_vsan_health_status` can report `status="unknown"`.** vCenter caches its
+  health summary, and the cache is empty for a while after a restart or after vSAN
+  is first enabled. The collector then re-queries with the cache disabled, which
+  forces vCenter to actually run the health checks. If both attempts fail it emits
+  `unknown` rather than dropping the series — a broken health service and an absent
+  cluster should not look identical on a dashboard.
+- **Per-disk metrics may be missing while cluster health is fine.** The disk data is
+  an optional part of the health summary response. If your vCenter returns it empty,
+  `vmware_vsan_disk_health` and the two `vmware_vsan_disk_capacity_*` series will be
+  absent while `vmware_vsan_health_status` keeps working normally.
+
+`vmware_vsan_capacity_used_bytes` is derived as `capacity_bytes - capacity_free_bytes`;
+the API reports no used value directly. All three are exported so you can check the
+derivation against the raw numbers.
 
 ### Environment variables: mind the case
 

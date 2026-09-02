@@ -540,6 +540,68 @@ default configuration (`samples=1`) the old and new aggregations agree anyway.
 
   On ESXi the implicit `ha-root-pool` is labelled `synthetic="true"`, the same
   treatment `ha-datacenter` and `ha-compute-res` already get.
+- **`vsan` collector** (`-collector.vsan`, **default disabled**) — 9 new metrics
+  covering vSAN enablement, deduplication, cluster capacity and health, and
+  physical disk health.
+
+  **Off by default, unlike every other non-esxcli collector.** Most vSphere
+  estates do not run vSAN, and on those the collector would spend two extra SOAP
+  round trips per cluster per scrape to learn nothing. Enabling it costs you
+  nothing retroactively — no series appear until you pass the flag.
+
+  When vSAN is absent it still emits `vmware_vsan_enabled 0` per cluster and then
+  **stops**, issuing no further queries. So `0` means *vSAN is off*, not *the
+  collector is not running*. telegraf needs a `vsan_cluster_include` list for
+  mixed estates; the early return handles it without a list that goes stale the
+  moment someone builds a new vSAN cluster.
+
+  **A read-only account suffices.** This is not incidental — it forced a design
+  change. The obvious API for disk health,
+  `VsanQueryClusterPhysicalDiskHealthSummary`, requires `EsxRootPassword` in its
+  request body: the root password of *every host in the cluster*. No monitoring
+  account should hold those, so disk health is read out of the cluster health
+  summary response instead (`physicalDisksHealth`), which needs no host
+  credentials. Zero extra round trips, and it happens to carry per-disk capacity
+  as well. See `docs/DESIGN-resourcepool-vsan.md` §2.2.1.
+
+  `vmware_vsan_health_status` puts the state in a label with a constant value of
+  `1`, and **can report `status="unknown"`**. vCenter caches its health summary
+  and that cache is empty for a while after a restart or after vSAN is first
+  enabled; the collector then re-queries with caching disabled, forcing vCenter
+  to actually run the checks. Only if both attempts fail does it emit `unknown`.
+  telegraf instead returns silently here, which makes *the health service is
+  broken* and *there is no vSAN* indistinguishable — one of those should page
+  someone. For the same reason the state is not mapped to `green=0/yellow=1/red=2`
+  as telegraf does: that scale has no room for `unknown`.
+
+  `vmware_vsan_capacity_used_bytes` is **derived** as
+  `capacity_bytes - capacity_free_bytes`; the API reports no used value. All
+  three are exported so the derivation can be checked against the raw numbers.
+  (`FreeCapacityB` is `omitempty`, so a missing value yields `used == total` —
+  semantically correct: no free space is all space used.)
+
+  Per-disk series carry no `state` or `uuid` on the capacity metrics, only on
+  `vmware_vsan_disk_health`. Putting a mutable state into a capacity series' label
+  set would mint a new series and orphan the old one every time a disk's health
+  flips. Capacity is also omitted entirely when the API reports `0`, rather than
+  exporting a zero that reads as *this disk holds nothing*.
+
+  Two managed object references are **hardcoded string literals** because govmomi
+  does not provide them: `vsan-cluster-space-report-system` and
+  `vsan-cluster-health-system`. They are transcribed from telegraf's
+  `plugins/inputs/vsphere/vsan.go`, cannot be derived from govmomi's type system,
+  and cannot be verified against vcsim (its vSAN simulator registers only the
+  cluster config and stretched-cluster systems). Changing them requires a real
+  vCenter — the source is recorded in the design document as D9.
+
+  Direct ESXi connections skip this collector entirely: the vSAN management
+  endpoints live on vCenter, so a standalone host would only ever return 404.
+
+  Tested against a `soap.RoundTripper` stub rather than vcsim, out of necessity:
+  vcsim implements 3 vSAN methods and covers only 1 of the 3 this collector uses.
+  Every assertion was verified in reverse — the degradation paths, the
+  total-minus-free derivation and the cached-then-uncached ordering were each
+  confirmed to fail on a deliberately broken build before being trusted.
 
 ### Fixed
 
