@@ -107,7 +107,7 @@ The options available are:
 | -collector.max-concurrency | Maximum number of collectors running in parallel, and the fan-out width used inside the esxcli collectors (default: 8). Use 0 to leave the collector layer unlimited; the per-host fan-out keeps a built-in floor. Replaces `-prom.maxRequests`, which was accepted but never had any effect |
 | -disable.exporter.metrics | Disables the exporter's own `go_*` and `process_*` metrics (default: **true**, so they are absent unless you pass `=false`) |
 | -disable.exporter.target | Disables exporter default target - /metrics will only return exporter data - use /probe. `/metrics` then serves client_golang's default registry, which carries the Go and process collectors regardless of the flag above |
-| -metrics.legacy | Also emit the pre-rename metric names alongside the normalised ones (default: false). Enable this if you have dashboards or alerting rules referencing the old names — **including the dashboards bundled in this repository**, see [Metric naming](#metric-naming) |
+| -metrics.legacy | Also emit the pre-rename metric names alongside the normalised ones (default: false). Enable this if you have your own dashboards or alerting rules referencing the old names, see [Metric naming](#metric-naming). The dashboards bundled in this repository use the new names and do not need it |
 | -collector.datacenter | Enables or disables DataCenter metrics collection (default: enabled) |
 | -collector.cluster | Enables or disables Cluster metrics collection (default: enabled) |
 | -collector.datastore | Enables or disables Datastore metrics collection (default: enabled) |
@@ -281,19 +281,35 @@ units in the name, a unit suffix, `_total` on counters, and no vSphere rollup
 suffixes. `CHANGELOG.md` has the complete table; this section is the operational
 summary.
 
-### If you use the bundled dashboards, start the exporter with `-metrics.legacy`
+### The bundled dashboards are already migrated
 
-The Grafana dashboards in `dashboards/` still reference the old metric names.
-Until they are migrated, run:
+The Grafana dashboards in `dashboards/` use the new metric names, so they work
+against a default exporter with no extra flags. They were migrated by
+`scripts/migrate_dashboards.py`, which is kept in the repository so the change is
+reproducible and reviewable rather than a one-off hand edit.
 
-```
-vmware-exporter -metrics.legacy ...
-```
+Renaming the queries was not enough on its own. Two other things had to change
+with them, and both are silent failures if missed:
 
-Without it the bundled panels render **empty, with no error** — Grafana has no
-way to tell a renamed metric from one that has no data. `-metrics.legacy=true`
-emits the old names alongside the new ones so the panels keep working while you
-migrate.
+- **Unit conversions moved into the exporter.** Panels used to multiply by
+  `1024`, `1000 * 1000` or `8192` to turn the exporter's kiloBytes and MHz into
+  bytes and hertz. The exporter now emits base units, so those factors were
+  removed and the panel units updated (`kbytes` → `bytes`, `KiBs` → `Bps`,
+  `ms` → `s`). Leaving a factor in place would have rendered a number wrong by
+  three orders of magnitude, with nothing to indicate it.
+- **The CPU ready/costop panels were rewritten to use `rate()`.** They divided a
+  summation counter by a hardcoded `20 * 1000`, which assumed a 20-second vSphere
+  granularity. Those panels now use `rate(..._seconds_total[$__rate_interval])`,
+  which derives the window from the query step instead of assuming it.
+
+Two pre-existing dashboard bugs were fixed in the same pass — see `CHANGELOG.md`.
+
+`scripts/check_config.py` verifies on every CI run that no panel references a
+pre-rename metric or reapplies a conversion the exporter now performs itself.
+
+If you have **your own** dashboards or alerting rules on the old names, either
+run with `-metrics.legacy` while you migrate them, or use the recording rules
+below.
 
 ### Metric naming
 

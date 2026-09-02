@@ -287,7 +287,7 @@ scrape_configs:
 | `-web.config.file` | string | Web 配置文件路径，用于给 exporter 自身的监听端口启用 TLS 与 HTTP Basic Auth。详见[安全加固](#安全加固)。 | - |
 | `-disable.exporter.metrics` | bool | 是否**不**在 `/metrics` 中导出 exporter 自身的运行指标（`go_*`、`process_*`）。 | `true` |
 | `-disable.exporter.target` | bool | 是否禁用 `/metrics` 的默认采集目标。开启后 `/metrics` 只返回 exporter 自身指标，vCenter 数据改由 `/probe` 提供。 | `false` |
-| `-metrics.legacy` | bool | 是否在导出规范化指标名的同时，一并导出改名前的旧指标名。**仓库自带的 Grafana dashboard 目前仍引用旧名，使用它们必须打开这个开关**。详见[指标命名](#指标命名)。 | `false` |
+| `-metrics.legacy` | bool | 是否在导出规范化指标名的同时，一并导出改名前的旧指标名。如果你自己的 dashboard 或告警规则还在用旧名，可以打开它过渡；详见[指标命名](#指标命名)。仓库自带的 Grafana dashboard 已改用新名，不需要这个开关。 | `false` |
 
 > **注意 `-disable.exporter.metrics` 默认就是 `true`**，也就是默认**不会**有
 > `go_goroutines`、`process_resident_memory_bytes` 这类指标。实测默认配置下
@@ -462,18 +462,30 @@ systemd 部署时，把密码放在 root 所有、权限 `600` 的 `EnvironmentF
 counter 带 `_total`、去掉 vSphere 的 rollup 后缀。完整对照表在 `CHANGELOG.md`，
 这一节讲运维上要做什么。
 
-### 使用仓库自带 dashboard 必须加 `-metrics.legacy`
+### 仓库自带 dashboard 已完成迁移
 
-`dashboards/` 下的 Grafana 面板目前仍然引用旧指标名。在它们迁移完成前，启动时
-必须打开这个开关：
+`dashboards/` 下的 Grafana 面板已经改用新指标名，直接对接默认配置的 exporter
+即可，不需要额外开关。迁移由 `scripts/migrate_dashboards.py` 完成，脚本保留在仓库
+里，这样这次改动是可复现、可 review 的，而不是一次性的手工修改。
 
-```
-vmware-exporter -metrics.legacy ...
-```
+光改名字是不够的，还有两件事必须同步改，而且漏掉都不会报错：
 
-不加的话，自带面板会**显示为空且不报任何错** —— Grafana 无法区分"指标被改名了"
-和"这个指标本来就没数据"。`-metrics.legacy=true` 会在导出新名的同时一并导出旧名，
-让面板在你迁移期间继续可用。
+- **单位换算挪进了 exporter。** 面板过去要乘 `1024`、`1000 * 1000` 或 `8192`，
+  把 exporter 输出的 kiloBytes 和 MHz 换算成 bytes 和 hertz。现在 exporter 直接
+  输出基础单位，所以这些系数被删掉，面板单位也跟着改了（`kbytes` → `bytes`、
+  `KiBs` → `Bps`、`ms` → `s`）。少删一个系数，面板上的数字就会差三个数量级，
+  而且没有任何提示。
+- **CPU ready/costop 面板改用了 `rate()`。** 它们原本把 summation 计数器除以硬编码
+  的 `20 * 1000`，等于假定 vSphere 的采样粒度固定是 20 秒。现在这些面板用
+  `rate(..._seconds_total[$__rate_interval])`，窗口由查询步长推导，不再靠假设。
+
+同一轮里还修掉了 dashboard 原有的两个 bug，详见 `CHANGELOG.md`。
+
+`scripts/check_config.py` 会在每次 CI 运行时校验：没有面板引用改名前的指标，也没有
+面板重复施加 exporter 现在已经自己做掉的换算。
+
+如果你有**自己的** dashboard 或告警规则还在用旧名，可以在迁移期间打开
+`-metrics.legacy`，或者改用下面的 recording rules。
 
 ### 指标命名
 
