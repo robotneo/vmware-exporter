@@ -42,25 +42,15 @@ func (a *lintAdapter) Collect(ch chan<- prometheus.Metric) {
 
 // knownProblems 是显式豁免的既有问题，key 为 "<指标名>: <promlint 文本>"。
 //
-// 这份清单就是 Stage 10b 的改名清单。每一条都必须写明为什么不在 10a 修 ——
-// 空着理由的豁免和没有豁免一样没用，半年后没人知道它是「暂缓」还是「认可」。
+// 每一条都必须写明理由 —— 空着理由的豁免和没有豁免一样没用，半年后没人知道
+// 它是「暂缓」还是「认可」。
 //
-// 清单会被反向校验：豁免了却没触发的条目会让测试失败。理由是这份清单一旦
-// 允许留死条目，10b 改完 bytesRx 之后这几行会继续躺在这里，而将来谁再引入
-// 一个驼峰指标就有可能被它们无声地放过。
-var knownProblems = map[string]string{
-	// 这 4 条同源：名字来自 vCenter 的性能计数器名（net.bytesRx.average），
-	// perfDesc 只把 "." 换成 "_"，驼峰是 vCenter 那边的原始拼写穿透过来的。
-	//
-	// 修它等于改指标名，属于破坏性变更 —— 必须走 10b 的双写过渡（旧名与
-	// 新名同时导出一个发布周期，dashboards 同步更新，之后由 -metrics.legacy
-	// 控制是否保留旧名）。在 10a 直接改会让所有已经照着旧名写好的面板和
-	// 告警在一次升级里全部失效。
-	"vmware_host_net_bytesRx_average: metric names should be written in 'snake_case' not 'camelCase'": "Stage 10b: 双写过渡后重命名（net.bytesRx.average）",
-	"vmware_host_net_bytesTx_average: metric names should be written in 'snake_case' not 'camelCase'": "Stage 10b: 双写过渡后重命名（net.bytesTx.average）",
-	"vmware_vm_net_bytesRx_average: metric names should be written in 'snake_case' not 'camelCase'":   "Stage 10b: 双写过渡后重命名（net.bytesRx.average）",
-	"vmware_vm_net_bytesTx_average: metric names should be written in 'snake_case' not 'camelCase'":   "Stage 10b: 双写过渡后重命名（net.bytesTx.average）",
-}
+// 清单会被反向校验：豁免了却没触发的条目会让测试失败。**这条校验在 Stage 10b
+// 真的起了作用** —— 改名落地的那一刻它立刻报出 4 个死条目并要求删除，而不是
+// 让它们留下来无声地放过将来某个新引入的驼峰指标。
+//
+// 目前为空：10b 的双写改名把 net.bytes{Rx,Tx} 系列的驼峰一并解决了。
+var knownProblems = map[string]string{}
 
 // TestBusinessMetricsPassPromlint 把业务指标交给 Prometheus 官方的规范检查器。
 //

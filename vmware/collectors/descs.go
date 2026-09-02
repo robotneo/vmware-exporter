@@ -51,11 +51,13 @@ type hostDescs struct {
 	cpuCoreCount *prometheus.Desc
 	// hostmo, host, vcenter
 	cpuThreadCount *prometheus.Desc
-	// hostmo, host, vcenter -- deprecated, name carries no unit
+	// hostmo, host, vcenter -- legacy, name carries no unit
 	cpuCapacity *prometheus.Desc
-	// hostmo, host, vcenter
+	// hostmo, host, vcenter -- legacy, MHz is not a Prometheus base unit
 	cpuCapacityMHz *prometheus.Desc
-	// hostmo, host, vcenter -- deprecated, help claimed MB but the value is bytes
+	// hostmo, host, vcenter
+	cpuCapacityHertz *prometheus.Desc
+	// hostmo, host, vcenter -- legacy, name carries no unit
 	memCapacity *prometheus.Desc
 	// hostmo, host, vcenter
 	memCapacityBytes *prometheus.Desc
@@ -66,9 +68,11 @@ type vmDescs struct {
 	info *prometheus.Desc
 	// vmmo, vm, hostmo, vcenter
 	cpuCoreCount *prometheus.Desc
-	// vmmo, vm, hostmo, vcenter
+	// vmmo, vm, hostmo, vcenter -- legacy, value is MB
 	memCapacity *prometheus.Desc
-	// vmmo, vm, vcenter, dsmo -- deprecated, help was copy-pasted from mem_capacity
+	// vmmo, vm, hostmo, vcenter
+	memCapacityBytes *prometheus.Desc
+	// vmmo, vm, vcenter, dsmo -- legacy, name carries no unit
 	dsCapacityUsed *prometheus.Desc
 	// vmmo, vm, vcenter, dsmo
 	dsCapacityUsedBytes *prometheus.Desc
@@ -76,12 +80,34 @@ type vmDescs struct {
 	snapshotInfo *prometheus.Desc
 }
 
+// datastoreDescs 覆盖 datastore collector 的静态指标。
+//
+// 原实现在实体循环里内联 NewDesc 并把实体标识塞进 constLabels，与 host/vm
+// 改造前一样。datastore 数量是几十级别，性能不是理由 —— 提出来是因为
+// capacity / free 要做 legacy 双写，而双写要求新旧两条的 help 引用同一个
+// 替代名，内联写法做不到这一点而不重复字符串。
+type datastoreDescs struct {
+	// dsmo, ds, type, pfinstance, foldermo, vcenter
+	info *prometheus.Desc
+	// dsmo, ds, vcenter -- legacy, name carries no unit
+	capacity *prometheus.Desc
+	// dsmo, ds, vcenter
+	capacityBytes *prometheus.Desc
+	// dsmo, ds, vcenter -- legacy, name carries no unit
+	free *prometheus.Desc
+	// dsmo, ds, vcenter
+	freeBytes *prometheus.Desc
+	// dsmo, ds, vcenter
+	accessible *prometheus.Desc
+}
+
 // collectorDescs 按 namespace 缓存。namespace 是 Update() 的运行时入参而非编译期
 // 常量，所以不能用包级 var 直接构造；上游框架允许调用方覆盖它，把它当常量是错的。
 // 实践中全程只有 "vmware" 一个值，测试里会用别的值。
 type collectorDescs struct {
-	host hostDescs
-	vm   vmDescs
+	host      hostDescs
+	vm        vmDescs
+	datastore datastoreDescs
 }
 
 var (
@@ -110,8 +136,9 @@ func descsFor(namespace string) *collectorDescs {
 
 func buildDescs(namespace string) *collectorDescs {
 	return &collectorDescs{
-		host: buildHostDescs(namespace),
-		vm:   buildVMDescs(namespace),
+		host:      buildHostDescs(namespace),
+		vm:        buildVMDescs(namespace),
+		datastore: buildDatastoreDescs(namespace),
 	}
 }
 
@@ -144,13 +171,23 @@ func buildHostDescs(namespace string) hostDescs {
 			"Number of physical CPU threads on the host, i.e. cores times SMT width.",
 			"hostmo", "host", "vcenter"),
 
+		// 三个 legacy 指标（cpu_capacity、cpu_capacity_mhz、mem_capacity）都只在
+		// -metrics.legacy=true 时输出。此前 cpu_capacity / mem_capacity 是无条件
+		// 双写的，那让「默认给出一套干净指标集」这个承诺只对性能指标成立。
 		cpuCapacity: d("cpu_capacity",
 			"Average CPU core frequency in MHz."+
-				deprecatedFor(namespace, hostSubsystem, "cpu_capacity_mhz"),
+				deprecatedFor(namespace, hostSubsystem, "cpu_capacity_hertz"),
 			"hostmo", "host", "vcenter"),
 
+		// MHz 不是 Prometheus 的基础单位，promlint 会明确点出这一条。
+		// _mhz 是上一轮过渡引入的，这轮直接跳到 _hertz，_mhz 一并降级为 legacy。
 		cpuCapacityMHz: d("cpu_capacity_mhz",
-			"Average CPU core frequency in MHz. Multiply by cpu_corecount for total host capacity.",
+			"Average CPU core frequency in MHz."+
+				deprecatedFor(namespace, hostSubsystem, "cpu_capacity_hertz"),
+			"hostmo", "host", "vcenter"),
+
+		cpuCapacityHertz: d("cpu_capacity_hertz",
+			"Average CPU core frequency in hertz. Multiply by cpu_corecount for total host capacity.",
 			"hostmo", "host", "vcenter"),
 
 		// 原 help 写 "Amount of RAM in MB"，但 govmomi 的
@@ -185,11 +222,16 @@ func buildVMDescs(namespace string) vmDescs {
 			"Number of virtual CPUs configured for the virtual machine.",
 			"vmmo", "vm", "hostmo", "vcenter"),
 
-		// 这个 help 本来就是对的：Summary.Config.MemorySizeMB 确实是 MB。
-		// 保持原样，不引入 _bytes 版本 —— 换算单位会改变数值，属于另一类
-		// 破坏性变更，不该混进这次的文案修正里。
+		// Summary.Config.MemorySizeMB 确实是 MB，所以旧 help 本身没错 ——
+		// 错的是把非基础单位暴露给 Prometheus。新指标换算成字节（×1048576，
+		// MB 在这里是 2^20 而非 10^6），旧指标降级为 legacy 保留原值。
 		memCapacity: d("mem_capacity",
-			"Virtual memory configured for the virtual machine in MB.",
+			"Virtual memory configured for the virtual machine in MB."+
+				deprecatedFor(namespace, vmSubsystem, "mem_capacity_bytes"),
+			"vmmo", "vm", "hostmo", "vcenter"),
+
+		memCapacityBytes: d("mem_capacity_bytes",
+			"Virtual memory configured for the virtual machine in bytes.",
 			"vmmo", "vm", "hostmo", "vcenter"),
 
 		// 原 help 是从 mem_capacity 错抄过来的 "Virtual memory configured in MB"。
@@ -202,8 +244,8 @@ func buildVMDescs(namespace string) vmDescs {
 			"vmmo", "vm", "vcenter", "dsmo"),
 
 		dsCapacityUsedBytes: d("datastore_capacity_used_bytes",
-			"Storage committed by this virtual machine on the datastore, in bytes. "+
-				"Includes disks, logs, snapshots and configuration files.",
+			"Storage committed by this virtual machine on the datastore, in bytes."+
+				" Includes disks, logs, snapshots and configuration files.",
 			"vmmo", "vm", "vcenter", "dsmo"),
 
 		// created label 已移除（P1-4）：它是 CreateTime 的 RFC3339 形式，而
@@ -213,6 +255,46 @@ func buildVMDescs(namespace string) vmDescs {
 		snapshotInfo: d("snapshot_info",
 			"Unix timestamp of the snapshot creation time.",
 			"vmmo", "vm", "vcenter", "name"),
+	}
+}
+
+func buildDatastoreDescs(namespace string) datastoreDescs {
+	d := func(name, help string, labels ...string) *prometheus.Desc {
+		return prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, datastoreSubsystem, name),
+			help, labels, nil,
+		)
+	}
+
+	return datastoreDescs{
+		info: d("info",
+			"Datastore info, for joining on parent references.",
+			"dsmo", "ds", "type", "pfinstance", "foldermo", "vcenter"),
+
+		// capacity / free 的值本来就是字节，换算是 ×1，改动只在名字上。
+		capacity: d("capacity",
+			"Datastore capacity in bytes."+
+				deprecatedFor(namespace, datastoreSubsystem, "capacity_bytes"),
+			"dsmo", "ds", "vcenter"),
+
+		capacityBytes: d("capacity_bytes",
+			"Datastore capacity in bytes.",
+			"dsmo", "ds", "vcenter"),
+
+		free: d("free",
+			"Datastore available space in bytes."+
+				deprecatedFor(namespace, datastoreSubsystem, "free_bytes"),
+			"dsmo", "ds", "vcenter"),
+
+		freeBytes: d("free_bytes",
+			"Datastore available space in bytes.",
+			"dsmo", "ds", "vcenter"),
+
+		// accessible 不改名：它是无单位的布尔量，_bytes 之类的后缀不适用，
+		// 而 promlint 对这个名字没有意见。
+		accessible: d("accessible",
+			"Whether the datastore is accessible.",
+			"dsmo", "ds", "vcenter"),
 	}
 }
 
@@ -227,13 +309,15 @@ func deprecatedFor(namespace, subsystem, replacement string) string {
 // perfDescKey 唯一标识一个性能指标的 Desc。
 //
 // counter 名决定 fqName 与 help，moType 决定 label 集合（host/vm/ds 各不同），
-// instanced 决定是否带 pfinstance label。这四者一致即可复用同一个 Desc。
+// instanced 决定是否带 pfinstance label，legacy 决定用新名还是旧名。这五者
+// 一致即可复用同一个 Desc。
 type perfDescKey struct {
 	namespace string
 	subsystem string
 	counter   string
 	moType    string
 	instanced bool
+	legacy    bool
 }
 
 var (
@@ -264,13 +348,19 @@ func perfEntityLabels(moType string) []string {
 // 这是 P2-4 中收益最大的一处：原实现在 metric × value 的双层循环里每次都
 // NewDesc，规模是实体数 × 计数器数。1000 台 VM × 15 个计数器就是 15000 次，
 // 远超方案里估算的 4000。
-func perfDesc(namespace, subsystem, counter, moType string, instanced bool, counterInfo *types.PerfCounterInfo) *prometheus.Desc {
+//
+// legacy 为 true 时返回旧命名的 Desc（计数器名直接把 "." 换成 "_"），help 带
+// DEPRECATED 前缀。双写过渡期内同一个计数器会同时取两个 Desc，因此 legacy
+// 必须进 cache key —— 否则先取到的那个会被另一个复用，产出一条名字对不上
+// help 的序列。
+func perfDesc(namespace, subsystem, counter, moType string, instanced, legacy bool, counterInfo *types.PerfCounterInfo) *prometheus.Desc {
 	key := perfDescKey{
 		namespace: namespace,
 		subsystem: subsystem,
 		counter:   counter,
 		moType:    moType,
 		instanced: instanced,
+		legacy:    legacy,
 	}
 
 	perfDescMu.Lock()
@@ -285,16 +375,44 @@ func perfDesc(namespace, subsystem, counter, moType string, instanced bool, coun
 		labels = append(labels, "pfinstance")
 	}
 
+	// help 的原实现末尾多一个空格（"%s in %s "），照抄会把这个小毛病永久化。
+	// 新旧两条都用去掉空格的版本 —— 修 help 文本不是破坏性变更。
+	help := fmt.Sprintf("%s in %s",
+		counterInfo.UnitInfo.GetElementDescription().Label,
+		counterInfo.NameInfo.GetElementDescription().Summary,
+	)
+
+	name := strings.ReplaceAll(counter, ".", "_")
+
+	if legacy {
+		// 旧名的 help 追加 deprecation 说明，指向新名。替代名从同一张映射表
+		// 取，而不是在这里手拼 —— 手拼会让 help 里的名字和实际注册的新指标
+		// 名脱钩，而这种脱钩没有任何东西会报错。
+		spec, ok := translatePerfCounter(counter, counterInfo)
+		replacement := prometheus.BuildFQName(namespace, subsystem, name)
+		if ok {
+			replacement = prometheus.BuildFQName(namespace, subsystem, spec.Name)
+		}
+		help += fmt.Sprintf(deprecatedSuffix, replacement)
+	} else if spec, ok := translatePerfCounter(counter, counterInfo); ok {
+		name = spec.Name
+	}
+
 	d := prometheus.NewDesc(
-		prometheus.BuildFQName(namespace, subsystem, strings.ReplaceAll(counter, ".", "_")),
-		fmt.Sprintf("%s in %s ",
-			counterInfo.UnitInfo.GetElementDescription().Label,
-			counterInfo.NameInfo.GetElementDescription().Summary,
-		),
+		prometheus.BuildFQName(namespace, subsystem, name),
+		help,
 		labels, nil,
 	)
 
 	perfDescCache[key] = d
 
 	return d
+}
+
+// boolToFloat64 把布尔状态映射为 Prometheus 惯用的 1/0。
+func boolToFloat64(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
 }

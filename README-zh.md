@@ -287,6 +287,7 @@ scrape_configs:
 | `-web.config.file` | string | Web 配置文件路径，用于给 exporter 自身的监听端口启用 TLS 与 HTTP Basic Auth。详见[安全加固](#安全加固)。 | - |
 | `-disable.exporter.metrics` | bool | 是否**不**在 `/metrics` 中导出 exporter 自身的运行指标（`go_*`、`process_*`）。 | `true` |
 | `-disable.exporter.target` | bool | 是否禁用 `/metrics` 的默认采集目标。开启后 `/metrics` 只返回 exporter 自身指标，vCenter 数据改由 `/probe` 提供。 | `false` |
+| `-metrics.legacy` | bool | 是否在导出规范化指标名的同时，一并导出改名前的旧指标名。**仓库自带的 Grafana dashboard 目前仍引用旧名，使用它们必须打开这个开关**。详见[指标命名](#指标命名)。 | `false` |
 
 > **注意 `-disable.exporter.metrics` 默认就是 `true`**，也就是默认**不会**有
 > `go_goroutines`、`process_resident_memory_bytes` 这类指标。实测默认配置下
@@ -457,53 +458,112 @@ systemd 部署时，把密码放在 root 所有、权限 `600` 的 `EnvironmentF
 
 ## 指标变更与迁移指引
 
-下一个版本改了两个指标名、删了一个 label、并把三个指标标记为废弃。
-完整清单见 `CHANGELOG.md`，这里是需要动手的部分。
+这个版本把**全部**指标名规范化到 Prometheus 惯例：名字里带基础单位后缀、
+counter 带 `_total`、去掉 vSphere 的 rollup 后缀。完整对照表在 `CHANGELOG.md`，
+这一节讲运维上要做什么。
 
-### 必须处理
+### 使用仓库自带 dashboard 必须加 `-metrics.legacy`
 
-| 变更 | 需要做什么 |
-| :--- | :--- |
-| `vmware_cluster_datastores` → `vmware_cluster_datastore` | 改掉自建的告警规则和面板。同时 label 语义也变了：现在每个 datastore 一条独立序列，不再是把 moid 列表用逗号拼进 `dsmo` |
-| `vmware_compute_datastores` → `vmware_compute_datastore` | 同上 |
-| `vmware_vm_snapshot_info` 移除了 `created` label | 改从指标 **value** 读创建时间 —— 它就是同一时刻的 Unix 时间戳 |
+`dashboards/` 下的 Grafana 面板目前仍然引用旧指标名。在它们迁移完成前，启动时
+必须打开这个开关：
 
-这三项在本仓库自带的 dashboard 里引用数都是 0，所以自带面板不需要改动。
-但指标改名是静默失效的（查询语法合法、指标不存在、图就是空的，没有任何报错），
-如果你有自建的告警规则或面板，升级前务必先改。
-
-原来的 `*_datastores` 把整个 moid 列表拼成一个 label 值，有两个问题：
-查询侧无法用 `dsmo` 做 join（只能做子串匹配），且集群增删任一 datastore
-都会改变 label 值 —— 产生一条全新序列，旧序列则变成僵尸留在 TSDB 里。
-
-`created` label 被删的理由是它与 value 冗余：label 里是 RFC3339 字符串，
-value 是同一时刻的 Unix 秒数。用时间戳做 label 是 Prometheus 反模式，
-每个快照会占一条独立序列，快照删除后序列仍会滞留直到过期。
-
-```promql
-# 迁移前
-vmware_vm_snapshot_info{created="2026-08-30T11:04:12Z"}
-
-# 迁移后：value 就是 Unix 时间戳
-time() - vmware_vm_snapshot_info > 7 * 86400   # 找出超过一周的快照
+```
+vmware-exporter -metrics.legacy ...
 ```
 
-### 可以慢慢迁移
+不加的话，自带面板会**显示为空且不报任何错** —— Grafana 无法区分"指标被改名了"
+和"这个指标本来就没数据"。`-metrics.legacy=true` 会在导出新名的同时一并导出旧名，
+让面板在你迁移期间继续可用。
 
-三个指标被带单位后缀的新名字取代。过渡期内**新旧指标同时输出、数值完全相同**，
-旧指标的 help 里带 `DEPRECATED:` 标记，会在未来某个版本移除：
+### 指标命名
 
-| 废弃指标 | 替代指标 |
-| :--- | :--- |
-| `vmware_host_cpu_capacity` | `vmware_host_cpu_capacity_mhz` |
-| `vmware_host_mem_capacity` | `vmware_host_mem_capacity_bytes` |
-| `vmware_vm_datastore_capacity_used` | `vmware_vm_datastore_capacity_used_bytes` |
+新名字是从 vCenter 自己上报的计数器元数据推导出来的，不是手写清单。三条规则覆盖
+了几乎全部情况：
 
-**数值没有任何变化。** 这三个指标的数值一直是对的，错的是 help 文案 ——
-`vmware_host_mem_capacity` 尤其典型：help 一直写着 MB，但它输出的从来是字节。
-所以新指标不做任何单位换算。如果你之前在查询里按 help 描述的单位做过补偿换算，
-现在要把那个换算去掉。
+| 规则 | 例子 |
+| --- | --- |
+| 去掉 vSphere 的 rollup 后缀（`.average` / `.summation` / `.latest`）—— 它描述的是 vCenter 怎么聚合，而不是这个值是什么 | `cpu.usagemhz.average` → `cpu_usage_hertz` |
+| 单位变成名字后缀，并换算成 Prometheus 的基础单位 | `mem.consumed.average`（kiloBytes）→ `mem_consumed_bytes`，值 ×1024 |
+| vCenter 声明为 `delta` 的计数器变成真正的 counter，带 `_total` | `cpu.ready.summation` → `cpu_ready_seconds_total` |
 
-`vmware_vm_mem_capacity` **不在废弃列表里**，也不会有 `_bytes` 版本：
-它的数据源 `Summary.Config.MemorySizeMB` 确实是 MB，help 本来就是对的。
-给它换算单位会改变数值，那属于另一类破坏性变更，不该混进这次的文案修正。
+有两处换算值得单独点出来，因为**弄错之后算出的数看起来仍然很合理**：
+
+- **`percent` 类计数器要 ÷10000，不是 ÷100。** vSphere 的 percent 以百分之一个
+  百分点为单位，原始值 `100` 表示 1%。新的 `*_ratio` 指标落在 Prometheus 惯用的
+  0..1 区间，所以展示它的面板单位要选 `percentunit` 而不是 `percent`。
+- **`kiloBytes` 是 1024 字节，`megaBytes` 是 1048576 字节。** vSphere 文档明确按
+  二进制倍数定义。按 1000 算会把内存少报 2.4%。
+
+### 这次有些指标的数值也变了
+
+和上一个版本的"只改名不改值"不同，这次有几对替换指标的数值不同。任何拿指标跟
+硬编码阈值比较的地方，阈值都要跟着换算。
+
+| 旧名 | 新名 | 旧值乘以 |
+| --- | --- | --- |
+| `vmware_host_cpu_capacity`、`vmware_host_cpu_capacity_mhz` | `vmware_host_cpu_capacity_hertz` | 1000000 |
+| `vmware_host_mem_capacity` | `vmware_host_mem_capacity_bytes` | 1 |
+| `vmware_vm_mem_capacity` | `vmware_vm_mem_capacity_bytes` | 1048576 |
+| `vmware_vm_datastore_capacity_used` | `vmware_vm_datastore_capacity_used_bytes` | 1 |
+| `vmware_datastore_capacity` | `vmware_datastore_capacity_bytes` | 1 |
+| `vmware_datastore_free` | `vmware_datastore_free_bytes` | 1 |
+
+`vmware_host_cpu_capacity_mhz` 是上个版本刚引入的替代指标，这次它本身也被弃用了：
+MHz 不是 Prometheus 的基础单位。如果你上一轮已经迁到 `_mhz`，这轮再迁只是乘一个
+1000000。
+
+### delta 计数器：不要再除采样间隔了
+
+旧的 `*_summation` 指标是 gauge，值是抓取窗口内各样本的**平均值**，而把它换成速率
+的惯用写法是除以一个硬编码的间隔：
+
+```promql
+# 旧写法 —— 这个 20 是 -vmware.granularity，被硬编码进了查询
+vmware_host_cpu_ready_summation / (20 * 1000)
+```
+
+只要 `-vmware.granularity` 不是 20，这个表达式就是错的；而且 exporter 那一侧也是
+错的 —— 对 delta 样本求平均会丢掉除一个区间之外的全部增量。两边都已修正。新指标是
+counter，用 `rate()` 让 Prometheus 自己算间隔：
+
+```promql
+# 新写法 —— 没有硬编码间隔，任何 granularity 下都正确
+rate(vmware_host_cpu_ready_seconds_total[$__rate_interval])
+```
+
+适用于 `cpu_ready`、`cpu_costop`、`cpu_maxlimited`，以及四个
+`net_*_errors_total` / `net_*_dropped_total`。
+
+### 用 recording rules 让旧名继续可用
+
+如果你暂时完全不想改 dashboard，可以用 recording rules 从新指标反推出旧名。比
+`-metrics.legacy` 更值得长期采用，因为这些别名放在你自己的 Prometheus 配置里，
+可以一条一条删：
+
+```yaml
+groups:
+  - name: vmware-exporter-legacy-aliases
+    rules:
+      - record: vmware_host_cpu_capacity
+        expr: vmware_host_cpu_capacity_hertz / 1000000
+      - record: vmware_host_mem_capacity
+        expr: vmware_host_mem_capacity_bytes
+      - record: vmware_vm_mem_capacity
+        expr: vmware_vm_mem_capacity_bytes / 1048576
+      - record: vmware_datastore_capacity
+        expr: vmware_datastore_capacity_bytes
+      - record: vmware_datastore_free
+        expr: vmware_datastore_free_bytes
+```
+
+注意 recording rule **无法**忠实还原旧的 `*_summation` gauge —— 只要抓取窗口里
+落进了一个以上的样本，它们的旧值本身就是错的。那批指标应该直接迁到 `rate()`，
+而不是做别名。
+
+### 上一个版本的改名（仍需处理）
+
+| 变更 | 你需要做什么 |
+| --- | --- |
+| `vmware_cluster_datastores` → `vmware_cluster_datastore` | 改自己的规则/面板。而且现在每个 datastore 一条序列，不再是 `dsmo` 里逗号拼接的列表 |
+| `vmware_compute_datastores` → `vmware_compute_datastore` | 同上 |
+| `vmware_vm_snapshot_info` 去掉了 `created` label | 从 metric value 读创建时间，它就是同一时刻的 Unix 时间戳 |

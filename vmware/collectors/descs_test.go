@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/vmware/govmomi/find"
@@ -191,16 +192,28 @@ func TestPerfDescCachesAndDistinguishesInstanced(t *testing.T) {
 		},
 	}
 
-	plain := perfDesc("testns_perf", "host", "cpu.usage.average", "HostSystem", false, counterInfo)
-	again := perfDesc("testns_perf", "host", "cpu.usage.average", "HostSystem", false, counterInfo)
+	// 这个 counterInfo 的 UnitInfo 只有 Label 没有 Key，所以 translatePerfCounter
+	// 认不出它的单位 —— 于是 perfDesc 退回旧命名。这正好把「未知单位不猜后缀」
+	// 这条也一起锁住：猜错单位会让数值带着错误的后缀进入 TSDB，而没有任何
+	// 东西会报错。
+	plain := perfDesc("testns_perf", "host", "cpu.usage.average", "HostSystem", false, false, counterInfo)
+	again := perfDesc("testns_perf", "host", "cpu.usage.average", "HostSystem", false, false, counterInfo)
 
 	if plain != again {
 		t.Fatal("perfDesc() rebuilt the Desc for identical arguments; the cache is not working")
 	}
 
-	instanced := perfDesc("testns_perf", "host", "cpu.usage.average", "HostSystem", true, counterInfo)
+	instanced := perfDesc("testns_perf", "host", "cpu.usage.average", "HostSystem", true, false, counterInfo)
 	if instanced == plain {
 		t.Fatal("instanced and non-instanced variants must not share a Desc, their label sets differ")
+	}
+
+	// legacy 必须是 cache key 的一部分。双写过渡期内同一个计数器会取两次
+	// Desc（新名 + 旧名），legacy 不进 key 的话先取到的那个会被复用，产出
+	// 一条名字与 help 对不上的序列 —— 而 client_golang 不会为此报错。
+	legacy := perfDesc("testns_perf", "host", "cpu.usage.average", "HostSystem", false, true, counterInfo)
+	if legacy == plain {
+		t.Fatal("legacy and current variants must not share a Desc; legacy is not part of the cache key")
 	}
 
 	assertLabelOrder(t, descLabelNames(t, plain), []string{"vcenter", "host", "hostmo"})
@@ -209,6 +222,11 @@ func TestPerfDescCachesAndDistinguishesInstanced(t *testing.T) {
 	// 计数器名里的点必须转成下划线，否则不是合法的 Prometheus 指标名。
 	if !strings.HasPrefix(plain.String(), `Desc{fqName: "testns_perf_host_cpu_usage_average"`) {
 		t.Fatalf("counter name was not sanitised: %s", plain.String())
+	}
+
+	// 旧名的 help 必须带 deprecation 说明，否则用户没有任何线索知道该迁移。
+	if !strings.Contains(legacy.String(), "DEPRECATED") {
+		t.Errorf("legacy Desc help is missing the deprecation notice: %s", legacy.String())
 	}
 }
 
@@ -421,15 +439,16 @@ func TestHostCollectorLabelValuePairing(t *testing.T) {
 	// 单个 Desc 内部顺序错配可以被上面的形态断言抓到，但如果有人把某一个
 	// Desc 的 hostmo/host 两个位置一起换了，形态断言就失效了 —— 那种情况下
 	// 这个交叉比对是唯一的防线。
+	// 名单里用的是规范化后的新名。旧名（cpu_capacity、cpu_capacity_mhz、
+	// mem_capacity）只在 -metrics.legacy=true 时输出，而测试跑在默认值 false
+	// 下 —— 它们的 label 配对由 TestLegacyMetricsAgreeWithReplacements 覆盖。
 	want := entityPairs(hardware, "hostmo", "host")
 	for _, name := range []string{
 		"vmware_host_info",
 		"vmware_host_software_info",
 		"vmware_host_cpu_corecount",
 		"vmware_host_cpu_threadcount",
-		"vmware_host_cpu_capacity",
-		"vmware_host_cpu_capacity_mhz",
-		"vmware_host_mem_capacity",
+		"vmware_host_cpu_capacity_hertz",
 		"vmware_host_mem_capacity_bytes",
 	} {
 		got := entityPairs(requireSeries(t, series, name), "hostmo", "host")
@@ -442,9 +461,7 @@ func TestHostCollectorLabelValuePairing(t *testing.T) {
 	for _, name := range []string{
 		"vmware_host_cpu_corecount",
 		"vmware_host_cpu_threadcount",
-		"vmware_host_cpu_capacity",
-		"vmware_host_cpu_capacity_mhz",
-		"vmware_host_mem_capacity",
+		"vmware_host_cpu_capacity_hertz",
 		"vmware_host_mem_capacity_bytes",
 	} {
 		for _, s := range requireSeries(t, series, name) {
@@ -485,7 +502,7 @@ func TestVMCollectorLabelValuePairing(t *testing.T) {
 		assertIsNotMoid(t, "vmware_vm_info", "vm", s["vm"])
 	}
 
-	for _, name := range []string{"vmware_vm_cpu_corecount", "vmware_vm_mem_capacity"} {
+	for _, name := range []string{"vmware_vm_cpu_corecount", "vmware_vm_mem_capacity_bytes"} {
 		for _, s := range requireSeries(t, series, name) {
 			assertLabels(t, name, s, map[string]string{"vcenter": target})
 			assertIsMoid(t, name, "vmmo", s["vmmo"], "vm-")
@@ -499,7 +516,6 @@ func TestVMCollectorLabelValuePairing(t *testing.T) {
 	// 如果按 "实体 label 在前、vcenter 在后" 的直觉传值，dsmo 位置上会出现
 	// target 地址，而 vcenter 上会出现 datastore moid。
 	for _, name := range []string{
-		"vmware_vm_datastore_capacity_used",
 		"vmware_vm_datastore_capacity_used_bytes",
 	} {
 		for _, s := range requireSeries(t, series, name) {
@@ -514,8 +530,7 @@ func TestVMCollectorLabelValuePairing(t *testing.T) {
 	want := entityPairs(info, "vmmo", "vm")
 	for _, name := range []string{
 		"vmware_vm_cpu_corecount",
-		"vmware_vm_mem_capacity",
-		"vmware_vm_datastore_capacity_used",
+		"vmware_vm_mem_capacity_bytes",
 		"vmware_vm_datastore_capacity_used_bytes",
 	} {
 		got := entityPairs(requireSeries(t, series, name), "vmmo", "vm")
@@ -525,17 +540,27 @@ func TestVMCollectorLabelValuePairing(t *testing.T) {
 	}
 }
 
-// TestDeprecatedAndReplacementMetricsAgree 锁死双写过渡期的核心保证：
-// 旧指标与新指标必须**逐条序列**同值。
+// TestLegacyMetricsAgreeWithReplacements 锁死 -metrics.legacy 过渡期的核心保证：
+// 旧指标与新指标必须**逐条序列**可换算互推。
 //
-// 这三对指标之所以是双写而不是改名，是因为随仓库分发的 dashboard 大量引用旧名
-// （host_mem_capacity 29 处、host_cpu_capacity 20 处）。双写的意义在于用户可以
-// 分批迁移，而迁移的前提是两者数值可以互换 —— 如果哪天有人给新指标加了单位换算
-// 却忘了旧指标，用户在迁移过程中会看到图表数值突变，且没有任何报错。
-func TestDeprecatedAndReplacementMetricsAgree(t *testing.T) {
+// 这些指标之所以保留旧名而不是直接删掉，是因为随仓库分发的 dashboard 大量引用
+// （host_mem_capacity 29 处、host_cpu_capacity 20 处）。legacy 的意义在于用户
+// 可以分批迁移，而迁移的前提是能从旧值推出新值 —— 如果哪天有人改了新指标的
+// 换算却忘了这张表，用户在迁移过程中会看到图表数值突变，且没有任何报错。
+//
+// 与上一版的区别：新指标现在真的做了单位换算（MHz→hertz、MB→bytes），所以
+// 断言的不再是「相等」而是「差一个已知因子」。因子写在表里，改换算就必须改这里。
+func TestLegacyMetricsAgreeWithReplacements(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ctx, s, cleanup := setupCollectorScrape(t)
 	defer cleanup()
+
+	// 旧名默认不输出，这个测试必须显式打开 flag。
+	// 用 t.Cleanup 恢复而不是裸 defer：其他测试断言的是 flag=false 下的行为，
+	// 泄漏出去会让它们随执行顺序时红时绿。
+	restore := *legacyMetrics
+	*legacyMetrics = true
+	t.Cleanup(func() { *legacyMetrics = restore })
 
 	hostCol, err := NewhostCollector(logger)
 	if err != nil {
@@ -555,10 +580,19 @@ func TestDeprecatedAndReplacementMetricsAgree(t *testing.T) {
 		t.Fatalf("vm Update() returned error: %v", err)
 	}
 
+	dsCol, err := NewdatastoreCollector(logger)
+	if err != nil {
+		t.Fatalf("NewdatastoreCollector() returned error: %v", err)
+	}
+	dsCh := make(chan prometheus.Metric, 20000)
+	if err := dsCol.Update(ctx, dsCh, s); err != nil {
+		t.Fatalf("datastore Update() returned error: %v", err)
+	}
+
 	// 按 (fqName, 序列化后的 label 集) 索引取值，逐序列比对而不是比总和 ——
 	// 比总和会让 "两条序列的值互换" 这类错误蒙混过关。
 	values := map[string]map[string]float64{}
-	for _, ch := range []<-chan prometheus.Metric{hostCh, vmCh} {
+	for _, ch := range []<-chan prometheus.Metric{hostCh, vmCh, dsCh} {
 		for _, m := range drainMetrics(ch) {
 			name, labels, v := labelsOf(t, m)
 			if values[name] == nil {
@@ -569,19 +603,26 @@ func TestDeprecatedAndReplacementMetricsAgree(t *testing.T) {
 	}
 
 	pairs := []struct {
-		deprecated, replacement string
+		legacy, replacement string
+		// factor 是 replacement / legacy。1 表示只改名不改值。
+		factor float64
 		// 双写的两个指标 label 集完全相同，所以 key 可以直接比。
 	}{
-		{"vmware_host_cpu_capacity", "vmware_host_cpu_capacity_mhz"},
-		{"vmware_host_mem_capacity", "vmware_host_mem_capacity_bytes"},
-		{"vmware_vm_datastore_capacity_used", "vmware_vm_datastore_capacity_used_bytes"},
+		{"vmware_host_cpu_capacity", "vmware_host_cpu_capacity_hertz", 1e6},
+		{"vmware_host_cpu_capacity_mhz", "vmware_host_cpu_capacity_hertz", 1e6},
+		{"vmware_host_mem_capacity", "vmware_host_mem_capacity_bytes", 1},
+		{"vmware_vm_mem_capacity", "vmware_vm_mem_capacity_bytes", 1048576},
+		{"vmware_vm_datastore_capacity_used", "vmware_vm_datastore_capacity_used_bytes", 1},
+		{"vmware_datastore_capacity", "vmware_datastore_capacity_bytes", 1},
+		{"vmware_datastore_free", "vmware_datastore_free_bytes", 1},
 	}
 
 	for _, p := range pairs {
-		t.Run(p.deprecated, func(t *testing.T) {
-			oldVals, ok := values[p.deprecated]
+		t.Run(p.legacy, func(t *testing.T) {
+			oldVals, ok := values[p.legacy]
 			if !ok || len(oldVals) == 0 {
-				t.Fatalf("%s was not emitted; the deprecated metric must keep working for a full release cycle", p.deprecated)
+				t.Fatalf("%s was not emitted with -metrics.legacy=true; "+
+					"the legacy metric must keep working for a full release cycle", p.legacy)
 			}
 			newVals, ok := values[p.replacement]
 			if !ok || len(newVals) == 0 {
@@ -590,19 +631,22 @@ func TestDeprecatedAndReplacementMetricsAgree(t *testing.T) {
 
 			if len(oldVals) != len(newVals) {
 				t.Fatalf("series count mismatch: %s has %d, %s has %d",
-					p.deprecated, len(oldVals), p.replacement, len(newVals))
+					p.legacy, len(oldVals), p.replacement, len(newVals))
 			}
 
-			for key, want := range oldVals {
+			for key, legacyVal := range oldVals {
 				got, ok := newVals[key]
 				if !ok {
 					t.Errorf("%s has series %s but %s does not; the label sets must stay identical "+
-						"so users can swap one for the other", p.deprecated, key, p.replacement)
+						"so users can swap one for the other", p.legacy, key, p.replacement)
 					continue
 				}
-				if got != want {
-					t.Errorf("%s{%s} = %v but %s = %v; during the deprecation window the two must "+
-						"be numerically interchangeable", p.deprecated, key, want, p.replacement, got)
+				// 精确比较而不是留容差：所有因子都是整数（1、1e6、2^20），
+				// 源值也是整数，float64 在这个量级内没有舍入。留容差反而会
+				// 放过真正的换算错误（例如 1000 与 1024 之差）。
+				if want := legacyVal * p.factor; got != want {
+					t.Errorf("%s{%s} = %v, so %s should be %v (x%g) but is %v",
+						p.legacy, key, legacyVal, p.replacement, want, p.factor, got)
 				}
 			}
 		})
@@ -616,9 +660,13 @@ func TestDeprecatedAndReplacementMetricsAgree(t *testing.T) {
 		desc *prometheus.Desc
 		want string
 	}{
-		{"host cpu_capacity", descs.host.cpuCapacity, "vmware_host_cpu_capacity_mhz"},
+		{"host cpu_capacity", descs.host.cpuCapacity, "vmware_host_cpu_capacity_hertz"},
+		{"host cpu_capacity_mhz", descs.host.cpuCapacityMHz, "vmware_host_cpu_capacity_hertz"},
 		{"host mem_capacity", descs.host.memCapacity, "vmware_host_mem_capacity_bytes"},
+		{"vm mem_capacity", descs.vm.memCapacity, "vmware_vm_mem_capacity_bytes"},
 		{"vm datastore_capacity_used", descs.vm.dsCapacityUsed, "vmware_vm_datastore_capacity_used_bytes"},
+		{"datastore capacity", descs.datastore.capacity, "vmware_datastore_capacity_bytes"},
+		{"datastore free", descs.datastore.free, "vmware_datastore_free_bytes"},
 	} {
 		s := tc.desc.String()
 		if !strings.Contains(s, "DEPRECATED") {
@@ -629,14 +677,96 @@ func TestDeprecatedAndReplacementMetricsAgree(t *testing.T) {
 		}
 	}
 
-	// vm_mem_capacity 是唯一一个 help 本来就正确的（MemorySizeMB 确实是 MB），
-	// 所以它不该被标记 deprecated，也不该有 _bytes 变体 —— 换算单位会改变数值，
-	// 属于另一类破坏性变更。
-	if s := descs.vm.memCapacity.String(); strings.Contains(s, "DEPRECATED") {
-		t.Errorf("vmware_vm_mem_capacity must not be deprecated, its help was already correct: %s", s)
+	// 反过来确认替代指标自己没有被标记 deprecated —— 复制粘贴 Desc 构造时
+	// 很容易把 deprecatedFor(...) 一起带过去，而那会让用户以为新名也要弃用。
+	for _, tc := range []struct {
+		name string
+		desc *prometheus.Desc
+	}{
+		{"host cpu_capacity_hertz", descs.host.cpuCapacityHertz},
+		{"host mem_capacity_bytes", descs.host.memCapacityBytes},
+		{"vm mem_capacity_bytes", descs.vm.memCapacityBytes},
+		{"vm datastore_capacity_used_bytes", descs.vm.dsCapacityUsedBytes},
+		{"datastore capacity_bytes", descs.datastore.capacityBytes},
+		{"datastore free_bytes", descs.datastore.freeBytes},
+	} {
+		if s := tc.desc.String(); strings.Contains(s, "DEPRECATED") {
+			t.Errorf("%s is the replacement metric and must not be marked deprecated: %s", tc.name, s)
+		}
 	}
-	if _, ok := values["vmware_vm_mem_capacity_bytes"]; ok {
-		t.Error("vmware_vm_mem_capacity_bytes must not exist; converting MB to bytes would change the value")
+}
+
+// TestLegacyMetricsAreOffByDefault 是 -metrics.legacy 的另一半：
+// 默认配置下**一条旧名都不能出现**。
+//
+// 上一版是无条件双写，所以「默认给出一套干净指标集」这个承诺当时并不成立。
+// 这个测试把它锁住 —— 如果有人把某条旧指标的 if *legacyMetrics 漏掉，
+// 这里会立刻报出具体是哪一条，而不是留给用户在 /metrics 里发现。
+func TestLegacyMetricsAreOffByDefault(t *testing.T) {
+	if *legacyMetrics {
+		t.Fatalf("-metrics.legacy must default to false, got true")
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx, s, cleanup := setupCollectorScrape(t)
+	defer cleanup()
+
+	seen := map[string]bool{}
+	for _, tc := range []struct {
+		name string
+		new  func(*slog.Logger) (collector.Collector, error)
+		buf  int
+	}{
+		{"host", NewhostCollector, 40000},
+		{"vm", NewvmCollector, 60000},
+		{"datastore", NewdatastoreCollector, 20000},
+	} {
+		col, err := tc.new(logger)
+		if err != nil {
+			t.Fatalf("New%sCollector() returned error: %v", tc.name, err)
+		}
+		ch := make(chan prometheus.Metric, tc.buf)
+		if err := col.Update(ctx, ch, s); err != nil {
+			t.Fatalf("%s Update() returned error: %v", tc.name, err)
+		}
+		for _, m := range drainMetrics(ch) {
+			name, _, _ := labelsOf(t, m)
+			seen[name] = true
+		}
+	}
+
+	// 清单覆盖静态 Desc 与性能计数器两条路径。性能指标只取一个代表
+	// （cpu.usage.average 的旧名），全量映射由 TestPerfCounterNamesAreMapped 覆盖。
+	for _, legacy := range []string{
+		"vmware_host_cpu_capacity",
+		"vmware_host_cpu_capacity_mhz",
+		"vmware_host_mem_capacity",
+		"vmware_host_cpu_usage_average",
+		"vmware_vm_mem_capacity",
+		"vmware_vm_datastore_capacity_used",
+		"vmware_datastore_capacity",
+		"vmware_datastore_free",
+	} {
+		if seen[legacy] {
+			t.Errorf("%s was emitted with -metrics.legacy=false; "+
+				"the default metric set must not contain legacy names", legacy)
+		}
+	}
+
+	// 反向确认：替代指标必须真的在默认配置下出现，否则上面的断言可以靠
+	// 「什么都不导出」轻易通过。
+	for _, current := range []string{
+		"vmware_host_cpu_capacity_hertz",
+		"vmware_host_mem_capacity_bytes",
+		"vmware_host_cpu_usage_hertz",
+		"vmware_vm_mem_capacity_bytes",
+		"vmware_vm_datastore_capacity_used_bytes",
+		"vmware_datastore_capacity_bytes",
+		"vmware_datastore_free_bytes",
+	} {
+		if !seen[current] {
+			t.Errorf("%s was not emitted; the normalised metric must be present by default", current)
+		}
 	}
 }
 
@@ -778,7 +908,9 @@ func TestPerfMetricLabelValuePairing(t *testing.T) {
 
 			for _, m := range metrics {
 				name, labels, _ := labelsOf(t, m)
-				if name != "vmware_host_cpu_usage_average" {
+				// cpu.usage.average 的单位是 percent，规范化后是
+				// vmware_host_cpu_usage_ratio。
+				if name != "vmware_host_cpu_usage_ratio" {
 					t.Fatalf("unexpected metric name %q", name)
 				}
 

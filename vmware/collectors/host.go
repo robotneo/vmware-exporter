@@ -101,9 +101,20 @@ func (c *hostCollector) Update(ctx context.Context, ch chan<- prometheus.Metric,
 				prometheus.GaugeValue, float64(hw.NumCpuThreads),
 				moid, name, target)
 
-			// 双写过渡：无单位后缀的旧指标与带 _mhz / _bytes 的新指标同时输出。
-			// 旧指标的 help 已标注 deprecated，值不变 —— 唯一变化是文案，
-			// 所以现有 dashboard 不需要任何改动就能继续工作。
+			// MHz → hertz、MB → bytes 的换算落在新指标上；旧指标只在
+			// -metrics.legacy=true 时输出，且保留原始取值。
+			ch <- prometheus.MustNewConstMetric(descs.cpuCapacityHertz,
+				prometheus.GaugeValue, float64(hw.CpuMhz)*1e6,
+				moid, name, target)
+
+			ch <- prometheus.MustNewConstMetric(descs.memCapacityBytes,
+				prometheus.GaugeValue, float64(hw.MemorySize),
+				moid, name, target)
+
+			if !*legacyMetrics {
+				continue
+			}
+
 			ch <- prometheus.MustNewConstMetric(descs.cpuCapacity,
 				prometheus.GaugeValue, float64(hw.CpuMhz),
 				moid, name, target)
@@ -113,10 +124,6 @@ func (c *hostCollector) Update(ctx context.Context, ch chan<- prometheus.Metric,
 				moid, name, target)
 
 			ch <- prometheus.MustNewConstMetric(descs.memCapacity,
-				prometheus.GaugeValue, float64(hw.MemorySize),
-				moid, name, target)
-
-			ch <- prometheus.MustNewConstMetric(descs.memCapacityBytes,
 				prometheus.GaugeValue, float64(hw.MemorySize),
 				moid, name, target)
 
