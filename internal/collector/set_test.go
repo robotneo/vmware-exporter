@@ -128,6 +128,7 @@ func TestLoginFailureEmitsUpZero(t *testing.T) {
 		Namespace: "vmware",
 		Target:    "vcenter.example.com",
 		Login:     login,
+		Errors:    NewScrapeErrors(),
 	})
 	if err != nil {
 		t.Fatalf("NewCollectorSet failed: %s", err)
@@ -173,6 +174,7 @@ func TestCollectInjectsNamespaceAndConcurrency(t *testing.T) {
 		Namespace:      "vmware",
 		Login:          login,
 		MaxConcurrency: 17,
+		Errors:         NewScrapeErrors(),
 	})
 	if err != nil {
 		t.Fatalf("NewCollectorSet failed: %s", err)
@@ -250,6 +252,7 @@ func TestMaxConcurrencyRespected(t *testing.T) {
 		Namespace:      "vmware",
 		Login:          login,
 		MaxConcurrency: limit,
+		Errors:         NewScrapeErrors(),
 	})
 	if err != nil {
 		t.Fatalf("NewCollectorSet failed: %s", err)

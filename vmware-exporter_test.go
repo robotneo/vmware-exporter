@@ -403,13 +403,16 @@ func TestParseCollectors(t *testing.T) {
 // TestCollectorSetDescribeExposesScrapeMetrics 验证 Describe 不是空实现。
 // 空 Describe 会让 registry 把 collector 当作 unchecked，从而跳过重复注册检测。
 //
-// 期望数量从 2 变成 4：Stage 9 新增了 vmware_up 与
-// vmware_scrape_duration_seconds 两个无标签指标。
+// 期望数量从 2 变成 5：Stage 9 新增了 vmware_up 与
+// vmware_scrape_duration_seconds，Stage 10a 又加了 vmware_scrape_errors_total。
 //   - vmware_up：不是 Prometheus 自己生成的那个 up（那个只表示 HTTP 请求
 //     成功）。对多 target exporter 来说 HTTP 成功而 vCenter 登录失败是常态，
 //     没有这个指标就写不出「目标不可达」的告警。
 //   - vmware_scrape_duration_seconds：通用 exporter 告警规则查的是这个无标签
 //     版本，框架只有带 collector="all_collectors" 标签的那个。
+//   - vmware_scrape_errors_total：全库唯一的 counter。collector_success 只能
+//     回答「最近一轮成不成」，答不出「过去一小时失败几次」—— 间歇性故障在
+//     gauge 上会被采样间隔漏掉。
 func TestCollectorSetDescribeExposesScrapeMetrics(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -420,6 +423,7 @@ func TestCollectorSetDescribeExposesScrapeMetrics(t *testing.T) {
 		// Enabled 为 nil 时按各 collector 的默认开关走，这里只关心 Describe，
 		// 不需要真的启用任何 collector。
 		Enabled: map[string]bool{},
+		Errors:  collector.NewScrapeErrors(),
 	})
 	if err != nil {
 		t.Fatalf("NewCollectorSet() returned error: %v", err)
@@ -439,6 +443,7 @@ func TestCollectorSetDescribeExposesScrapeMetrics(t *testing.T) {
 		"vmware_scrape_duration_seconds",
 		"vmware_scrape_collector_duration_seconds",
 		"vmware_scrape_collector_success",
+		"vmware_scrape_errors_total",
 	}
 
 	if len(descs) != len(want) {

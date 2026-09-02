@@ -68,6 +68,14 @@ var (
 			"https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md")
 )
 
+// scrapeErrors 是 vmware_scrape_errors_total 的进程级累加状态。
+//
+// 必须在 handler 之外、进程生命周期内只有一份：CollectorSet 每请求构造一个
+// 新实例，把计数放在实例里会让 counter 每轮归零（详见
+// internal/collector/errors.go 顶部）。/metrics 与 /probe 共用同一份，
+// 按 target 分桶互不干扰。
+var scrapeErrors = collector.NewScrapeErrors()
+
 func usage() {
 	s := fmt.Sprintf(`%s collects metrics data from VMware vCenter.
 
@@ -254,6 +262,7 @@ func metricsHandler(logger *slog.Logger) http.HandlerFunc {
 			Login:          vmware.NewAPI(),
 			Logger:         logger,
 			MaxConcurrency: *maxConcurrency,
+			Errors:         scrapeErrors,
 		})
 		if err != nil {
 			logger.Error("could not create the collector set", "error", err)
@@ -334,6 +343,7 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 		Logger:         logger,
 		Enabled:        enabledCollectors,
 		MaxConcurrency: *maxConcurrency,
+		Errors:         scrapeErrors,
 	})
 	if err != nil {
 		logger.Error("could not create the collector set", "target", target, "error", err)

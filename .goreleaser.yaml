@@ -12,6 +12,28 @@ builds:
     binary: vmware-exporter
     env:
       - CGO_ENABLED=0
+    # Populate github.com/prometheus/common/version so that
+    # vmware_exporter_build_info carries real values.
+    #
+    # Without these, the metric is still exported but with version="" and
+    # branch="" -- verified against a plain `go build`. That makes the single
+    # most common operational question ("which build is this host running?")
+    # unanswerable from monitoring, which is the whole point of build_info.
+    #
+    # `revision` is the one field Go fills in by itself (from VCS stamping
+    # since 1.24), so it looks populated even without ldflags. That is a trap:
+    # it makes build_info appear to work when it does not.
+    #
+    # -s -w strip the symbol table and DWARF data. Prometheus exporters ship
+    # this way by default; it cuts the binary roughly in half and the ldflags
+    # above are what makes a stack trace's build identifiable anyway.
+    ldflags:
+      - -s -w
+      - -X github.com/prometheus/common/version.Version={{ .Version }}
+      - -X github.com/prometheus/common/version.Revision={{ .FullCommit }}
+      - -X github.com/prometheus/common/version.Branch={{ .Branch }}
+      - -X github.com/prometheus/common/version.BuildDate={{ .Date }}
+      - -X github.com/prometheus/common/version.BuildUser=goreleaser
     goos:
       - linux
       - windows

@@ -209,16 +209,64 @@ and performance counters; it never writes.
 
 ## Self-monitoring
 
-Every scrape emits per-collector health metrics, so a collector that silently
-fails is visible without reading logs:
+Every scrape emits health metrics, so a collector that silently fails is visible
+without reading logs:
 
 ```
+vmware_up 1
+vmware_scrape_duration_seconds 1.512
 vmware_scrape_collector_duration_seconds{collector="host"} 1.284
 vmware_scrape_collector_success{collector="host"} 1
+vmware_scrape_errors_total{collector="host"} 0
+vmware_scrape_errors_total{collector="login"} 0
 ```
 
-Alert on `min_over_time(vmware_scrape_collector_success[5m]) == 0` to catch a
-collector that is consistently failing while the rest of the scrape succeeds.
+| Metric | Type | What it answers |
+| --- | --- | --- |
+| `vmware_up` | gauge | Could the target be logged into at all? `0` means no inventory data was produced. Not the same as Prometheus's built-in `up`, which only reports whether the HTTP request succeeded — and *HTTP fine, vCenter login rejected* is a routine outcome for a multi-target exporter |
+| `vmware_scrape_duration_seconds` | gauge | Total scrape time, login and logout included |
+| `vmware_scrape_collector_duration_seconds{collector}` | gauge | Per-collector time. `collector="login"` covers authentication |
+| `vmware_scrape_collector_success{collector}` | gauge | Did the *last* scrape of this collector work? |
+| `vmware_scrape_errors_total{collector}` | **counter** | How many times has it failed? `collector="login"` covers authentication failures |
+| `vmware_exporter_build_info` | gauge | Which build is running (`version`, `revision`, `branch`, `goversion`) |
+
+`success` and `errors_total` answer different questions, and you want both.
+`success` is a snapshot — it cannot tell you whether a collector failed twelve
+times in the last hour and happened to recover just before the last scrape. A
+vCenter that times out intermittently reads as flicker on the gauge, and anything
+that fails and recovers between two samples is invisible to it. The counter
+cannot miss it.
+
+```promql
+# target unreachable or credentials rejected
+vmware_up == 0
+
+# one collector failing while the rest of the scrape succeeds
+min_over_time(vmware_scrape_collector_success[5m]) == 0
+
+# sustained failure of a single collector
+increase(vmware_scrape_errors_total{collector!="login"}[15m]) > 3
+
+# credentials rejected
+increase(vmware_scrape_errors_total{collector="login"}[15m]) > 0
+```
+
+Collectors that have never failed report `0` rather than being omitted. That is
+deliberate: a series that does not exist while everything is healthy makes the
+alert above read *no data* instead of *zero*, and once the first failure creates
+the series, `increase()` has no prior sample to compute a delta from — so the
+first outage would be the one you miss.
+
+Login failures are counted under `collector="login"` only, never spread across
+the individual collectors. One expired password would otherwise read as N+1
+separate failures and bury the signal you want.
+
+In `/probe` mode the counts are bucketed per target, so a rejected password on
+one vCenter cannot inflate the error count of another.
+
+`vmware_exporter_build_info` only carries real values if the binary was built
+with the version linker flags — the release builds and the `Dockerfile` set them
+(see `--build-arg` in the Dockerfile), a plain `go build` does not.
 
 Unknown collector names passed via `collect[]` are rejected with HTTP 400 rather
 than silently ignored.
