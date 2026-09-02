@@ -3,7 +3,9 @@
 **状态：设计稿，待确认。本文不含任何代码改动。**
 
 范围由用户界定：
-- **要做**：ResourcePool、vSAN，两者**默认禁用**，按需开启。
+- **要做**：
+  - **ResourcePool —— 默认启用**（`DefaultEnabled`）
+  - **vSAN —— 默认禁用**（`DefaultDisabled`），按需开启
 - **不做**：Network（端口组）、分布式交换机（DVS）—— 从缺口分析的 P1 中移除。
 - 参考实现：telegraf `inputs.vsphere` 插件的配置与指标口径。
 
@@ -198,12 +200,28 @@ if isESXi(s) && rp.Self.Value == "ha-root-pool" {
 理由与那边一致：让"这不是用户创建的资源池"在指标层面可见，而不是静默混进
 真实数据里。
 
-### 1.5 规模风险
+### 1.5 规模风险（默认启用后需要正面处理）
 
-资源池数量通常远小于 VM 数，但**嵌套资源池在某些环境里会很多**（DRS 会为
-每个 vApp 建池）。一次 ContainerView 检索的成本与实体数线性相关。
+资源池数量通常远小于 VM 数，但**嵌套资源池在某些环境里会很多** —— DRS 会为
+每个 vApp 建池，某些自动化平台也会按租户/项目批量建池。一次 ContainerView
+检索的成本与实体数线性相关。
 
-默认禁用本身就是这个风险的缓解措施。
+**默认启用意味着这个风险不能再靠"用户没开"来回避**，需要三点应对：
+
+1. **只检索必要属性**。属性列表见 1.2，刻意不含 `childConfiguration`
+   （嵌套池的配置数组，深层嵌套时体积可观）。
+2. **序列基数要评估清楚**。每个资源池产出约 14 条固定序列，加上
+   `resourcepool_vm` 的一虚机一条。**后者是基数主项** —— 1000 台 VM 就是
+   1000 条 `resourcepool_vm` 序列。这个量级本身可接受（与
+   `vmware_vm_info` 同级），但要在 README 里写明，不能让用户被 TSDB
+   增长意外。
+3. **性能验证要覆盖大规模模型**。`simulator.VPX()` 默认模型太小，
+   测试里应显式调大实体数（`model.Pool` / `model.Machine`），
+   确认检索耗时随实体数的增长是线性而非二次 —— 二次增长通常意味着写了
+   嵌套遍历。
+
+若实测发现深层嵌套确实构成问题，再考虑加深度上限 flag；
+**现在不预先加**，那属于没有证据支撑的复杂度。
 
 ---
 
@@ -305,12 +323,21 @@ telegraf 用两个插件实例分别以 30s / 300s 抓 summary 与 performance�
 - 用户可以只开 `vsan` 不开 `vsan.perf` —— 这恰好对应"我只想知道容量和盘
   健康"这个最常见需求。
 
-两者都 `DefaultDisabled`。
+两者都 `DefaultDisabled` —— 这是用户明确要求的：vSAN 默认禁用，
+ResourcePool 默认启用。
 
-**额外 flag**：`-vsan.perf.interval`（秒，默认 300）。
-理由是 vSAN 性能服务的滚动窗口是 5 分钟，vSAN 8 U1 起可降到 30 秒
-（telegraf 文档明确），需要可配。**不复用 `-vmware.interval`** ——
-那个是 vSphere perf 的窗口，两者语义不同、取值范围也不同。
+对 vSAN 来说默认禁用不只是保守，而是**正确的默认**：绝大多数 vSphere 环境
+没有启用 vSAN，默认开启会让这些环境每轮 scrape 都白跑一遍
+`VsanClusterGetConfig`（虽然会优雅降级成 `vsan_enabled 0`，但往返是实打实
+花掉的）。
+
+**额外 flag**：性能窗口需要可配，因为 vSAN 性能服务的滚动窗口是 5 分钟，
+vSAN 8 U1 起可降到 30 秒（telegraf 文档明确）。
+**不复用 `-vmware.interval`** —— 那个是 vSphere perf 的窗口，两者语义不同、
+取值范围也不同。
+
+命名建议 **`-vmware.vsan.interval`**（默认 300 秒），理由见 D7：
+初稿写的 `-vsan.perf.interval` 会开出一个只装一个 flag 的新顶层命名空间。
 
 ### 2.4 未启用 vSAN 时必须优雅降级
 
@@ -416,18 +443,30 @@ ClusterConfigSystem.VsanClusterReconfig
 ### 3.3 CI 影响
 
 - `check_config.py` 会自动发现新 flag（它从 binary 的 `-h` 输出提取，
-  实测 26 flags 已知），新增 `-collector.resourcepool` / `-collector.vsan` /
-  `-collector.vsan.perf` / `-vsan.perf.interval` 后**必须同步更新 README 的
-  flag 表**，否则 config job 会红 —— 这是它的设计意图。
+  实测输出 `config check OK (26 flags known via binary, 24 files scanned)`），
+  新增 `-collector.resourcepool` / `-collector.vsan` /
+  `-collector.vsan.perf` / `-vmware.vsan.interval`（命名见 D7）后
+  **必须同步更新两份 README 的 flag 表**，否则 config job 会红 ——
+  这是它的设计意图。注意它是**双向**检查：写了文档但没注册也会红。
 - `TestDefinitionsMatchRegisteredFlags`（`registry_test.go`）会强制
   `definitions` 清单与 `RegisterFlag` 注册的开关一致，漏一处就编译期外的
   测试失败。这是好事，不需要改。
+  但要知道它**只查正向**（清单里的名字有没有对应 flag），反向不查 ——
+  注册了 flag 却忘了进清单，这个测试是绿的，`/probe` 却少一个 collector。
+  实现时两处一起改，别依赖测试兜住反向。
+- `TestCreatorsProduceCollectors` 会对每个 `Creator` 传 **nil logger** 调用
+  并断言不返回 error、不返回 nil。三个新 collector 的构造函数因此
+  **不能在构造期解引用 logger**（现有 collector 都是直接把指针存进结构体，
+  照抄即可）。这条初稿没写，是读 `registry_test.go:81-94` 时发现的。
 - 新增 dashboard panel（若有）要过 `migrate_dashboards.py --check` 与
   `patch_dashboards.py --check`。
 
 ---
 
-## 四、需要你拍板的六个决策点
+## 四、需要你拍板的七个决策点
+
+默认值（ResourcePool 启用 / vSAN 禁用）你已经定了，不在下列之内。
+D7 是补做实证时新发现的，初稿没有。
 
 ### D1：ResourcePool 走属性还是性能计数器？
 
@@ -487,6 +526,151 @@ vSphere 用 `-1` 表示不限制。三个选项：
 拆分依据沿用本项目既有原则：**按"验证方法是否适用"拆轮**。R1 用 vcsim 即可，
 R2 要建全新的替身基建，R3 的 CSV 解析又是另一套验证方式 —— 三者的验证手段
 不同，因此是三轮。
+
+**默认启用改变了 R1 的 CHANGELOG 归类**：初稿假设两者都默认禁用，
+R1 只是"加了个可选 collector"；现在 resourcepool 默认启用，R1 会改变
+所有升级用户的序列数，必须进 Added 并写明关闭方式（见四之二末节）。
+
+### D7：性能窗口 flag 叫什么？（实证后新增）
+
+初稿写的是 `-vsan.perf.interval`。跑完 `check_config.py` 拿到真实 flag 清单
+之后我认为**这个名字应该改**。现有 26 个 flag 分布在 9 个顶层命名空间：
+
+```
+collector(8)  vmware(8)  disable(2)  envflag(2)  log(2)
+metrics(1)  http(1)  web(1)  file(1)
+```
+
+`-vsan.perf.interval` 会开出**第 10 个顶层命名空间，且只装这一个 flag**。
+而 `vmware.*` 已经是"连接与采集参数"的既有归属地 —— `vmware.interval`、
+`vmware.granularity`、`vmware.timeout` 全在那里，vSAN 的采样窗口是同一类东西。
+
+| 选项 | 评价 |
+|---|---|
+| `-vsan.perf.interval` | 初稿方案。新开顶层命名空间只为一个 flag |
+| **`-vmware.vsan.interval`** | **推荐**。与 `vmware.interval` 并列，语义归属清楚 |
+| `-collector.vsan.perf.interval` | 不行。`collector.*` 前缀在本项目专指布尔开关，塞一个 int 进去会破坏这个约定 |
+
+第三个选项还有个更硬的理由：`RegisteredNames()` 与
+`TestDefinitionsMatchRegisteredFlags` 都假设 `collector.<name>` 对应一个
+collector。多一个 `collector.vsan.perf.interval` 不会让测试失败（它只查
+正向：清单里的名字有没有对应 flag），但会让 `-h` 输出里的 `collector.*`
+不再是"开关列表"，读的人得逐个辨认哪个是开关哪个是参数。
+
+**需要你拍板**：接受 `-vmware.vsan.interval`，还是坚持初稿的
+`-vsan.perf.interval`。我已按推荐值改了文档，你若不同意我改回去。
+
+---
+
+## 四之二、注册清单（实现时的唯一事实来源）
+
+默认值已确定，落到代码上是两处必须一致的注册。**这两处不同步是本项目已知的
+易错点**，`TestDefinitionsMatchRegisteredFlags` 就是为它建的。
+
+### `registry.go` 的 `definitions` 追加三行
+
+```go
+// 现有 5 个默认启用的基础 collector 之后：
+{Name: "resourcepool", Creator: NewresourcepoolCollector, DefaultEnabled: collector.DefaultEnabled},
+
+// 现有两个 esxcli 默认禁用项之后：
+{Name: "vsan",      Creator: NewvsanCollector,     DefaultEnabled: collector.DefaultDisabled},
+{Name: "vsan.perf", Creator: NewvsanPerfCollector, DefaultEnabled: collector.DefaultDisabled},
+```
+
+### 各 collector 的 `init()` 注册对应开关
+
+```go
+// resourcepool.go
+collector.RegisterFlag("resourcepool", resourcepoolCollectorFlag)
+// vsan.go
+collector.RegisterFlag("vsan", vsanCollectorFlag)
+// vsanperf.go
+collector.RegisterFlag("vsan.perf", vsanPerfCollectorFlag)
+```
+
+### 构造函数命名：沿用哪个先例？
+
+现有 7 个 Creator 的命名**本身不一致**，这是实测出来的：
+
+```
+NewdatacenterCollector          NewhostCollector
+NewdatastoreCollector           NewvmCollector
+NewesxcliHostNICCollector       NewesxcliStorageListCCollector
+NewClusterCollector      ← 唯一一个首字母大写的
+```
+
+6 比 1，多数派是 `New<小写子系统名>Collector`。上面的三行按多数派写成
+`NewresourcepoolCollector` / `NewvsanCollector` / `NewvsanPerfCollector`。
+
+**我沿用多数派，但要说清这不是因为它更好** —— `NewresourcepoolCollector`
+读起来很别扭，任何 Go linter 都会觉得可疑。选它的唯一理由是本轮范围是
+"加 collector"，不是"统一 7 个既有函数的命名"。后者是独立的重命名改动，
+混进来会让本轮的 diff 无法审阅。
+
+若你想顺手统一（`NewResourcePoolCollector` 这种规范驼峰），那应该是
+**另一轮**：把 7 个既有的一起改，`registry.go` 同步，一次做完。
+现在半途换风格只会让不一致从 6:1 变成 6:4。
+
+### 最终的 collector 清单（10 个）
+
+| collector | 默认 | 说明 |
+|---|---|---|
+| `datacenter` | 启用 | 现有 |
+| `cluster` | 启用 | 现有 |
+| `datastore` | 启用 | 现有 |
+| `host` | 启用 | 现有 |
+| `vm` | 启用 | 现有 |
+| **`resourcepool`** | **启用** | 新增 |
+| `esxcli.host.nic` | 禁用 | 现有 |
+| `esxcli.storage` | 禁用 | 现有 |
+| **`vsan`** | **禁用** | 新增 |
+| **`vsan.perf`** | **禁用** | 新增 |
+
+### 新增 flag 共 4 个
+
+```
+-collector.resourcepool   （bool，默认 true）
+-collector.vsan           （bool，默认 false）
+-collector.vsan.perf      （bool，默认 false）
+-vmware.vsan.interval     （int，默认 300，单位秒）   ← 命名见下方 D7
+```
+
+flag 总数实测 26 → **30**（26 这个数是跑 `check_config.py` 得到的，
+不是估算：`config check OK (26 flags known via binary, 24 files scanned)`）。
+`check_config.py` 从 binary 的 `-h` 输出提取 flag 并与两份 README 的表格
+双向比对 —— 既查"注册了但没写文档"，也查"写了文档但没注册"。
+**四个都必须写进 README 与 README-zh 的表格**，漏一个 config job 就红。
+这是它的设计意图，不是障碍。
+
+### 已验证：`vsan` 同时是 collector 名与 `vsan.perf` 的前缀，不会互相误触发
+
+这是本项目此前没有过的形态。现有的点分名 `esxcli.host.nic` /
+`esxcli.storage` 里，`esxcli` **本身不是** collector 名；而 `vsan` 与
+`vsan.perf` 是父名本身也是一个 collector。三条路径都查过，都是精确匹配：
+
+| 路径 | 实现 | 结论 |
+|---|---|---|
+| 命令行开关 | Go `flag` 包以完整字符串为 map 键 | `vsan` 与 `vsan.perf` 是两个独立键 |
+| `/probe` 选择 | `set.go:179` `opts.Enabled[def.Name]` | 精确查表，无前缀语义 |
+| README 一致性 | `check_config.py:255` 的 `^\|\s*`?-([a-zA-Z][\w.-]*)` | 字符类含 `.`，两个名都能完整提取 |
+
+全仓库 grep `HasPrefix` / `TrimPrefix` 在 `internal/collector/` 与
+`vmware-exporter.go` 中**零命中**，所以不存在"开 `vsan` 顺带开
+`vsan.perf`"的隐式联动。
+
+**记录这条的意义在于：实现时不要凭直觉去补"父级开关联动"逻辑。**
+`-collector.vsan=true` 不应该隐式打开 `vsan.perf` —— 那恰好破坏了 2.3 节
+拆两个 collector 的全部理由（"只要容量健康、不要性能"）。
+
+### 默认启用 resourcepool 是 breaking change 吗？
+
+**是，需要进 CHANGELOG 的 Added 而非 Changed。** 理由：升级后用户的 TSDB
+会多出一批 `vmware_resourcepool_*` 序列，而他们没有做任何配置变更。
+虽然不破坏任何既有序列，但序列数增长属于"用户应当被告知"的范畴 ——
+尤其对按序列计费的托管 Prometheus。
+
+CHANGELOG 里要写明：不需要的用户传 `-collector.resourcepool=false` 关闭。
 
 ---
 
