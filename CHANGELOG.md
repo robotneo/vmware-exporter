@@ -616,6 +616,15 @@ default configuration (`samples=1`) the old and new aggregations agree anyway.
   PR so the weekly bump stays reviewable. `scripts/check_config.py` now fails if
   an ecosystem present in the tree has no entry here, since finding this by hand
   demonstrably does not work.
+- `github.com/vmware/govmomi` v0.55.0 → v0.56.0, with `golang.org/x/sync`
+  v0.21.0 → v0.22.0 and `golang.org/x/text` v0.38.0 → v0.41.0 pulled along.
+  **This fixes nothing in this exporter** — recording it so the bump is not later
+  mistaken for a bugfix. v0.56.0 ships an empty *breaking changes* section, and
+  its one correctness fix is a data race in `vcsim` that requires reconfiguring a
+  virtual machine's devices to trigger; every test here is read-only collection.
+  The bump is dependency hygiene: `x/text` was three minor versions behind, and
+  doing it deliberately beats validating the same change again from a dependabot
+  PR. Zero source changes — `go.mod` and `go.sum` only.
 - Removed dead code: `inSlice`, `moSliceToString`, five entirely
   commented-out files under `vmware/api/` (`clusters.go`, `datastores.go`,
   `host.go`, `vm.go`, `inventory.go` — remnants of a REST `/api/vcenter/...`
