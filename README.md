@@ -107,6 +107,7 @@ The options available are:
 | -collector.max-concurrency | Maximum number of collectors running in parallel, and the fan-out width used inside the esxcli collectors (default: 8). Use 0 to leave the collector layer unlimited; the per-host fan-out keeps a built-in floor. Replaces `-prom.maxRequests`, which was accepted but never had any effect |
 | -disable.exporter.metrics | Disables the exporter's own `go_*` and `process_*` metrics (default: **true**, so they are absent unless you pass `=false`) |
 | -disable.exporter.target | Disables exporter default target - /metrics will only return exporter data - use /probe. `/metrics` then serves client_golang's default registry, which carries the Go and process collectors regardless of the flag above |
+| -metrics.legacy | Also emit the pre-rename metric names alongside the normalised ones (default: false). Enable this if you have dashboards or alerting rules referencing the old names — **including the dashboards bundled in this repository**, see [Metric naming](#metric-naming) |
 | -collector.datacenter | Enables or disables DataCenter metrics collection (default: enabled) |
 | -collector.cluster | Enables or disables Cluster metrics collection (default: enabled) |
 | -collector.datastore | Enables or disables Datastore metrics collection (default: enabled) |
@@ -275,37 +276,121 @@ The esxcli collectors are a very specific use case that probably is not going to
 
 ## Metric changes and migration
 
-The upcoming release renames two metrics, drops one label and deprecates three
-metric names. `CHANGELOG.md` has the full list; this is the short version.
+This release normalises **every** metric name to Prometheus conventions: base
+units in the name, a unit suffix, `_total` on counters, and no vSphere rollup
+suffixes. `CHANGELOG.md` has the complete table; this section is the operational
+summary.
 
-### You must act on these
+### If you use the bundled dashboards, start the exporter with `-metrics.legacy`
+
+The Grafana dashboards in `dashboards/` still reference the old metric names.
+Until they are migrated, run:
+
+```
+vmware-exporter -metrics.legacy ...
+```
+
+Without it the bundled panels render **empty, with no error** — Grafana has no
+way to tell a renamed metric from one that has no data. `-metrics.legacy=true`
+emits the old names alongside the new ones so the panels keep working while you
+migrate.
+
+### Metric naming
+
+Names are now derived from the counter metadata vCenter itself reports, not from
+a hand-maintained list. Three rules cover almost everything:
+
+| Rule | Example |
+| --- | --- |
+| The vSphere rollup suffix (`.average`, `.summation`, `.latest`) is dropped — it describes how vCenter aggregates, not what the value is | `cpu.usagemhz.average` → `cpu_usage_hertz` |
+| The unit becomes a suffix, converted to a Prometheus base unit | `mem.consumed.average` (kiloBytes) → `mem_consumed_bytes`, value ×1024 |
+| Counters vCenter declares as `delta` become real counters with `_total` | `cpu.ready.summation` → `cpu_ready_seconds_total` |
+
+Two conversions are worth calling out because getting them wrong still produces
+a plausible-looking number:
+
+- **`percent` counters are divided by 10000, not 100.** vSphere reports percent
+  in hundredths of a percentage point — a raw value of `100` means 1%. The new
+  `*_ratio` metrics are in the 0..1 range Prometheus expects, so a panel showing
+  them needs unit `percentunit`, not `percent`.
+- **`kiloBytes` is 1024 bytes, `megaBytes` is 1048576.** vSphere documents these
+  as binary multiples. Using 1000 would understate memory by 2.4%.
+
+### Values changed, not just names
+
+Unlike the previous release's deprecations, several replacements carry a
+different number. Anything comparing a metric against a hardcoded threshold
+needs the threshold rescaled.
+
+| Legacy name | Replacement | Multiply legacy by |
+| --- | --- | --- |
+| `vmware_host_cpu_capacity`, `vmware_host_cpu_capacity_mhz` | `vmware_host_cpu_capacity_hertz` | 1000000 |
+| `vmware_host_mem_capacity` | `vmware_host_mem_capacity_bytes` | 1 |
+| `vmware_vm_mem_capacity` | `vmware_vm_mem_capacity_bytes` | 1048576 |
+| `vmware_vm_datastore_capacity_used` | `vmware_vm_datastore_capacity_used_bytes` | 1 |
+| `vmware_datastore_capacity` | `vmware_datastore_capacity_bytes` | 1 |
+| `vmware_datastore_free` | `vmware_datastore_free_bytes` | 1 |
+
+`vmware_host_cpu_capacity_mhz` was introduced by the previous release as the
+replacement for `vmware_host_cpu_capacity`. It is itself deprecated now: MHz is
+not a Prometheus base unit. If you already migrated to `_mhz`, migrating again
+is a multiplication by 1000000.
+
+### Delta counters: stop dividing by the sample interval
+
+The old `*_summation` metrics were gauges holding the mean of the samples in the
+scrape window, and the idiomatic way to turn one into a rate was to divide by a
+hardcoded interval:
+
+```promql
+# old — the 20 is -vmware.granularity, hardcoded into the query
+vmware_host_cpu_ready_summation / (20 * 1000)
+```
+
+That expression is wrong as soon as `-vmware.granularity` is not 20, and it was
+also wrong on the exporter side: averaging delta samples discards all but one
+interval's worth of increments. Both halves are fixed. The replacement is a
+counter, so use `rate()` and let Prometheus work out the interval:
+
+```promql
+# new — no hardcoded interval, correct for any granularity
+rate(vmware_host_cpu_ready_seconds_total[$__rate_interval])
+```
+
+This applies to `cpu_ready`, `cpu_costop`, `cpu_maxlimited` and the four
+`net_*_errors_total` / `net_*_dropped_total` counters.
+
+### Keeping old names working with recording rules
+
+If you would rather not touch your dashboards at all, recording rules can
+reconstruct the old names from the new ones. This is a better long-term position
+than `-metrics.legacy` because the aliases live in your Prometheus config, where
+you can delete them one at a time:
+
+```yaml
+groups:
+  - name: vmware-exporter-legacy-aliases
+    rules:
+      - record: vmware_host_cpu_capacity
+        expr: vmware_host_cpu_capacity_hertz / 1000000
+      - record: vmware_host_mem_capacity
+        expr: vmware_host_mem_capacity_bytes
+      - record: vmware_vm_mem_capacity
+        expr: vmware_vm_mem_capacity_bytes / 1048576
+      - record: vmware_datastore_capacity
+        expr: vmware_datastore_capacity_bytes
+      - record: vmware_datastore_free
+        expr: vmware_datastore_free_bytes
+```
+
+Note that a recording rule cannot reproduce the old `*_summation` gauges
+faithfully — their old values were wrong whenever more than one sample fell in
+the scrape window. Migrate those to `rate()` rather than aliasing them.
+
+### Renames from the previous release
 
 | Change | Action |
 | --- | --- |
 | `vmware_cluster_datastores` → `vmware_cluster_datastore` | Update your own rules/panels. Also emits one series per datastore now, instead of a comma-joined list in `dsmo` |
 | `vmware_compute_datastores` → `vmware_compute_datastore` | Same as above |
 | `vmware_vm_snapshot_info` lost its `created` label | Read the creation time from the metric value — it is the same instant as a Unix timestamp |
-
-None of the three is referenced by the dashboards in this repository, so the
-bundled dashboards need no changes. A renamed metric fails silently, though, so
-check your own alerting rules before upgrading.
-
-### You can migrate at your own pace
-
-Three metrics are deprecated in favour of unit-suffixed names. **Both names are
-emitted with identical values** for one release cycle:
-
-| Deprecated | Replacement |
-| --- | --- |
-| `vmware_host_cpu_capacity` | `vmware_host_cpu_capacity_mhz` |
-| `vmware_host_mem_capacity` | `vmware_host_mem_capacity_bytes` |
-| `vmware_vm_datastore_capacity_used` | `vmware_vm_datastore_capacity_used_bytes` |
-
-No value changed. In all three cases the number was already correct and only the
-help text was wrong — `vmware_host_mem_capacity` in particular has always
-reported bytes despite its help claiming MB. If you were compensating for the
-documented unit anywhere, drop the correction.
-
-`vmware_vm_mem_capacity` is **not** deprecated and has no `_bytes` variant: its
-value really is megabytes, so its help was correct. Converting it would change
-the number, which is a different kind of breaking change.

@@ -51,52 +51,46 @@ func (c *datastoreCollector) Update(ctx context.Context, ch chan<- prometheus.Me
 
 	re := regexp.MustCompile(`(vmfs)?(volumes)?(ds)?(:)?(/+)`)
 
+	descs := descsFor(s.Namespace).datastore
+
 	for _, datastore := range datastores {
 
 		datastoreRefs = append(datastoreRefs, datastore.Self)
 		datastoreNames[datastore.Self.Value] = datastore.Summary.Name
 
-		ch <- prometheus.MustNewConstMetric(
-			prometheus.NewDesc(
-				prometheus.BuildFQName(s.Namespace, datastoreSubsystem, "info"),
-				"This is datastore info to be used for parent reference", nil,
-				map[string]string{"dsmo": datastore.Summary.Datastore.Value, "ds": datastore.Summary.Name, "type": datastore.Summary.Type,
-					"pfinstance": re.ReplaceAllString(datastore.Summary.Url, ""), "foldermo": datastore.Parent.Value, "vcenter": s.Target},
-			), prometheus.GaugeValue, 1.0,
-		)
+		dsmo := datastore.Summary.Datastore.Value
+		dsName := datastore.Summary.Name
 
-		ch <- prometheus.MustNewConstMetric(
-			prometheus.NewDesc(
-				prometheus.BuildFQName(s.Namespace, datastoreSubsystem, "capacity"),
-				"Datastore capacity in bytes", nil,
-				map[string]string{"dsmo": datastore.Summary.Datastore.Value, "ds": datastore.Summary.Name,
-					"vcenter": s.Target},
-			), prometheus.GaugeValue, float64(datastore.Summary.Capacity),
-		)
+		ch <- prometheus.MustNewConstMetric(descs.info,
+			prometheus.GaugeValue, 1.0,
+			dsmo, dsName, datastore.Summary.Type,
+			re.ReplaceAllString(datastore.Summary.Url, ""),
+			datastore.Parent.Value, s.Target)
 
-		ch <- prometheus.MustNewConstMetric(
-			prometheus.NewDesc(
-				prometheus.BuildFQName(s.Namespace, datastoreSubsystem, "free"),
-				"Datastore available space in bytes", nil,
-				map[string]string{"dsmo": datastore.Summary.Datastore.Value, "ds": datastore.Summary.Name,
-					"vcenter": s.Target},
-			), prometheus.GaugeValue, float64(datastore.Summary.FreeSpace),
-		)
+		ch <- prometheus.MustNewConstMetric(descs.capacityBytes,
+			prometheus.GaugeValue, float64(datastore.Summary.Capacity),
+			dsmo, dsName, s.Target)
 
-		ch <- prometheus.MustNewConstMetric(
-			prometheus.NewDesc(
-				prometheus.BuildFQName(s.Namespace, datastoreSubsystem, "accessible"),
-				"Whether the datastore is accessible", nil,
-				map[string]string{"dsmo": datastore.Summary.Datastore.Value, "ds": datastore.Summary.Name,
-					"vcenter": s.Target},
-			), prometheus.GaugeValue,
-			func(accessible bool) float64 {
-				if accessible {
-					return 1
-				}
-				return 0
-			}(datastore.Summary.Accessible),
-		)
+		ch <- prometheus.MustNewConstMetric(descs.freeBytes,
+			prometheus.GaugeValue, float64(datastore.Summary.FreeSpace),
+			dsmo, dsName, s.Target)
+
+		ch <- prometheus.MustNewConstMetric(descs.accessible,
+			prometheus.GaugeValue, boolToFloat64(datastore.Summary.Accessible),
+			dsmo, dsName, s.Target)
+
+		if !*legacyMetrics {
+			continue
+		}
+
+		// 旧名保留原值：它就是升级前那条序列。
+		ch <- prometheus.MustNewConstMetric(descs.capacity,
+			prometheus.GaugeValue, float64(datastore.Summary.Capacity),
+			dsmo, dsName, s.Target)
+
+		ch <- prometheus.MustNewConstMetric(descs.free,
+			prometheus.GaugeValue, float64(datastore.Summary.FreeSpace),
+			dsmo, dsName, s.Target)
 	}
 
 	// 采样间隔向服务端协商，不再硬编码。

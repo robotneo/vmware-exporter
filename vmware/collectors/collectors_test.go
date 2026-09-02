@@ -127,8 +127,16 @@ func TestScrapePerformanceEmitsMetrics(t *testing.T) {
 		t.Fatal("expected scrapePerformance to emit metrics")
 	}
 
-	if !hasMetricWithLabels(metrics, "vmware_host_cpu_usage_average", map[string]string{"vcenter": s.Target, "host": "", "hostmo": ""}) {
-		t.Fatal("expected vmware_host_cpu_usage_average metric with host labels")
+	// cpu.usage.average 的单位元数据是 percent，所以规范化后的名字是
+	// vmware_host_cpu_usage_ratio（值 ÷10000 —— vSphere 的 percent 计数器以
+	// 百分之一个百分点为单位）。旧名 vmware_host_cpu_usage_average 只在
+	// -metrics.legacy=true 时出现，这个测试跑在默认值 false 下。
+	if !hasMetricWithLabels(metrics, "vmware_host_cpu_usage_ratio", map[string]string{"vcenter": s.Target, "host": "", "hostmo": ""}) {
+		t.Fatal("expected vmware_host_cpu_usage_ratio metric with host labels")
+	}
+
+	if hasMetricWithLabels(metrics, "vmware_host_cpu_usage_average", nil) {
+		t.Error("legacy metric name was emitted with -metrics.legacy=false")
 	}
 }
 

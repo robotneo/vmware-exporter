@@ -79,6 +79,147 @@ dashboard changes are needed. If you have **your own** alerting rules or panels
 built on the old names, update them before upgrading — a renamed metric fails
 silently, with no error anywhere.
 
+#### Every metric name normalised
+
+All metric names now follow Prometheus conventions. This is the largest breaking
+change in this release: **53 business metrics are affected**, and the old names
+are off by default.
+
+Run with `-metrics.legacy` to get the old names back alongside the new ones
+during migration. See the migration guide in `README.md` for recording rules that
+reconstruct the old names, which is a better long-term position than the flag.
+
+> **The dashboards in `dashboards/` still reference the old names.** They will
+> render empty until either you pass `-metrics.legacy` or a later release
+> migrates them. Grafana cannot distinguish a renamed metric from one with no
+> data, so there is no error — just blank panels.
+
+**Performance counters.** Names are derived from the counter metadata vCenter
+reports, not from a hand-maintained list, so adding a counter cannot silently
+keep the old naming style. Three rules:
+
+1. The vSphere rollup suffix (`.average`, `.summation`, `.latest`) is dropped. It
+   describes how vCenter aggregates, not what the value is.
+2. The unit becomes a name suffix, converted to a Prometheus base unit.
+3. Counters vCenter declares as `delta` become real counters with `_total`.
+
+| Old | New | Conversion | Type |
+| --- | --- | --- | --- |
+| `vmware_{host,vm}_cpu_costop_summation` | `..._cpu_costop_seconds_total` | ×0.001 | counter |
+| `vmware_{host,vm}_cpu_demand_average` | `..._cpu_demand_hertz` | ×1e6 | gauge |
+| `vmware_{host,vm}_cpu_entitlement_latest` | `..._cpu_entitlement_hertz` | ×1e6 | gauge |
+| `vmware_{host,vm}_cpu_latency_average` | `..._cpu_latency_ratio` | ×1e-4 | gauge |
+| `vmware_{host,vm}_cpu_maxlimited_summation` | `..._cpu_maxlimited_seconds_total` | ×0.001 | counter |
+| `vmware_{host,vm}_cpu_readiness_average` | `..._cpu_readiness_ratio` | ×1e-4 | gauge |
+| `vmware_{host,vm}_cpu_ready_summation` | `..._cpu_ready_seconds_total` | ×0.001 | counter |
+| `vmware_{host,vm}_cpu_usagemhz_average` | `..._cpu_usage_hertz` | ×1e6 | gauge |
+| `vmware_{host,vm}_datastore_numberReadAveraged_average` | `..._datastore_read_operations` | ×1 | gauge |
+| `vmware_{host,vm}_datastore_numberWriteAveraged_average` | `..._datastore_write_operations` | ×1 | gauge |
+| `vmware_{host,vm}_datastore_read_average` | `..._datastore_read_bytes_per_second` | ×1024 | gauge |
+| `vmware_{host,vm}_datastore_write_average` | `..._datastore_write_bytes_per_second` | ×1024 | gauge |
+| `vmware_{host,vm}_datastore_totalReadLatency_average` | `..._datastore_read_latency_seconds` | ×0.001 | gauge |
+| `vmware_{host,vm}_datastore_totalWriteLatency_average` | `..._datastore_write_latency_seconds` | ×0.001 | gauge |
+| `vmware_{host,vm}_mem_active_average` | `..._mem_active_bytes` | ×1024 | gauge |
+| `vmware_{host,vm}_mem_consumed_average` | `..._mem_consumed_bytes` | ×1024 | gauge |
+| `vmware_{host,vm}_mem_entitlement_average` | `..._mem_entitlement_bytes` | ×1024 | gauge |
+| `vmware_{host,vm}_mem_shared_average` | `..._mem_shared_bytes` | ×1024 | gauge |
+| `vmware_{host,vm}_mem_swapped_average` | `..._mem_swapped_bytes` | ×1024 | gauge |
+| `vmware_{host,vm}_mem_vmmemctl_average` | `..._mem_balloon_bytes` | ×1024 | gauge |
+| `vmware_{host,vm}_net_bytesRx_average` | `..._net_receive_bytes_per_second` | ×1024 | gauge |
+| `vmware_{host,vm}_net_bytesTx_average` | `..._net_transmit_bytes_per_second` | ×1024 | gauge |
+| `vmware_host_net_droppedRx_summation` | `..._net_receive_dropped_total` | ×1 | counter |
+| `vmware_host_net_droppedTx_summation` | `..._net_transmit_dropped_total` | ×1 | counter |
+| `vmware_host_net_errorsRx_summation` | `..._net_receive_errors_total` | ×1 | counter |
+| `vmware_host_net_errorsTx_summation` | `..._net_transmit_errors_total` | ×1 | counter |
+| `vmware_{host,vm}_sys_uptime_latest` | `..._sys_uptime_seconds` | ×1 | gauge |
+| `vmware_datastore_disk_provisioned_latest` | `..._disk_provisioned_bytes` | ×1024 | gauge |
+| `vmware_datastore_disk_used_latest` | `..._disk_used_bytes` | ×1024 | gauge |
+
+Several of the new names are not mechanical translations, because the vSphere
+name would have been misleading:
+
+- `net.bytesRx` → `net_receive`, not `net_bytes_rx`. `receive`/`transmit` is the
+  established Prometheus vocabulary (`node_network_receive_bytes_total`).
+- `datastore.numberReadAveraged` → `datastore_read_operations`. The "Averaged"
+  in the vSphere name is not a rollup — the counter is IOPS.
+- `datastore.totalReadLatency` → `datastore_read_latency_seconds`. The "total"
+  means "kernel plus device", not an accumulated sum; a literal
+  `total_read_latency` would read as a counter.
+- `mem.vmmemctl` → `mem_balloon`. `vmmemctl` is the internal driver name.
+- `cpu.usagemhz` → `cpu_usage_hertz`. The unit was baked into the vSphere name;
+  the suffix now comes from the unit table like every other counter.
+
+**Static metrics.**
+
+| Old | New | Conversion |
+| --- | --- | --- |
+| `vmware_host_cpu_capacity`, `vmware_host_cpu_capacity_mhz` | `vmware_host_cpu_capacity_hertz` | ×1e6 |
+| `vmware_host_mem_capacity` | `vmware_host_mem_capacity_bytes` | ×1 |
+| `vmware_vm_mem_capacity` | `vmware_vm_mem_capacity_bytes` | ×1048576 |
+| `vmware_vm_datastore_capacity_used` | `vmware_vm_datastore_capacity_used_bytes` | ×1 |
+| `vmware_datastore_capacity` | `vmware_datastore_capacity_bytes` | ×1 |
+| `vmware_datastore_free` | `vmware_datastore_free_bytes` | ×1 |
+
+`vmware_host_cpu_capacity_mhz` was itself introduced as a replacement earlier in
+this changelog's own Deprecated section. It is deprecated now too: MHz is not a
+Prometheus base unit and promlint flags it. Migrating from `_mhz` to `_hertz` is
+a multiplication by 1e6.
+
+Two conversions deserve attention because getting them wrong still yields a
+plausible number:
+
+- **`percent` is divided by 10000, not 100.** vSphere reports percent in
+  hundredths of a percentage point: a raw `100` means 1%. The `*_ratio` metrics
+  are in 0..1, so panels need unit `percentunit`, not `percent`.
+- **`kiloBytes` is 1024 bytes and `megaBytes` is 1048576.** vSphere documents
+  these as binary multiples; using 1000 understates memory by 2.4%.
+
+Counters whose unit is not in the conversion table are emitted under the **old**
+name with a warning logged, rather than guessing a suffix. A wrong unit suffix
+would put wrong numbers into the TSDB with nothing to signal it.
+
+#### `*_summation` counters: aggregation was wrong, and they were the wrong type
+
+vCenter declares six counters with `StatsType: delta`, meaning **each sample is
+the increment over that sampling interval**:
+
+- `cpu.ready.summation`, `cpu.costop.summation`, `cpu.maxlimited.summation`
+- `net.errorsRx/Tx.summation`, `net.droppedRx/Tx.summation`
+
+The exporter averaged the samples in the scrape window, like every other
+counter. For delta counters that is wrong: if three consecutive 20-second
+intervals each report 100 ms of CPU ready time, the minute contained 300 ms of
+ready time, not 100 ms. Averaging discards all but one interval's worth.
+
+Two things made this hard to notice:
+
+1. **The default configuration hides it.** `samples = -vmware.interval /
+   -vmware.granularity = 20 / 20 = 1`, and the mean of one sample equals its
+   sum. The bug only appears once `-vmware.interval` is raised — which is
+   precisely what someone reducing scrape frequency would do.
+2. The averaging used `int64` division, so it also truncated: samples of 1, 1
+   and 2 averaged to 1 rather than 1.33.
+
+Delta counters are now **summed** and emitted as Prometheus counters with
+`_total`. Non-delta counters keep being averaged, but in floating point.
+
+This changes how you query them. The old idiom divided by a hardcoded interval:
+
+```promql
+# old — the 20 is -vmware.granularity, hardcoded into the query, and the
+# underlying value was already wrong for any window with >1 sample
+vmware_host_cpu_ready_summation / (20 * 1000)
+```
+
+```promql
+# new — rate() derives the interval, correct for any granularity
+rate(vmware_host_cpu_ready_seconds_total[$__rate_interval])
+```
+
+Recording rules cannot faithfully reconstruct the old `*_summation` gauges,
+because their old values were wrong whenever more than one sample fell in the
+window. Migrate these to `rate()` rather than aliasing them.
+
 #### Label removed
 
 `vmware_vm_snapshot_info` no longer carries the `created` label.
@@ -156,29 +297,29 @@ silently truncated `-collector.max-concurrency` to `-collector.max`.
 
 ### Deprecated
 
-Three metrics are superseded by explicitly unit-suffixed replacements. **Both
-the old and the new names are emitted** for one release cycle, with identical
-values, so you can migrate at your own pace. The deprecated ones carry a
-`DEPRECATED:` marker in their help text and will be removed in a future release.
+Every pre-rename metric name is now behind `-metrics.legacy`, which defaults to
+**false**. The legacy names carry a `DEPRECATED:` marker in their help text
+pointing at the replacement, and will be removed in a future release.
 
-| Deprecated | Replacement | Why |
-| --- | --- | --- |
-| `vmware_host_cpu_capacity` | `vmware_host_cpu_capacity_mhz` | Name carried no unit |
-| `vmware_host_mem_capacity` | `vmware_host_mem_capacity_bytes` | Help claimed MB, the value was always bytes |
-| `vmware_vm_datastore_capacity_used` | `vmware_vm_datastore_capacity_used_bytes` | Help was copy-pasted from `mem_capacity` |
+This replaces the previous release's unconditional dual-write. Emitting both
+names by default meant the promise of "a clean, convention-following metric set"
+was never actually delivered — every user paid for the migration window whether
+they needed it or not. The flag makes it opt-in.
 
-**No value changed.** In every case the numbers were already correct and only
-the documentation was wrong, so the replacements do no unit conversion. If you
-were compensating for the documented-but-wrong unit somewhere, remove the
-correction.
-
-`vmware_vm_mem_capacity` is deliberately **not** deprecated and has no `_bytes`
-variant: `Summary.Config.MemorySizeMB` really is megabytes, so its help was
-correct all along. Converting it would change the value, which is a different
-class of breaking change.
+With `-metrics.legacy=true` the legacy names keep **their original values and
+their original types**, so a dashboard built on them behaves exactly as before.
+The one exception is the delta aggregation fix described above: those values were
+wrong, and preserving a wrong number is not backward compatibility. Under the
+default configuration (`samples=1`) the old and new aggregations agree anyway.
 
 ### Added
 
+- **`-metrics.legacy`** (default `false`) — also emit the pre-rename metric names
+  alongside the normalised ones. Needed by the dashboards bundled in this
+  repository until they are migrated, and by any of your own panels or rules that
+  reference the old names. `README.md` has recording rules that reconstruct the
+  old names from the new ones, which is preferable long-term: the aliases live in
+  your Prometheus config where you can delete them one at a time.
 - **`vmware_up`** — whether the target could be logged into. `0` means the scrape
   produced no inventory data at all. This is not the `up` metric Prometheus
   generates on its own: that one only reports whether the HTTP request succeeded,

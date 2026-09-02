@@ -102,11 +102,32 @@ func emitPerformanceMetrics(
 				continue
 			}
 
-			var sum int64
+			spec, mapped := translatePerfCounter(value.Name, counterInfo)
+
+			// 聚合方式必须按 StatsType 分流 —— 这是本轮修正的数据正确性 bug。
+			//
+			// 旧实现对所有计数器一律求平均。对 delta 类计数器（vCenter 声明
+			// 每个样本是「该采样区间内的增量」，例如 cpu.ready.summation）
+			// 那是错的：3 个 20 秒区间各 ready 了 100ms，这一分钟内一共
+			// ready 了 300ms，不是 100ms。求平均把窗口长度这个信息丢掉了，
+			// 得到的数字既不是速率也不是总量。
+			//
+			// 这个 bug 有个容易漏掉的性质：默认配置下 samples =
+			// interval/granularity = 20/20 = 1，求和与求平均结果相同，所以
+			// 它只在用户显式调大 -vmware.interval 时才显形 —— 而那正是想
+			// 降低抓取频率的人会做的事。
+			var raw float64
 			for _, subvalue := range value.Value {
-				sum += subvalue
+				raw += float64(subvalue)
 			}
-			avg := sum / int64(len(value.Value))
+
+			if !mapped || !spec.Delta {
+				// absolute 与 rate 都是瞬时量，窗口内求平均是合理的降噪。
+				//
+				// 浮点除法而不是旧实现的 int64 整除：整数除法会额外截断，
+				// 例如三个样本 1/1/2 求平均得到 1 而不是 1.33。
+				raw /= float64(len(value.Value))
+			}
 
 			// label 值按 Desc 声明的顺序拼装：vcenter, <实体标签...>, [pfinstance]
 			//
@@ -120,10 +141,46 @@ func emitPerformanceMetrics(
 				labelValues = append(labelValues, value.Instance)
 			}
 
+			if !mapped {
+				// 单位不在已知规则里 —— 按旧命名原样导出并留下日志，而不是
+				// 猜一个单位后缀。猜错单位会让数值带着错误的后缀进入 TSDB，
+				// 而没有任何东西会报错。
+				logger.Warn("performance counter has an unmapped unit, emitting under the legacy name",
+					"counter", value.Name,
+					"unit", counterInfo.UnitInfo.GetElementDescription().Key)
+
+				ch <- prometheus.MustNewConstMetric(
+					perfDesc(namespace, subsystem, value.Name, moType, instanced, true, counterInfo),
+					prometheus.GaugeValue,
+					raw,
+					labelValues...,
+				)
+
+				continue
+			}
+
 			ch <- prometheus.MustNewConstMetric(
-				perfDesc(namespace, subsystem, value.Name, moType, instanced, counterInfo),
+				perfDesc(namespace, subsystem, value.Name, moType, instanced, false, counterInfo),
+				spec.ValueType,
+				raw*spec.Factor,
+				labelValues...,
+			)
+
+			if !*legacyMetrics {
+				continue
+			}
+
+			// 旧名保留原始取值与原始类型：它就是升级前那条序列。改动它的
+			// 数值等于让「双写过渡」这个承诺失效 —— 用户拿旧名做的图会在
+			// 升级瞬间跳变，而 legacy 的全部意义就是不让那件事发生。
+			//
+			// 唯一的例外是 delta 计数器的聚合修正：旧名也用求和后的值。那条
+			// 是 bug 修复，把错误的平均值继续导出一个版本周期没有意义 ——
+			// 何况默认配置（samples=1）下两者本来就相同。
+			ch <- prometheus.MustNewConstMetric(
+				perfDesc(namespace, subsystem, value.Name, moType, instanced, true, counterInfo),
 				prometheus.GaugeValue,
-				float64(avg),
+				raw,
 				labelValues...,
 			)
 		}

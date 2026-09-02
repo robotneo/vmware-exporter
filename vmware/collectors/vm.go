@@ -85,21 +85,29 @@ func (c *vmCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s
 				prometheus.GaugeValue, float64(vm.Summary.Config.NumCpu),
 				moid, name, hostMoid, target)
 
-			ch <- prometheus.MustNewConstMetric(descs.memCapacity,
-				prometheus.GaugeValue, float64(vm.Summary.Config.MemorySizeMB),
+			// MemorySizeMB 的 MB 是 2^20 字节。
+			ch <- prometheus.MustNewConstMetric(descs.memCapacityBytes,
+				prometheus.GaugeValue, float64(vm.Summary.Config.MemorySizeMB)*1048576,
 				moid, name, hostMoid, target)
 
-			for _, datastore := range vm.Storage.PerDatastoreUsage {
+			if *legacyMetrics {
+				ch <- prometheus.MustNewConstMetric(descs.memCapacity,
+					prometheus.GaugeValue, float64(vm.Summary.Config.MemorySizeMB),
+					moid, name, hostMoid, target)
+			}
 
-				// 双写过渡：旧指标名保留（dashboard 有引用），help 已从
-				// 错抄的 "Virtual memory configured in MB" 改为正确描述。
-				ch <- prometheus.MustNewConstMetric(descs.dsCapacityUsed,
-					prometheus.GaugeValue, float64(datastore.Committed),
-					moid, name, target, datastore.Datastore.Value)
+			for _, datastore := range vm.Storage.PerDatastoreUsage {
 
 				ch <- prometheus.MustNewConstMetric(descs.dsCapacityUsedBytes,
 					prometheus.GaugeValue, float64(datastore.Committed),
 					moid, name, target, datastore.Datastore.Value)
+
+				// 旧名保留原值（本来就是字节，换算是 ×1）。
+				if *legacyMetrics {
+					ch <- prometheus.MustNewConstMetric(descs.dsCapacityUsed,
+						prometheus.GaugeValue, float64(datastore.Committed),
+						moid, name, target, datastore.Datastore.Value)
+				}
 			}
 
 			// 有快照时把创建时间的 Unix 秒数作为 metric value 输出。
