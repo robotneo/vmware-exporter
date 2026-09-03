@@ -11,6 +11,7 @@ import (
 	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	vsantypes "github.com/vmware/govmomi/vsan/types"
 )
 
@@ -53,6 +54,61 @@ func (a *lintAdapter) Collect(ch chan<- prometheus.Metric) {
 // 目前为空：10b 的双写改名把 net.bytes{Rx,Tx} 系列的驼峰一并解决了。
 var knownProblems = map[string]string{}
 
+// lintMustCover 是必须被 promlint 实际检查到的指标。
+//
+// 存在的理由是一次真实的假绿：resync 三条指标加进来时，替身与
+// hostFetcher 都配好了，promlint 却依然 PASS —— 因为 vcsim 报的
+// API 版本是 6.5.0，被 collectResync 的 6.7 门槛挡掉，三条指标压根
+// 没被输出。把其中一条故意改成驼峰再跑，测试仍然绿，那道门是空的。
+//
+// 所以这里列出"容易因为运行时条件不满足而静默缺席"的指标：条件分支
+// 后面的、需要替身特定响应才出现的。全量列举没有意义（那等于重写一遍
+// descs.go），列举有条件的那些才抓得住这类缺口。
+var lintMustCover = []string{
+	// resync：要过版本门槛 + 集群内有 poweredOn 主机 + 替身有响应。
+	"vmware_vsan_resync_bytes",
+	"vmware_vsan_resync_objects",
+	"vmware_vsan_resync_recovery_seconds",
+
+	// 盘级：要求替身响应里 Capacity > 0。
+	"vmware_vsan_disk_capacity_bytes",
+	"vmware_vsan_disk_capacity_used_bytes",
+	"vmware_vsan_disk_health",
+
+	// 容量：要求 vSAN 已启用（替身 config 的 Enabled 为 true）。
+	"vmware_vsan_capacity_bytes",
+	"vmware_vsan_capacity_used_bytes",
+	"vmware_vsan_health_status",
+}
+
+// metricNameOf 从一条 prometheus.Metric 里取出指标名。
+func metricNameOf(t *testing.T, m prometheus.Metric) string {
+	t.Helper()
+
+	var pb dto.Metric
+	if err := m.Write(&pb); err != nil {
+		t.Fatalf("writing metric: %v", err)
+	}
+
+	// Desc().String() 形如 `Desc{fqName: "vmware_vsan_resync_bytes", ...}`，
+	// 取引号之间的部分。没有更直接的取法 —— Desc 的 fqName 字段未导出。
+	desc := m.Desc().String()
+
+	const marker = `fqName: "`
+	i := strings.Index(desc, marker)
+	if i < 0 {
+		t.Fatalf("unexpected Desc format: %s", desc)
+	}
+
+	rest := desc[i+len(marker):]
+	j := strings.Index(rest, `"`)
+	if j < 0 {
+		t.Fatalf("unexpected Desc format: %s", desc)
+	}
+
+	return rest[:j]
+}
+
 // newLintVsanCollector 造一个注入了替身的 vsan collector，专门给 promlint 用。
 //
 // 为什么不能直接用 NewvsanCollector：那样这道门只会覆盖 9 个 vSAN 指标里的
@@ -68,6 +124,13 @@ var knownProblems = map[string]string{}
 // 替身响应刻意包含物理盘且 Capacity > 0 —— 否则 disk_capacity_bytes 与
 // disk_capacity_used_bytes 不会被输出（vsan.go 的 Capacity > 0 判断），
 // 又少覆盖 2 个。
+//
+// resync 三条同理需要两个前提：注入的 hostFetcher 给出一台属于被采集
+// 集群的 poweredOn 主机，以及 Scrape 的 API 版本达到 6.7。后者由
+// TestBusinessMetricsPassPromlint 里的 liftAPIVersion 负责 ——
+// **vcsim 的 ServiceContent.About.Version 是 "6.5.0"**
+// （simulator/vpx/service_content.go:25），不抬就会被版本门槛挡掉，
+// 这三条指标的命名就逃过了 promlint。
 func newLintVsanCollector(logger *slog.Logger) (collector.Collector, error) {
 	stub := &vsanStub{
 		config: vsanEnabledConfig(true),
@@ -87,6 +150,7 @@ func newLintVsanCollector(logger *slog.Logger) (collector.Collector, error) {
 				UsedCapacity:  1 << 40,
 			}},
 		}}),
+		resyncByRef: resyncByRefForAnyHost(4<<30, 12, 900),
 	}
 
 	return &vsanCollector{
@@ -94,7 +158,28 @@ func newLintVsanCollector(logger *slog.Logger) (collector.Collector, error) {
 		newClient: func(context.Context, *collector.Scrape) (vsanRoundTripper, error) {
 			return stub, nil
 		},
+		// 刻意不注入 hostFetcher：Scrape.Hosts 用 sync.Once，而这个
+		// Scrape 在多个 collector 之间共享 —— host collector 先跑就会
+		// 用真实 fetcher 填满缓存，之后任何注入都不再被调用。
+		// 所以这里走真实检索，让替身按 vcsim 分配的 MoRef 应答。
 	}, nil
+}
+
+// resyncByRefForAnyHost 让替身对任何 VsanSystemEx MoRef 都给出同一份响应。
+//
+// 为什么不能按具体 MoRef 建表：vcsim 的主机编号在运行时分配，而
+// Scrape.Hosts 的 sync.Once 又让测试无法注入自己的主机清单（见
+// newLintVsanCollector 的说明）。这里要的只是"resync 三条指标被输出、
+// 从而被 promlint 检查到"，具体查的是哪台主机无关紧要。
+//
+// 轮询与 MoRef 拼接的正确性由 vsan_test.go 的替身测试保证，那里能
+// 精确控制每台主机的成败。
+func resyncByRefForAnyHost(bytes, objects, eta int64) map[string]*vsantypes.VsanQuerySyncingVsanObjectsResponse {
+	// nil map 在 stub 里会走"查不到"分支，所以用一个哨兵 key 表达
+	// "全部命中"。stub 的查表逻辑对此有专门处理。
+	return map[string]*vsantypes.VsanQuerySyncingVsanObjectsResponse{
+		vsanStubAnyRef: resyncResponse(bytes, objects, eta),
+	}
 }
 
 // TestBusinessMetricsPassPromlint 把业务指标交给 Prometheus 官方的规范检查器。
@@ -136,8 +221,19 @@ func TestBusinessMetricsPassPromlint(t *testing.T) {
 	}
 	sort.Strings(names)
 
+	// vcsim 报的是 6.5.0（simulator/vpx/service_content.go:25），会被
+	// resync 的 6.7 门槛挡掉，那三条指标就不会进入 promlint 的视野。
+	// 抬到 8.0 让它们被输出 —— 门槛本身在 vsan_test.go 里单独覆盖。
+	s.Client.ServiceContent.About.Version = "8.0.3"
+
 	var unexpected []string
 	triggered := make(map[string]bool, len(knownProblems))
+
+	// covered 记录 lint 实际看到的指标名。没有它，"某条指标忘了被
+	// 替身喂出来"就会表现为静默的覆盖缺口 —— 测试照常绿，而那条指标
+	// 的命名从未被检查过。这正是 resync 三条差点掉进去的坑：
+	// vcsim 的版本号让它们被门槛挡掉，promlint 一无所知却依然 PASS。
+	covered := map[string]bool{}
 
 	for _, name := range names {
 		c, err := creators[name](logger)
@@ -158,6 +254,33 @@ func TestBusinessMetricsPassPromlint(t *testing.T) {
 				continue
 			}
 			unexpected = append(unexpected, key)
+		}
+	}
+
+	// 覆盖面自检：这些指标必须真的被 gather 到，否则上面的 lint 是空转。
+	// 单独再 collect 一遍而不是复用 CollectAndLint 的结果 —— 后者只返回
+	// 问题清单，没问题的指标不会出现在里面。
+	for _, name := range names {
+		c, err := creators[name](logger)
+		if err != nil {
+			t.Fatalf("%s constructor returned error: %v", name, err)
+		}
+
+		ch := make(chan prometheus.Metric, 2048)
+		if err := c.Update(ctx, ch, s); err != nil {
+			t.Fatalf("%s Update returned error: %v", name, err)
+		}
+		close(ch)
+
+		for m := range ch {
+			covered[metricNameOf(t, m)] = true
+		}
+	}
+
+	for _, want := range lintMustCover {
+		if !covered[want] {
+			t.Errorf("metric %q was never emitted, so promlint never checked it; "+
+				"fix the stub or the scrape setup instead of dropping this assertion", want)
 		}
 	}
 

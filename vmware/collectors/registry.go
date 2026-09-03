@@ -45,6 +45,16 @@ var definitions = []Definition{
 	// 健康查询。未启用的集群会优雅降级（只输出一条 enabled 0），但 SOAP
 	// 往返是实打实花掉的。
 	{Name: "vsan", Creator: NewvsanCollector, DefaultEnabled: collector.DefaultDisabled},
+
+	// vsan.perf 与 vsan 分开是刻意的，不是遗漏。
+	//
+	// 组 A（vsan）是三次轻量查询；本 collector 按实体类型逐个查询 CSV 并
+	// 解析，代价高一个量级，而且基数远大 —— 用户可能想要健康与容量却不想要
+	// 性能数据，两个 flag 才能表达这个组合。
+	//
+	// 同样默认禁用，理由比组 A 更强：它还额外要求集群开启了 vSAN 性能服务
+	// （默认不开），未开启时 vCenter 返回空数据。
+	{Name: "vsan.perf", Creator: NewvsanPerfCollector, DefaultEnabled: collector.DefaultDisabled},
 }
 
 // Definitions 返回 collector 清单的副本，按 Name 排序以保证调度顺序稳定
