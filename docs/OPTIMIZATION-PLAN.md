@@ -1,9 +1,21 @@
 # vmware-exporter 优化与能力扩展设计方案
 
-> 状态：**待审计**，尚未开始 coding
+> 状态：**已全部实施完毕**（Stage 1 ~ 10 均已合并到 `master`）。
+> 本文件自此转为**历史决策记录**，保留当初的分析、取舍与理由，
+> 供后续回溯"当时为什么这么定"。**不要再把它当作待办清单读。**
+>
 > 编写日期：2026-09-01
-> 基线：`master` @ `4a1013e`，tag `v0.1.18-beta.1`
-> 依赖基线：`govmomi v0.55.0`、`prezhdarov/prometheus-exporter v0.1.5`、Go 1.26
+> 编写时的基线：`master` @ `4a1013e`，tag `v0.1.18-beta.1`
+> 编写时的依赖：`govmomi v0.55.0`、`prezhdarov/prometheus-exporter v0.1.5`、Go 1.26
+>
+> **实施后的现状（与上面的编写时基线不同，以此为准）**：
+> - 上游框架 `prezhdarov/prometheus-exporter` **已完全移除**，调度层由
+>   `internal/collector` 自行实现。
+> - `govmomi` 已升至 **v0.56.0**。
+> - collector 从 7 个增至 **10 个**（新增 `resourcepool`、`vsan`、`vsan.perf`）。
+> - flag 从 26 个增至 **31 个**。
+> - 后续增量的设计见 `docs/DESIGN-resourcepool-vsan.md`，
+>   能力缺口分析见 `docs/COVERAGE-GAP-ANALYSIS.md`。
 
 ---
 

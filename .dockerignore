@@ -1,9 +1,25 @@
+# Build context exclusions.
+#
+# Patterns are matched case-sensitively by the Docker daemon, which runs on
+# Linux even when the client is macOS. `Changelog.md` was therefore a no-op
+# against the actual `CHANGELOG.md` -- it only appeared to work locally because
+# APFS is case-insensitive by default.
 .git
 .gitignore
-LICENSE
-VERSION
-README.md
-Changelog.md
-Makefile
 .idea
 
+# Documentation. None of it is read during the build.
+LICENSE
+CHANGELOG.md
+README.md
+README-zh.md
+docs/
+
+# Grafana dashboards are shipped alongside the exporter, not inside the image.
+dashboards/
+
+# Agent workspace, session-local.
+.workbuddy/
+
+# Release artefacts from a local `goreleaser build`.
+dist/

@@ -719,8 +719,22 @@ default configuration (`samples=1`) the old and new aggregations agree anyway.
 - Three cluster metrics had their help text copy-pasted from
   `vmware_cluster_info` (`"This is basic cluster info to be used for parent
   reference"`) and now describe what they actually measure.
+- **`.dockerignore` excluded `Changelog.md`, a file that does not exist.** The
+  actual file is `CHANGELOG.md`. Docker matches these patterns case-sensitively
+  on the daemon, which runs on Linux — so the rule never matched anything, and
+  only looked correct when authored on macOS, where APFS is case-insensitive by
+  default. The docs, the dashboards and any local `dist/` were all being sent to
+  the daemon on every build: 1.1 MB of context for a build that reads none of
+  it. Also added `README-zh.md`, which was never listed at all.
 
 ### Changed
+
+- **The builder image is pinned to `golang:1.26-alpine3.23`.** It was
+  `golang:alpine`, a floating tag that follows the newest Go release. Combined
+  with `GOTOOLCHAIN=local` in the official images, that meant the compiler could
+  move to an untested minor version without a single line of this repository
+  changing — while go.mod declares `go 1.26`. The Go patch level is deliberately
+  left floating so security fixes still arrive without a commit.
 
 - **The `prezhdarov/prometheus-exporter` dependency is gone.** Its scheduling and
   configuration layers were replaced by `internal/collector` and

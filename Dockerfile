@@ -1,4 +1,15 @@
-FROM golang:alpine AS builder
+# Pinned rather than `golang:alpine`.
+#
+# The floating tag tracks whatever the newest Go release is, so the compiler
+# could change under the build without a single line of this repository
+# changing with it. That is not hypothetical for this project: go.mod declares
+# `go 1.26`, and the images set GOTOOLCHAIN=local, so a floating tag that has
+# moved on to the next minor builds with a toolchain nobody here has tested.
+#
+# The Go minor and the Alpine base are both pinned; the Go patch level is
+# deliberately not, so security fixes still arrive without a commit. Bump this
+# when go.mod's `go` directive moves.
+FROM golang:1.26-alpine3.23 AS builder
 
 # Add ca-certs
 RUN apk add --update --no-cache ca-certificates
