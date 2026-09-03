@@ -165,6 +165,12 @@ type vsanDescs struct {
 	// label 会让盘状态一变就产生一条新序列，旧序列变僵尸。
 	diskCapacityBytes     *prometheus.Desc
 	diskCapacityUsedBytes *prometheus.Desc
+
+	// resync 三条，label 集合同为 cmo, vmwcluster, vcenter。
+	// 需要 API >= 6.7，低版本不输出（见 vsan.go 的 collectResync）。
+	resyncBytes           *prometheus.Desc
+	resyncObjects         *prometheus.Desc
+	resyncRecoverySeconds *prometheus.Desc
 }
 
 // collectorDescs 按 namespace 缓存。namespace 是 Update() 的运行时入参而非编译期
@@ -550,6 +556,33 @@ func buildVsanDescs(namespace string) vsanDescs {
 		diskCapacityUsedBytes: d("disk_capacity_used_bytes",
 			"Used capacity of a vSAN physical disk, in bytes.",
 			"cmo", "vmwcluster", "host", "device", "vcenter"),
+
+		// resync：集群正在重建/迁移的数据量。三条同源（一次
+		// VsanQuerySyncingVsanObjects 的响应），所以彼此之间不存在
+		// 不一致窗口。全部是 gauge —— 它们是"还剩多少"的瞬时快照，
+		// 不是累计量，套 rate() 是错的。
+		//
+		// 三条恒一起输出（含全 0 的情况）：resync 完成时值就是 0，而
+		// "没有 resync"正是运维要确认的正常态。省略序列会让 absent()
+		// 无法区分"集群健康"和"采集失败"。
+		resyncBytes: d("resync_bytes",
+			"Amount of data left to resync on the vSAN cluster, in bytes. "+
+				"Zero means no resync is in progress. Requires vSphere API 6.7 or later.",
+			"cmo", "vmwcluster", "vcenter"),
+
+		resyncObjects: d("resync_objects",
+			"Number of vSAN objects currently syncing on the cluster. "+
+				"Zero means no resync is in progress. Requires vSphere API 6.7 or later.",
+			"cmo", "vmwcluster", "vcenter"),
+
+		// 单位是秒，由 vSAN Management API 明确规定
+		// （totalRecoveryETA: "The estimated time in seconds to recover
+		// all vSAN objects"）。指标名带 _seconds 后缀而不是照抄 API 的
+		// eta —— Prometheus 命名规范要求单位进名字。
+		resyncRecoverySeconds: d("resync_recovery_seconds",
+			"Estimated time to complete the vSAN resync, in seconds. "+
+				"Zero means no resync is in progress. Requires vSphere API 6.7 or later.",
+			"cmo", "vmwcluster", "vcenter"),
 	}
 }
 

@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 
 	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	"github.com/prometheus/client_golang/prometheus"
@@ -112,6 +114,14 @@ type vsanCollector struct {
 
 	// newClient 允许测试注入替身。nil 时用 newVsanClient。
 	newClient vsanClientFactory
+
+	// hostFetcher 允许测试注入主机清单（resync 要按集群筛主机并从
+	// 主机 MoRef 拼 VsanSystemEx）。nil 时用 fetchHosts。
+	//
+	// 与 newClient 同一模式：生产路径走真实检索，测试路径直接给
+	// mo.HostSystem 切片，不必起 vcsim 也能覆盖"第一台失败换第二台"
+	// 这类只有多主机才能表达的分支。
+	hostFetcher collector.HostFetcher
 }
 
 // NewvsanCollector 沿用本包多数派命名（New<小写子系统名>Collector）。
@@ -246,6 +256,10 @@ func (c *vsanCollector) collectCluster(
 
 	if err := c.collectHealth(ctx, ch, s, d, client, cluster); err != nil {
 		errs = append(errs, fmt.Errorf("health: %w", err))
+	}
+
+	if err := c.collectResync(ctx, gauge, s, client, cluster, d); err != nil {
+		errs = append(errs, fmt.Errorf("resync: %w", err))
 	}
 
 	return errors.Join(errs...)
@@ -486,4 +500,185 @@ func vsanTrue() *bool {
 func vsanFalse() *bool {
 	v := false
 	return &v
+}
+
+// vsanResyncMinMajor / vsanResyncMinMinor 是 resync 查询的最低 API 版本。
+//
+// VsanQuerySyncingVsanObjects 的官方文档标注 "Since vSAN API 6.7"，
+// telegraf 也在调用前做同样的门槛检查（vsan.go 的 queryResyncSummary
+// 开头 versionLowerThan(e.apiVersion, 6, 7)）。低版本上调用会得到
+// SOAP fault，而那是可以提前避免的一次往返。
+const (
+	vsanResyncMinMajor = 6
+	vsanResyncMinMinor = 7
+)
+
+// vsanAPIVersionAtLeast 判断 ApiVersion 字符串是否达到 major.minor。
+//
+// 与 telegraf 的 versionLowerThan 语义相反（这里是"达到"，那里是"低于"），
+// 但对畸形输入的处置方向相同：**无法解析时返回 false，即不做 resync**。
+//
+// telegraf 在这里的取舍是反的 —— 它的 versionLowerThan 在主版本号
+// 解析失败时 return false（"不低于"），于是畸形版本号会继续往下走去调
+// 一个可能不存在的方法。对 exporter 来说宁可少一条指标，也不要每轮抓取
+// 都产生一次注定失败的 SOAP 往返和一条错误日志。
+func vsanAPIVersionAtLeast(version string, major, minor int) bool {
+	parts := strings.Split(version, ".")
+
+	gotMajor, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return false
+	}
+
+	if gotMajor != major {
+		return gotMajor > major
+	}
+
+	// 主版本相等时才需要看次版本。"6" 这种没有次版本的形态按 6.0 处理，
+	// 达不到 6.7。
+	if len(parts) < 2 {
+		return false
+	}
+
+	gotMinor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return false
+	}
+
+	return gotMinor >= minor
+}
+
+// vsanSystemExRef 从主机 MoRef 拼出 VsanSystemEx 的 MoRef。
+//
+// !!! 这是拼出来的，不是查出来的 !!!
+//
+// VsanSystemEx 没有公开的查询入口 —— ServiceContent 里没有它，
+// 也没有任何 API 返回它。telegraf 的做法是从集群主机的 MoRef 值
+// （形如 "host-42"）取出数字部分拼成 "vsanSystemEx-42"。
+// 这依赖 vCenter 内部为同一台主机的两个 MO 分配同一个序号，是个
+// 未文档化的实现细节。
+//
+// 因此这里的形态校验是必须的而不是防御性编程：一旦 vCenter 改变
+// 编号规则，我们要的是"拼不出来就跳过"，而不是拿一个错误的 MoRef
+// 去查询别的主机的 resync 数据 —— 后者会静默给出错的数值。
+//
+// 与 telegraf 的差别：它校验失败时 `return err`，而那个 err 此刻
+// 恒为 nil（上一次赋值是成功的 clusterObj.Hosts），于是静默跳过且
+// 不记为失败。这里返回 ok=false 让调用方显式处理。
+func vsanSystemExRef(hostRef vimtypes.ManagedObjectReference) (vimtypes.ManagedObjectReference, bool) {
+	prefix, num, ok := strings.Cut(hostRef.Value, "-")
+	if !ok || prefix != "host" || num == "" {
+		return vimtypes.ManagedObjectReference{}, false
+	}
+
+	// 必须是纯数字。"host-abc" 能通过 Cut 但拼出来的
+	// "vsanSystemEx-abc" 不可能存在，提前挡掉省一次注定失败的往返。
+	if _, err := strconv.Atoi(num); err != nil {
+		return vimtypes.ManagedObjectReference{}, false
+	}
+
+	return vimtypes.ManagedObjectReference{
+		Type:  "VsanSystemEx",
+		Value: "vsanSystemEx-" + num,
+	}, true
+}
+
+// collectResync 采集集群 resync 三项指标。
+//
+// 调用流程：
+//  1. 检查 API 版本，低于 6.7 直接跳过（silently，不做日志 ——
+//     6.5 集群上 resync 不存在是正常态，不是异常）。
+//  2. 从 Scrape 共享的主机缓存中筛选属于本集群的 poweredOn 主机。
+//  3. 逐台尝试拼 VsanSystemEx MoRef 并查询，直到某台成功。
+//
+// 容错设计：多主机轮询原因是单台主机可能处于关机/维护模式（telegraf
+// 的 CMMDS 轮询注释 "Some esx host can be down or in maintenance mode"
+// 同样适用于 resync —— resync 的 MoRef 也是从主机拼出来的）。
+// 但这里不需要像 CMMDS 那样遍历所有主机：resync 是集群级数据，
+// 任一可达主机返回的结果应当一致。我们只是需要一台能查到的主机。
+func (c *vsanCollector) collectResync(
+	ctx context.Context,
+	gauge func(*prometheus.Desc, float64),
+	s *collector.Scrape,
+	client vsanRoundTripper,
+	cluster mo.ClusterComputeResource,
+	d vsanDescs,
+) error {
+	// Step 1: 版本门槛。
+	apiVersion := s.APIVersion()
+	if !vsanAPIVersionAtLeast(apiVersion, vsanResyncMinMajor, vsanResyncMinMinor) {
+		// Debug 日志而非静默跳过：用户升级了 vCenter 但版本号没走到
+		// 6.7 分支时，这条日志是唯一线索；而老版本 vCenter 上它出现的
+		// 频率是每轮抓取一次，不会造成日志噪声。
+		c.logger.Debug("vSAN resync requires API 6.7 or later",
+			"cluster", cluster.Name, "api_version", apiVersion)
+		return nil
+	}
+
+	// Step 2: 取主机清单。用 Scrape 共享缓存，不额外检索。
+	fetch := c.hostFetcher
+	if fetch == nil {
+		fetch = fetchHosts(c.logger)
+	}
+
+	hosts, err := s.Hosts(ctx, fetch)
+	if err != nil {
+		return fmt.Errorf("fetching hosts for resync: %w", err)
+	}
+
+	clusterRef := cluster.Self
+	var lastErr error
+
+	for _, host := range hosts {
+		// 只取属于本集群的、已通电的主机。
+		if host.Parent == nil || host.Parent.Value != clusterRef.Value {
+			continue
+		}
+		if host.Runtime.PowerState != "poweredOn" {
+			continue
+		}
+
+		vsanRef, ok := vsanSystemExRef(host.Self)
+		if !ok {
+			continue
+		}
+
+		includeSummary := true
+		req := &vsantypes.VsanQuerySyncingVsanObjects{
+			This:           vsanRef,
+			Uuids:          []string{},
+			Start:          0,
+			IncludeSummary: &includeSummary,
+		}
+
+		resp, err := vsanmethods.VsanQuerySyncingVsanObjects(ctx, client, req)
+		if err != nil {
+			lastErr = err
+			c.logger.Debug("resync query failed on a host, trying the next one",
+				"cluster", cluster.Name, "host", host.Self.Value, "err", err)
+			continue
+		}
+
+		if resp == nil {
+			lastErr = errors.New("nil resync response")
+			continue
+		}
+
+		// 成功：三条指标。
+		gauge(d.resyncBytes, float64(resp.Returnval.TotalBytesToSync))
+		gauge(d.resyncObjects, float64(resp.Returnval.TotalObjectsToSync))
+		gauge(d.resyncRecoverySeconds, float64(resp.Returnval.TotalRecoveryETA))
+
+		return nil
+	}
+
+	// 所有主机都试过了，没有一个成功。
+	if lastErr != nil {
+		return fmt.Errorf("resync: %w", lastErr)
+	}
+
+	// 没有找到合适的主机（集群无主机/无通电主机）。
+	c.logger.Debug("no suitable host found for resync query",
+		"cluster", cluster.Name)
+	return nil
 }

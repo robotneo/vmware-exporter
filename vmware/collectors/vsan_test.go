@@ -3,6 +3,7 @@ package vmwareCollectors
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vmware/govmomi/simulator"
+	"github.com/vmware/govmomi/vim25"
 	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/soap"
 	vimtypes "github.com/vmware/govmomi/vim25/types"
@@ -58,7 +60,25 @@ type vsanStub struct {
 	// healthFields 记录健康查询请求的 Fields，用于断言我们真的请求了
 	// physicalDisksHealth —— 漏了它盘级指标就会静默消失。
 	healthFields []string
+
+	// resync 按 VsanSystemEx 的 MoRef 值分派响应，这是测多主机轮询的
+	// 关键：把 "vsanSystemEx-1" 配成失败、"vsanSystemEx-2" 配成成功，
+	// 就能验证「第一台不可达时换下一台」而不是靠调用次序猜。
+	//
+	// 不在 map 里的 MoRef 一律返回错误，等价于"这台主机查不到"。
+	resyncByRef map[string]*vsantypes.VsanQuerySyncingVsanObjectsResponse
+
+	// resyncRefs 按顺序记录每次 resync 查询用的 MoRef，用于断言
+	// 拼接结果与轮询顺序。
+	resyncRefs []string
 }
+
+// vsanStubAnyRef 是 resyncByRef 的通配 key：命中它表示对任何
+// VsanSystemEx MoRef 都返回同一份响应。
+//
+// 值刻意取一个不可能是真实 MoRef 的形态（真实值形如 vsanSystemEx-42），
+// 这样它不会与按具体 MoRef 建表的测试冲突。
+const vsanStubAnyRef = "*"
 
 func (s *vsanStub) RoundTrip(ctx context.Context, req, res soap.HasFault) error {
 	switch body := res.(type) {
@@ -107,6 +127,30 @@ func (s *vsanStub) RoundTrip(ctx context.Context, req, res soap.HasFault) error 
 		}
 		body.Res = s.health
 
+	case *vsanmethods.VsanQuerySyncingVsanObjectsBody:
+		reqBody, ok := req.(*vsanmethods.VsanQuerySyncingVsanObjectsBody)
+		if !ok || reqBody.Req == nil {
+			return errors.New("stub: malformed resync request")
+		}
+
+		ref := reqBody.Req.This.Value
+		s.resyncRefs = append(s.resyncRefs, ref)
+
+		resp, ok := s.resyncByRef[ref]
+		if !ok {
+			// 哨兵：表里放了 vsanStubAnyRef 就对任何 MoRef 都应答。
+			// 给 lint 测试用 —— 那里主机 MoRef 由 vcsim 运行时分配，
+			// 事先建不了表。
+			resp, ok = s.resyncByRef[vsanStubAnyRef]
+		}
+
+		if !ok {
+			// 模拟主机不可达：这台查不到，调用方应当去试下一台。
+			return fmt.Errorf("stub: no resync data for %s", ref)
+		}
+
+		body.Res = resp
+
 	default:
 		return errors.New("stub: unexpected request type")
 	}
@@ -148,6 +192,95 @@ func testVsanCluster(moid, name string) mo.ClusterComputeResource {
 	cluster.Name = name
 
 	return cluster
+}
+
+// testVsanHost 造一台属于指定集群的主机。
+//
+// moid 必须是 "host-<n>" 形态才能拼出 VsanSystemEx —— 部分测试刻意
+// 传畸形值来验证形态校验，所以这里不做校验。
+func testVsanHost(moid, clusterMoid, powerState string) mo.HostSystem {
+	var host mo.HostSystem
+	host.Self = vimtypes.ManagedObjectReference{Type: "HostSystem", Value: moid}
+	host.Parent = &vimtypes.ManagedObjectReference{
+		Type: "ClusterComputeResource", Value: clusterMoid,
+	}
+	host.Runtime.PowerState = vimtypes.HostSystemPowerState(powerState)
+
+	return host
+}
+
+// staticHostFetcher 把一组主机直接喂给 Scrape.Hosts，不碰 vcsim。
+func staticHostFetcher(hosts []mo.HostSystem) collector.HostFetcher {
+	return func(_ context.Context, _ *collector.Scrape, _ []string, out *[]mo.HostSystem) error {
+		*out = hosts
+		return nil
+	}
+}
+
+// resyncResponse 造一个 resync 响应。
+func resyncResponse(bytes, objects, eta int64) *vsantypes.VsanQuerySyncingVsanObjectsResponse {
+	resp := &vsantypes.VsanQuerySyncingVsanObjectsResponse{}
+	resp.Returnval.TotalBytesToSync = bytes
+	resp.Returnval.TotalObjectsToSync = objects
+	resp.Returnval.TotalRecoveryETA = eta
+
+	return resp
+}
+
+// collectVsanResync 直接驱动 collectResync，返回三条指标的值。
+//
+// 不走 collectCluster：那条路径要先过 config/space/health 三个查询，
+// 而 resync 的分支（版本门槛、主机筛选、MoRef 拼接、轮询）与它们无关。
+// 直接调被测方法让失败信息指向真正的原因。
+func collectVsanResync(
+	t *testing.T,
+	stub *vsanStub,
+	apiVersion string,
+	hosts []mo.HostSystem,
+	cluster mo.ClusterComputeResource,
+) (map[string]float64, error) {
+	t.Helper()
+
+	c := &vsanCollector{
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		hostFetcher: staticHostFetcher(hosts),
+	}
+
+	s := &collector.Scrape{
+		Namespace: "vmware",
+		Target:    "vc.example.com",
+		Client:    clientWithAPIVersion(apiVersion),
+	}
+
+	ch := make(chan prometheus.Metric, 64)
+	d := descsFor(s.Namespace).vsan
+
+	gauge := func(desc *prometheus.Desc, value float64) {
+		ch <- prometheus.MustNewConstMetric(desc, prometheus.GaugeValue, value,
+			cluster.Self.Value, cluster.Name, s.Target)
+	}
+
+	err := c.collectResync(context.Background(), gauge, s, stub, cluster, d)
+
+	values := map[string]float64{}
+	for _, m := range drainMetrics(ch) {
+		name, _, value := labelsOf(t, m)
+		values[name] = value
+	}
+
+	return values, err
+}
+
+// clientWithAPIVersion 造一个只有 About.Version 有意义的 vim25 客户端。
+//
+// resync 唯一要从 Client 读的就是这个字段（经 Scrape.APIVersion）。
+// 起 vcsim 只为拿一个版本号是不划算的 —— 那要 2 到 3 秒，而这些测试
+// 每个都在毫秒级。
+func clientWithAPIVersion(version string) *vim25.Client {
+	c := &vim25.Client{}
+	c.ServiceContent.About.Version = version
+
+	return c
 }
 
 func vsanEnabledConfig(dedup bool) *vsantypes.VsanClusterGetConfigResponse {
@@ -614,6 +747,256 @@ func TestVsanDescLabelOrder(t *testing.T) {
 	for _, tc := range cases {
 		if got := descLabelNames(t, tc.desc); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%s label order = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestVsanResyncVersionGate 验证 API 版本门槛。
+//
+// 低于 6.7 时必须一条指标都不出、且一次 SOAP 都不发 ——
+// VsanQuerySyncingVsanObjects 在 6.5 上不存在，发过去只会拿到 fault，
+// 那是每轮抓取一次的无谓往返加一条错误日志。
+func TestVsanResyncVersionGate(t *testing.T) {
+	cluster := testVsanCluster("domain-c1", "prod")
+	hosts := []mo.HostSystem{testVsanHost("host-42", "domain-c1", "poweredOn")}
+
+	tests := []struct {
+		version   string
+		wantQuery bool
+	}{
+		{"6.5", false},
+		{"6.6", false},
+		{"6", false},  // 无次版本号，按 6.0 处理
+		{"6.7", true}, // 边界：恰好达到
+		{"6.7.1", true},
+		{"7.0", true},
+		{"8.0.3", true},
+		{"", false},    // 空版本（Client 未登录）
+		{"abc", false}, // 畸形
+		{"6.x", false}, // 次版本畸形
+		{"5.5", false},
+	}
+
+	for _, tc := range tests {
+		stub := &vsanStub{
+			resyncByRef: map[string]*vsantypes.VsanQuerySyncingVsanObjectsResponse{
+				"vsanSystemEx-42": resyncResponse(1, 2, 3),
+			},
+		}
+
+		values, err := collectVsanResync(t, stub, tc.version, hosts, cluster)
+		if err != nil {
+			t.Fatalf("version %q: unexpected error: %v", tc.version, err)
+		}
+
+		gotQuery := len(stub.resyncRefs) > 0
+		if gotQuery != tc.wantQuery {
+			t.Errorf("version %q: queried = %v, want %v", tc.version, gotQuery, tc.wantQuery)
+		}
+
+		gotMetrics := len(values) > 0
+		if gotMetrics != tc.wantQuery {
+			t.Errorf("version %q: emitted metrics = %v, want %v",
+				tc.version, gotMetrics, tc.wantQuery)
+		}
+	}
+}
+
+// TestVsanResyncMoRefConstruction 验证 VsanSystemEx MoRef 的拼接。
+//
+// 这个 MoRef 是拼出来的不是查出来的（VsanSystemEx 没有公开查询入口），
+// 所以"拼对了"必须有测试兜着：拼错的后果不是报错，而是查到别的主机的
+// 数据 —— 静默的数值错误。
+func TestVsanResyncMoRefConstruction(t *testing.T) {
+	tests := []struct {
+		hostMoid string
+		wantRef  string
+		wantOK   bool
+	}{
+		{"host-42", "vsanSystemEx-42", true},
+		{"host-1", "vsanSystemEx-1", true},
+		{"host-10086", "vsanSystemEx-10086", true},
+		{"host-abc", "", false}, // 数字段非数字
+		{"host-", "", false},    // 数字段为空
+		{"host", "", false},     // 无分隔符
+		{"", "", false},         // 空串
+		{"vm-42", "", false},    // 前缀不是 host
+		{"hostsystem-42", "", false},
+	}
+
+	for _, tc := range tests {
+		ref := vimtypes.ManagedObjectReference{Type: "HostSystem", Value: tc.hostMoid}
+
+		got, ok := vsanSystemExRef(ref)
+		if ok != tc.wantOK {
+			t.Errorf("%q: ok = %v, want %v", tc.hostMoid, ok, tc.wantOK)
+			continue
+		}
+
+		if !tc.wantOK {
+			continue
+		}
+
+		if got.Value != tc.wantRef {
+			t.Errorf("%q: ref value = %q, want %q", tc.hostMoid, got.Value, tc.wantRef)
+		}
+
+		if got.Type != "VsanSystemEx" {
+			t.Errorf("%q: ref type = %q, want VsanSystemEx", tc.hostMoid, got.Type)
+		}
+	}
+}
+
+// TestVsanResyncMultiHostPolling 验证多主机轮询：第一台主机查不到时
+// 自动换下一台，直到某台成功为止。
+//
+// 这是 telegraf "Some esx host can be down or in maintenance mode" 的
+// 同一容错模式应用到 resync —— 稳定态是集群至少有一台主机可达，但瞬态
+// 里某台主机可能正在维护。
+func TestVsanResyncMultiHostPolling(t *testing.T) {
+	cluster := testVsanCluster("domain-c1", "prod")
+
+	// 三台主机，前两台都是 host-1 / host-2 会在 stub 里报错，
+	// 第三台 host-3 有数据。
+	hosts := []mo.HostSystem{
+		testVsanHost("host-1", "domain-c1", "poweredOn"),
+		testVsanHost("host-2", "domain-c1", "poweredOn"),
+		testVsanHost("host-3", "domain-c1", "poweredOn"),
+	}
+
+	stub := &vsanStub{
+		resyncByRef: map[string]*vsantypes.VsanQuerySyncingVsanObjectsResponse{
+			"vsanSystemEx-3": resyncResponse(100, 5, 60),
+		},
+	}
+
+	values, err := collectVsanResync(t, stub, "8.0.3", hosts, cluster)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 三条指标必须都存在。
+	if v, ok := values["vmware_vsan_resync_bytes"]; !ok {
+		t.Error("missing resync_bytes")
+	} else if v != 100 {
+		t.Errorf("resync_bytes = %v, want 100", v)
+	}
+
+	if v, ok := values["vmware_vsan_resync_objects"]; !ok {
+		t.Error("missing resync_objects")
+	} else if v != 5 {
+		t.Errorf("resync_objects = %v, want 5", v)
+	}
+
+	if v, ok := values["vmware_vsan_resync_recovery_seconds"]; !ok {
+		t.Error("missing resync_recovery_seconds")
+	} else if v != 60 {
+		t.Errorf("resync_recovery_seconds = %v, want 60", v)
+	}
+
+	// 必须尝试了前两台才落到第三台（靠 stub 记录 resyncRefs 顺序断言）。
+	if len(stub.resyncRefs) != 3 {
+		t.Fatalf("expected 3 resync queries, got %d", len(stub.resyncRefs))
+	}
+
+	for i, want := range []string{"vsanSystemEx-1", "vsanSystemEx-2", "vsanSystemEx-3"} {
+		if stub.resyncRefs[i] != want {
+			t.Errorf("query %d: ref = %q, want %q", i, stub.resyncRefs[i], want)
+		}
+	}
+}
+
+// TestVsanResyncAllHostsFail 验证所有主机都查不到时返回错误。
+func TestVsanResyncAllHostsFail(t *testing.T) {
+	cluster := testVsanCluster("domain-c1", "prod")
+	hosts := []mo.HostSystem{
+		testVsanHost("host-1", "domain-c1", "poweredOn"),
+		testVsanHost("host-2", "domain-c1", "poweredOn"),
+	}
+
+	// 没有任何主机在 stub 的 map 里，所有查询都会失败。
+	stub := &vsanStub{resyncByRef: map[string]*vsantypes.VsanQuerySyncingVsanObjectsResponse{}}
+
+	_, err := collectVsanResync(t, stub, "8.0.3", hosts, cluster)
+	if err == nil {
+		t.Error("expected error when all hosts fail, got nil")
+	}
+}
+
+// TestVsanResyncSkipsPowerOffHost 验证已关机的主机不参与轮询，且不会
+// 因为找不到合适主机而报错（关机在集群里是常态，不是异常）。
+func TestVsanResyncSkipsPowerOffHost(t *testing.T) {
+	cluster := testVsanCluster("domain-c1", "prod")
+
+	// 只有一台主机但已关机 —— 没有可查询的主机，应当静默返回。
+	hosts := []mo.HostSystem{
+		testVsanHost("host-42", "domain-c1", "poweredOff"),
+	}
+
+	stub := &vsanStub{resyncByRef: map[string]*vsantypes.VsanQuerySyncingVsanObjectsResponse{}}
+
+	values, err := collectVsanResync(t, stub, "8.0.3", hosts, cluster)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(values) != 0 {
+		t.Errorf("expected 0 metrics for poweredOff hosts, got %d", len(values))
+	}
+}
+
+// TestVsanResyncSkipsOtherCluster 验证不属于本集群的主机被跳过。
+func TestVsanResyncSkipsOtherCluster(t *testing.T) {
+	cluster := testVsanCluster("domain-c1", "prod")
+
+	// 主机属于另一个集群（domain-c2）。
+	hosts := []mo.HostSystem{
+		testVsanHost("host-42", "domain-c2", "poweredOn"),
+	}
+
+	stub := &vsanStub{
+		resyncByRef: map[string]*vsantypes.VsanQuerySyncingVsanObjectsResponse{
+			"vsanSystemEx-42": resyncResponse(1, 2, 3),
+		},
+	}
+
+	values, err := collectVsanResync(t, stub, "8.0.3", hosts, cluster)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(stub.resyncRefs) != 0 {
+		t.Errorf("expected 0 queries for other cluster, got %d", len(stub.resyncRefs))
+	}
+
+	if len(values) != 0 {
+		t.Errorf("expected 0 metrics for other cluster, got %d", len(values))
+	}
+}
+
+// TestVsanResyncZeroValues 验证 resync 完成时三条指标都输出 0
+// （而不是省略序列让 absent() 无法区分"干净"和"采集失败"）。
+func TestVsanResyncZeroValues(t *testing.T) {
+	cluster := testVsanCluster("domain-c1", "prod")
+	hosts := []mo.HostSystem{
+		testVsanHost("host-42", "domain-c1", "poweredOn"),
+	}
+
+	stub := &vsanStub{
+		resyncByRef: map[string]*vsantypes.VsanQuerySyncingVsanObjectsResponse{
+			"vsanSystemEx-42": resyncResponse(0, 0, 0),
+		},
+	}
+
+	values, err := collectVsanResync(t, stub, "8.0.3", hosts, cluster)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 必须三条都在。
+	for _, name := range []string{"vmware_vsan_resync_bytes", "vmware_vsan_resync_objects", "vmware_vsan_resync_recovery_seconds"} {
+		if _, ok := values[name]; !ok {
+			t.Errorf("missing metric %q even though value is 0", name)
 		}
 	}
 }
