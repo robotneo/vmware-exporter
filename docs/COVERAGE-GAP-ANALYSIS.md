@@ -48,7 +48,10 @@ datastore 只有 `disk.provisioned.latest`、`disk.used.latest` 两个。
 - 唯一的网络信号是 host/vm 上的 `net.*` 性能计数器 —— 那是**虚机与主机视角
   的流量**，不是网络对象自身的配置与健康。
 - vSAN 需要单独的 `vsan-health` / `vsanPerfSystem` 端点，本仓库连
-  govmomi 的 vsan 包都没引入（`go.mod` 只有 `govmomi` 主模块）。
+  govmomi 的 vsan 包也没被引用。
+  （**后续修正**：`vsan` 包其实在 govmomi 主模块内，见
+  `docs/DESIGN-resourcepool-vsan.md` 前提 1 —— 采集它不需要新增依赖，
+  本文第五节把它列进"档 4：需要新 SDK"是错的。）
 
 所以"除了这 8 项"这个前提需要先修正为"除了这 5 项已实现 + 3 项待实现"。
 
@@ -140,13 +143,13 @@ join 逻辑都要重写。
 |---|---|---|---|---|
 | 1 | **资源池** | `ResourcePool` | CPU/内存的 reservation / limit / shares 实际生效在这一层。没有它，"VM 为什么拿不到 CPU"这个问题在指标上无法回答 | 新增资源，是 Cluster 与 VM 之间**缺失的一层父子关系** |
 | 2 | **vApp** | `VirtualApp` | 是 ResourcePool 的子类，多层应用的部署单元 | 可与 ResourcePool 合并为一类，用 `type` 区分 |
-| 3 | **文件夹** | `Folder` | vCenter 的实际组织维度，很多客户的业务归属信息只存在于文件夹路径里 | 新增资源，或作为所有实体的 `folder_path` 属性 |
+| 3 | **文件夹** | `Folder` | vCenter 的实际组织维度，很多客户的业务归属信息只存在于文件夹路径里。**当前只采了 `host`/`datastore` 两个系统文件夹**（`datacenter.go:112` 过滤），用户建的业务文件夹全部丢失 | 新增资源，或作为所有实体的 `folder_path` 属性 |
 | 4 | **标签 / 分类** | Tag / Category（**REST API**） | 云管平台的业务归属、成本中心、责任人几乎都落在 tag 上。这是 URM 里"业务视角"的唯一可靠来源 | **强烈建议独立**，见下方风险说明 |
-| 5 | **分布式交换机** | `DistributedVirtualSwitch` | 清单已列（DVS）但未实现。MTU、上行链路、版本、健康检查结果 | 新增资源 |
-| 6 | **端口组** | `DistributedVirtualPortgroup` / `Network` | 清单已列（Network）但未实现。VLAN ID、端口数、可用端口数 | 新增资源，是 VM 网卡的引用目标 |
+| 5 | ~~**分布式交换机**~~ | `DistributedVirtualSwitch` | ~~清单已列（DVS）但未实现~~ **用户已确认不需要，出范围** | — |
+| 6 | ~~**端口组**~~ | `DistributedVirtualPortgroup` / `Network` | ~~清单已列（Network）但未实现~~ **用户已确认不需要，出范围** | — |
 | 7 | **标准交换机** | `HostVirtualSwitch`（host.config.network） | 未上 DVS 的环境全靠它 | Host 的子资源 |
 | 8 | **存储适配器 / 多路径** | `HostHostBusAdapter` / `HostMultipathInfo` | 路径数、路径状态。单路径故障是最典型的"降级但不告警"场景 | Host 的子资源（esxcli.storage 部分覆盖，但默认禁用且未建模） |
-| 9 | **vSAN 磁盘组 / 磁盘** | vSAN Disk（需 vsan SDK） | 清单已列（vSAN）但未实现 | 新增资源，见第五节可行性 |
+| 9 | **vSAN 磁盘组 / 磁盘** | vSAN Disk（`govmomi/vsan`，**在主模块内**） | 清单已列（vSAN）但未实现。**已立项**，见 `docs/DESIGN-resourcepool-vsan.md` | 新增资源 |
 | 10 | **虚拟磁盘（VMDK）** | `VirtualDisk`（vm.config.hardware.device） | 单盘容量、精简/厚置、所在 datastore。当前只有 VM 级的 `PerDatastoreUsage` 汇总 | VM 的子资源 |
 | 11 | **许可证** | `LicenseManager` | 到期时间、已用/授权容量。到期会直接导致功能停摆 | 新增资源（vCenter 级） |
 
@@ -234,7 +237,9 @@ MoRef 的问题：**它只在单个 vCenter 内唯一，且跨 vCenter 迁移后
    这两层不存在，所以 `vm_info.hostmo` 跳过了实际的资源分配层级。
 2. **Datacenter 关联断裂**：datacenter collector 只出 name 和 parent，
    而 host/vm 无法直接关联到 datacenter，必须多跳 join。
-3. **vCenter 层级不完整**：Folder 树没采，所以无法还原 vCenter UI 里看到的
+3. **vCenter 层级不完整**：Folder 只采了 `host` 与 `datastore` 两个系统
+   文件夹（`datacenter.go:112` 显式过滤 `folder.Name == "host" || == "datastore"`），
+   用户创建的业务文件夹一个都没采，所以无法还原 vCenter UI 里看到的
    实际组织结构。
 
 **待决**：URM 是要还原完整的 vSphere 树（Datacenter → Folder →
@@ -349,7 +354,7 @@ NTP/服务状态（#22）、固件版本（#23）。
 
 | 项 | 障碍 |
 |---|---|
-| **vSAN**（#9） | 需 `govmomi/vsan` 包与 `vsan-health` 端点，是独立的 SOAP service。还需处理 vSAN 未启用时的优雅降级 |
+| **vSAN**（#9） | ~~需 `govmomi/vsan` 包~~ **修正**：`vsan` 包在 govmomi 主模块内，无需新依赖；`vsan.NewClient` 从现有 `vim25.Client` 派生，无需二次认证。真正的障碍是 **vcsim 只模拟了 `VsanClusterGetConfig`**，容量/健康/性能三类 API 都测不了。详见 `docs/DESIGN-resourcepool-vsan.md` |
 | **Tag / Category**（#4） | **REST API（vAPI），不是 SOAP**。需要独立的会话管理与认证路径。当前 `vmware/api/vmware.go` 只建了 SOAP 客户端 |
 | **许可证**（#11） | `LicenseManager` 是 SOAP 但走 ServiceContent 单例，不是 ContainerView，取法不同 |
 | **VMDK 明细**（#10） | 需取 `vm.config.hardware.device` 并遍历设备树筛 `VirtualDisk`。属性体积大，VM 多时慎用 |
@@ -394,8 +399,9 @@ vSphere tag（比如直接对接 vCenter），**建议不要在 exporter 里做*
 
 ### P3 —— 独立立项
 
-13. **vSAN**（#9）—— 若环境用 vSAN 则必做，但工作量是一个独立 collector 加
-    新 SDK 引入
+13. **vSAN**（#9）—— **已立项**，见 `docs/DESIGN-resourcepool-vsan.md`。
+    修正本文档第五节的判断：`vsan` 包在 govmomi 主模块内，不需要新 SDK；
+    真正的障碍是 vcsim 只模拟了 `VsanClusterGetConfig`，测试基建要自建
 14. **Tag**（#4）—— 先确认 URM 是否已有其他途径
 15. **许可证**（#11）—— 到期风险高但变化极慢，可低频采集
 
@@ -403,6 +409,12 @@ vSphere tag（比如直接对接 vCenter），**建议不要在 exporter 里做*
 
 - **事件、任务**（#30/#31）进 Prometheus —— 走日志管道
 - **vCenter appliance 健康**（#32/#33）—— 除非已经在维护 VAMI 认证
+
+### 用户已确认出范围（2026-09-02）
+
+- **Network / 端口组**（#6）与**分布式交换机 DVS**（#5）—— 不需要，不做。
+- **ResourcePool**（#1）与 **vSAN**（#9）—— 采纳，**默认禁用**、按需启用。
+  设计见 `docs/DESIGN-resourcepool-vsan.md`。
 
 ---
 
@@ -415,5 +427,6 @@ vSphere tag（比如直接对接 vCenter），**建议不要在 exporter 里做*
 3. Q2（是否还原完整 vSphere 树）决定 ResourcePool / Folder 的优先级。
 4. Q6（分层抓取）—— 若 URM 期望配置类与性能类分开抓，需要在设计阶段就定，
    事后拆开会改动 collector 接口。
-5. 环境实际情况：**是否使用 vSAN、DVS、Storage DRS、Tag**？
-   这四项直接决定 P1/P3 里哪些是必做、哪些可以永久搁置。
+5. ~~环境实际情况：**是否使用 vSAN、DVS、Storage DRS、Tag**？~~
+   **已答（2026-09-02）**：Network 与 DVS 不需要；ResourcePool 与 vSAN 采纳，
+   默认禁用按需启用。Storage DRS 与 Tag 仍待确认。

@@ -101,13 +101,87 @@ type datastoreDescs struct {
 	accessible *prometheus.Desc
 }
 
+// resourcePoolDescs 覆盖 resourcepool collector 的全部指标。
+//
+// 这个 collector 的 Desc 从一开始就提到这里，不走 cluster/datacenter 的内联
+// 写法。理由是实体数不可控：DRS 给每个 vApp 建池，按租户批量建池的自动化平台
+// 也常见，而 vm 那条指标是「一虚机一序列」—— 循环规模跟 VM 数同阶，正是
+// host/vm 当初被提出来的那个量级。
+//
+// !!! 每个字段上方注释里的 label 顺序即 MustNewConstMetric 的传值顺序 !!!
+type resourcePoolDescs struct {
+	// rpmo, rp, parentmo, ownermo, vcenter
+	info *prometheus.Desc
+	// rpmo, rp, parentmo, ownermo, vcenter -- ESXi 的 ha-root-pool 伪对象
+	infoSynthetic *prometheus.Desc
+	// rpmo, rp, status, vcenter
+	overallStatus *prometheus.Desc
+	// rpmo, rp, vmmo, vcenter
+	vm *prometheus.Desc
+
+	// 以下 8 条用量指标的 label 集合相同：rpmo, rp, vcenter
+	cpuUsageHertz           *prometheus.Desc
+	cpuMaxUsageHertz        *prometheus.Desc
+	cpuReservationUsedHertz *prometheus.Desc
+	cpuUnreservedHertz      *prometheus.Desc
+	memUsageBytes           *prometheus.Desc
+	memMaxUsageBytes        *prometheus.Desc
+	memReservationUsedBytes *prometheus.Desc
+	memUnreservedBytes      *prometheus.Desc
+
+	// 配置项。label 集合同为 rpmo, rp, vcenter
+	cpuReservationHertz *prometheus.Desc
+	cpuLimitHertz       *prometheus.Desc
+	cpuLimited          *prometheus.Desc
+	memReservationBytes *prometheus.Desc
+	memLimitBytes       *prometheus.Desc
+	memLimited          *prometheus.Desc
+
+	// rpmo, rp, level, vcenter
+	cpuShares *prometheus.Desc
+	// rpmo, rp, level, vcenter
+	memShares *prometheus.Desc
+}
+
+// vsanDescs 覆盖 vsan collector（组 A：健康与容量）的全部指标。
+//
+// !!! 每个字段上方注释里的 label 顺序即 MustNewConstMetric 的传值顺序 !!!
+type vsanDescs struct {
+	// 集群级，label 集合同为 cmo, vmwcluster, vcenter
+	enabled           *prometheus.Desc
+	dedupEnabled      *prometheus.Desc
+	capacityBytes     *prometheus.Desc
+	capacityFreeBytes *prometheus.Desc
+	capacityUsedBytes *prometheus.Desc
+
+	// cmo, vmwcluster, status, vcenter
+	healthStatus *prometheus.Desc
+
+	// cmo, vmwcluster, host, device, uuid, state, vcenter
+	diskHealth *prometheus.Desc
+
+	// 盘级容量。label 集合同为 cmo, vmwcluster, host, device, vcenter
+	// —— 刻意不含 uuid 与 state：容量是数值指标，把会变化的 state 放进
+	// label 会让盘状态一变就产生一条新序列，旧序列变僵尸。
+	diskCapacityBytes     *prometheus.Desc
+	diskCapacityUsedBytes *prometheus.Desc
+
+	// resync 三条，label 集合同为 cmo, vmwcluster, vcenter。
+	// 需要 API >= 6.7，低版本不输出（见 vsan.go 的 collectResync）。
+	resyncBytes           *prometheus.Desc
+	resyncObjects         *prometheus.Desc
+	resyncRecoverySeconds *prometheus.Desc
+}
+
 // collectorDescs 按 namespace 缓存。namespace 是 Update() 的运行时入参而非编译期
 // 常量，所以不能用包级 var 直接构造；上游框架允许调用方覆盖它，把它当常量是错的。
 // 实践中全程只有 "vmware" 一个值，测试里会用别的值。
 type collectorDescs struct {
-	host      hostDescs
-	vm        vmDescs
-	datastore datastoreDescs
+	host         hostDescs
+	vm           vmDescs
+	datastore    datastoreDescs
+	resourcePool resourcePoolDescs
+	vsan         vsanDescs
 }
 
 var (
@@ -136,9 +210,11 @@ func descsFor(namespace string) *collectorDescs {
 
 func buildDescs(namespace string) *collectorDescs {
 	return &collectorDescs{
-		host:      buildHostDescs(namespace),
-		vm:        buildVMDescs(namespace),
-		datastore: buildDatastoreDescs(namespace),
+		host:         buildHostDescs(namespace),
+		vm:           buildVMDescs(namespace),
+		datastore:    buildDatastoreDescs(namespace),
+		resourcePool: buildResourcePoolDescs(namespace),
+		vsan:         buildVsanDescs(namespace),
 	}
 }
 
@@ -295,6 +371,218 @@ func buildDatastoreDescs(namespace string) datastoreDescs {
 		accessible: d("accessible",
 			"Whether the datastore is accessible.",
 			"dsmo", "ds", "vcenter"),
+	}
+}
+
+// buildResourcePoolDescs 构造 resourcepool collector 的 Desc 集合。
+//
+// CPU 值一律换算成 hertz：vSphere 给的是 MHz，而本项目已确立「导出基础单位」
+// 的约定（perfnames.go 的 megaHertz → hertz, factor 1e6）。资源池这里必须
+// 一致，否则同一张 dashboard 上 host 的 hertz 与资源池的 MHz 会差 6 个数量级。
+//
+// 内存的两个来源单位不同，别混：Runtime.Memory.* 是**字节**
+// （types.go ResourcePoolRuntimeInfo 注释 "Values are in bytes"），而
+// Config.MemoryAllocation.{Reservation,Limit} 是 **MB**
+// （ResourceAllocationInfo 注释 "Units are MB for memory, MHz for CPU"）。
+// 前者原样导出，后者要 ×1048576。
+func buildResourcePoolDescs(namespace string) resourcePoolDescs {
+	d := func(name, help string, labels ...string) *prometheus.Desc {
+		return prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, resourcePoolSubsystem, name),
+			help, labels, nil,
+		)
+	}
+
+	const infoHelp = "Resource pool info, for joining on parent and owner references."
+
+	return resourcePoolDescs{
+		info: d("info", infoHelp,
+			"rpmo", "rp", "parentmo", "ownermo", "vcenter"),
+
+		// synthetic 变体是独立的 Desc 而非在采集时改 label map。
+		// 原因：label 集合一旦进了 variableLabels 就是 Desc 的一部分，
+		// 同一个 Desc 不能有时带 synthetic 有时不带 —— client_golang 会以
+		// 「label 数量不匹配」panic。cluster/datacenter 那边用的是
+		// constLabels + 每实体造 Desc，所以能靠 syntheticLabels() 动态加；
+		// 这里既然复用 Desc，就得为伪对象单独备一个。
+		//
+		// help 与上面那条完全相同：promlint 会校验同名指标的 help 一致性，
+		// 而这两个 Desc 的 fqName 是同一个。
+		infoSynthetic: d("info", infoHelp,
+			"rpmo", "rp", "parentmo", "ownermo", "vcenter", "synthetic"),
+
+		overallStatus: d("overall_status",
+			"Resource pool overall status as reported by vSphere. "+
+				"The status label carries the colour: gray, green, yellow or red.",
+			"rpmo", "rp", "status", "vcenter"),
+
+		// 一虚机一条序列。沿用 cluster_datastore 的既有做法 —— 那边已经因为
+		// 「逗号拼接的 label 值会在成员变动时产生僵尸序列」改成一对一了。
+		vm: d("vm",
+			"Resource pool to virtual machine mapping, one series per virtual machine.",
+			"rpmo", "rp", "vmmo", "vcenter"),
+
+		cpuUsageHertz: d("cpu_usage_hertz",
+			"Current CPU usage of the resource pool and its descendants, in hertz.",
+			"rpmo", "rp", "vcenter"),
+
+		cpuMaxUsageHertz: d("cpu_max_usage_hertz",
+			"Maximum CPU usage available to the resource pool, in hertz.",
+			"rpmo", "rp", "vcenter"),
+
+		cpuReservationUsedHertz: d("cpu_reservation_used_hertz",
+			"CPU reservation consumed by all descendants of the resource pool, in hertz.",
+			"rpmo", "rp", "vcenter"),
+
+		cpuUnreservedHertz: d("cpu_unreserved_hertz",
+			"CPU still available for reservation by virtual machines in the resource pool, in hertz.",
+			"rpmo", "rp", "vcenter"),
+
+		memUsageBytes: d("mem_usage_bytes",
+			"Current memory usage of the resource pool and its descendants, in bytes.",
+			"rpmo", "rp", "vcenter"),
+
+		memMaxUsageBytes: d("mem_max_usage_bytes",
+			"Maximum memory usage available to the resource pool, in bytes.",
+			"rpmo", "rp", "vcenter"),
+
+		memReservationUsedBytes: d("mem_reservation_used_bytes",
+			"Memory reservation consumed by all descendants of the resource pool, in bytes.",
+			"rpmo", "rp", "vcenter"),
+
+		memUnreservedBytes: d("mem_unreserved_bytes",
+			"Memory still available for reservation by virtual machines in the resource pool, in bytes.",
+			"rpmo", "rp", "vcenter"),
+
+		cpuReservationHertz: d("cpu_reservation_hertz",
+			"Configured CPU reservation of the resource pool, in hertz.",
+			"rpmo", "rp", "vcenter"),
+
+		// unlimited 时这条序列**不输出**，见 emitResourceLimit 的注释。
+		cpuLimitHertz: d("cpu_limit_hertz",
+			"Configured CPU limit of the resource pool, in hertz. "+
+				"Not emitted when the pool is unlimited; check cpu_limited instead.",
+			"rpmo", "rp", "vcenter"),
+
+		cpuLimited: d("cpu_limited",
+			"Whether the resource pool has a configured CPU limit (1) or is unlimited (0).",
+			"rpmo", "rp", "vcenter"),
+
+		memReservationBytes: d("mem_reservation_bytes",
+			"Configured memory reservation of the resource pool, in bytes.",
+			"rpmo", "rp", "vcenter"),
+
+		memLimitBytes: d("mem_limit_bytes",
+			"Configured memory limit of the resource pool, in bytes. "+
+				"Not emitted when the pool is unlimited; check mem_limited instead.",
+			"rpmo", "rp", "vcenter"),
+
+		memLimited: d("mem_limited",
+			"Whether the resource pool has a configured memory limit (1) or is unlimited (0).",
+			"rpmo", "rp", "vcenter"),
+
+		// level 与数值都留着：level 是用户在 UI 里配的语义（low/normal/high/
+		// custom），数值才能算相对权重。只有 custom 时数值是用户自定的，
+		// 其余三档 vSphere 映射到预设值。
+		cpuShares: d("cpu_shares",
+			"Configured CPU shares of the resource pool. "+
+				"The level label is the vSphere allocation level: low, normal, high or custom.",
+			"rpmo", "rp", "level", "vcenter"),
+
+		memShares: d("mem_shares",
+			"Configured memory shares of the resource pool. "+
+				"The level label is the vSphere allocation level: low, normal, high or custom.",
+			"rpmo", "rp", "level", "vcenter"),
+	}
+}
+
+func buildVsanDescs(namespace string) vsanDescs {
+	d := func(name, help string, labels ...string) *prometheus.Desc {
+		return prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, vsanSubsystem, name),
+			help, labels, nil,
+		)
+	}
+
+	// cmo / vmwcluster 与 cluster.go:52 的 vmware_cluster_info 完全一致，
+	// 这是刻意的：vSAN 指标必须能与集群信息 join，否则它们就是一座孤岛
+	// —— 用户拿到 cmo 却无法关联到集群名、父文件夹与 datastore。
+	return vsanDescs{
+		enabled: d("enabled",
+			"Whether vSAN is enabled on the cluster (1) or not (0). "+
+				"Emitted for every cluster, so a value of 0 distinguishes "+
+				"\"vSAN is off\" from \"the vsan collector is not running\".",
+			"cmo", "vmwcluster", "vcenter"),
+
+		dedupEnabled: d("dedup_enabled",
+			"Whether vSAN deduplication and compression is enabled on the cluster (1) or not (0).",
+			"cmo", "vmwcluster", "vcenter"),
+
+		capacityBytes: d("capacity_bytes",
+			"Total vSAN datastore capacity of the cluster, in bytes.",
+			"cmo", "vmwcluster", "vcenter"),
+
+		capacityFreeBytes: d("capacity_free_bytes",
+			"Free vSAN datastore capacity of the cluster, in bytes. "+
+				"This is the raw value reported by the API.",
+			"cmo", "vmwcluster", "vcenter"),
+
+		// 推导值。API 只给 total 与 free，used 是我们算的 —— help 里说明
+		// 这一点，这样用户排查数值可疑时知道该去核对哪两条原始序列。
+		capacityUsedBytes: d("capacity_used_bytes",
+			"Used vSAN datastore capacity of the cluster, in bytes. "+
+				"Derived as capacity_bytes minus capacity_free_bytes; "+
+				"the API reports no used value directly.",
+			"cmo", "vmwcluster", "vcenter"),
+
+		// 状态进 label、值恒为 1，与 resourcepool_overall_status 同一形态。
+		// 不映射成数字（telegraf 用 green=0/yellow=1/red=2）：那个映射把
+		// "未知"和"健康"都压进数轴，而 unknown 恰恰是最该告警的状态之一。
+		healthStatus: d("health_status",
+			"vSAN cluster health, as a label. "+
+				"The status label is green, yellow, red or unknown; "+
+				"unknown means the health service returned no usable value.",
+			"cmo", "vmwcluster", "status", "vcenter"),
+
+		diskHealth: d("disk_health",
+			"vSAN physical disk health, as a label. "+
+				"The state label is the summary health reported by vSAN.",
+			"cmo", "vmwcluster", "host", "device", "uuid", "state", "vcenter"),
+
+		diskCapacityBytes: d("disk_capacity_bytes",
+			"Capacity of a vSAN physical disk, in bytes.",
+			"cmo", "vmwcluster", "host", "device", "vcenter"),
+
+		diskCapacityUsedBytes: d("disk_capacity_used_bytes",
+			"Used capacity of a vSAN physical disk, in bytes.",
+			"cmo", "vmwcluster", "host", "device", "vcenter"),
+
+		// resync：集群正在重建/迁移的数据量。三条同源（一次
+		// VsanQuerySyncingVsanObjects 的响应），所以彼此之间不存在
+		// 不一致窗口。全部是 gauge —— 它们是"还剩多少"的瞬时快照，
+		// 不是累计量，套 rate() 是错的。
+		//
+		// 三条恒一起输出（含全 0 的情况）：resync 完成时值就是 0，而
+		// "没有 resync"正是运维要确认的正常态。省略序列会让 absent()
+		// 无法区分"集群健康"和"采集失败"。
+		resyncBytes: d("resync_bytes",
+			"Amount of data left to resync on the vSAN cluster, in bytes. "+
+				"Zero means no resync is in progress. Requires vSphere API 6.7 or later.",
+			"cmo", "vmwcluster", "vcenter"),
+
+		resyncObjects: d("resync_objects",
+			"Number of vSAN objects currently syncing on the cluster. "+
+				"Zero means no resync is in progress. Requires vSphere API 6.7 or later.",
+			"cmo", "vmwcluster", "vcenter"),
+
+		// 单位是秒，由 vSAN Management API 明确规定
+		// （totalRecoveryETA: "The estimated time in seconds to recover
+		// all vSAN objects"）。指标名带 _seconds 后缀而不是照抄 API 的
+		// eta —— Prometheus 命名规范要求单位进名字。
+		resyncRecoverySeconds: d("resync_recovery_seconds",
+			"Estimated time to complete the vSAN resync, in seconds. "+
+				"Zero means no resync is in progress. Requires vSphere API 6.7 or later.",
+			"cmo", "vmwcluster", "vcenter"),
 	}
 }
 

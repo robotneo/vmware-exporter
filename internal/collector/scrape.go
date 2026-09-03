@@ -117,6 +117,24 @@ func (s *Scrape) HostConcurrency() int {
 // defaultHostConcurrency 是 MaxConcurrency 未设置时 per-host fan-out 的上限。
 const defaultHostConcurrency = 8
 
+// APIVersion 返回目标的 vSphere API 版本字符串（形如 "6.7"、"8.0.3"）。
+//
+// 存在的理由是**空值安全**：ServiceContent 是登录的产物，而 collector 的
+// 单元测试普遍构造裸 Scrape（不带 Client）来直接驱动某个采集方法。让每个
+// 调用点各写一遍两层判空，等于把同一个坑埋在 N 处 —— 与 HostConcurrency
+// 收敛「MaxConcurrency 未设置」是同一类处理。
+//
+// 取不到时返回空串而不是某个假定的版本号：调用方据此走「版本不满足」分支，
+// 这个方向是安全的（少一条指标），反过来假定成高版本会让不支持的 API 每轮
+// 抓取都失败一次。
+func (s *Scrape) APIVersion() string {
+	if s == nil || s.Client == nil {
+		return ""
+	}
+
+	return s.Client.ServiceContent.About.Version
+}
+
 // 目标类型常量。值必须与 vmware/api 包的定义一致 —— 它们会作为
 // vmware_target_info{type="..."} 的 label 值输出，是 dashboard 条件渲染的
 // 唯一依据。此处重复声明是为了避免 internal/collector 反向依赖 vmware/api。

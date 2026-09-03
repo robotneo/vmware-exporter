@@ -84,6 +84,7 @@ These gaps come from the vSphere object model, not from the exporter:
 | Datastore performance counters | Full | Limited | Counters such as `disk.provisioned.latest` rely on vCenter's historical rollup, which ESXi does not run |
 | Sampling interval | Real-time or 5-minute rollup | **Real-time only** | ESXi keeps no historical statistics, so the requested `-vmware.interval` is overridden by the server's `RefreshRate` |
 | esxcli collection | Proxied through vCenter | Direct | Uses the SOAP `vim.EsxCLI.*` interface — **not SSH** |
+| vSAN metrics | Full | **None** | The vSAN management endpoints live on vCenter (`/vsanHealth`); a standalone ESXi host does not serve them. The `vsan` collector detects this and skips itself, logging at debug level rather than producing errors |
 
 **About the `synthetic` label**: `vmware_datacenter_info` and `vmware_compute_info`
 are still emitted on ESXi so that dashboard queries joining on `dcmo` / `cmo` keep
@@ -113,6 +114,10 @@ The options available are:
 | -collector.datastore | Enables or disables Datastore metrics collection (default: enabled) |
 | -collector.host | Enables or disables Host metrics collection (default: enabled) |
 | -collector.vm | Enables or disables Virtual Machine metrics collection (default: enabled) |
+| -collector.resourcepool | Enables or disables Resource Pool metrics collection: limits, reservations, shares and instantaneous usage (default: enabled) |
+| -collector.vsan | Enables or disables vSAN metrics collection: enablement, deduplication, cluster capacity and health, physical disk health, and resync progress (default: **disabled**). Requires a vCenter connection; skipped entirely when connected directly to an ESXi host. Resync metrics additionally require vSphere API 6.7 or later |
+| -collector.vsan.perf | Enables or disables vSAN performance metrics collection: IOPS, throughput, latency, congestion and disk-group capacity per vSAN entity (default: **disabled**). Requires a vCenter connection **and** the vSAN performance service enabled on the cluster; independent of `-collector.vsan` |
+| -collector.vsan.perf.skip-verify | Skips vSAN performance entity type negotiation and queries the built-in whitelist directly (default: false). Needed because `VsanPerfGetSupportedEntityTypes` does not report every queryable entity type |
 | -collector.esxcli.host.nic | Collects ESXi NIC firmware information using esxcli over the SOAP API (proxied by vCenter, or direct when connected to an ESXi host) (default: disabled) |
 | -collector.esxcli.storage | Collects ESXi storage firmware information using esxcli over the SOAP API (proxied by vCenter, or direct when connected to an ESXi host) (default: disabled) |
 
@@ -120,7 +125,7 @@ The options available are:
 > table listed it, but the binary has never registered such a flag — passing it
 > makes the exporter exit with `flag provided but not defined`. To run only a
 > chosen subset, disable the defaults explicitly:
-> `-collector.datacenter=false -collector.cluster=false -collector.datastore=false -collector.host=false -collector.vm=false`.
+> `-collector.datacenter=false -collector.cluster=false -collector.datastore=false -collector.host=false -collector.vm=false -collector.resourcepool=false`.
 >
 > `scripts/check_config.py` now fails on any flag that appears in these tables
 > without being registered, so this class of drift cannot come back.
@@ -132,10 +137,104 @@ The options available are:
 | -vmware.schema | Use HTTP or HTTPS (default "https") |
 | -vmware.username | Username to login with |
 | -vmware.vcenter | Target address in host:port format. Accepts a vCenter **or** a standalone ESXi host. This is not the vCenter Management Console. The flag name is kept for backwards compatibility |
+| -vmware.vsan.interval | Time window in seconds for vSAN performance queries (default 300). vSAN statistics are collected at a 5-minute granularity, so values below 300 do not yield more data points. Only used by `-collector.vsan.perf` |
 
 Invalid values (for example `-vmware.granularity=0`, or a granularity larger than
 the interval) make the process exit at startup with an explicit reason instead of
 running with a broken configuration.
+
+### The vSAN collector
+
+`-collector.vsan` is **off by default**, unlike every other non-esxcli collector.
+That is not caution for its own sake: most vSphere estates do not run vSAN, and on
+those the collector would spend two extra SOAP round trips per cluster per scrape
+(capacity and health) to learn nothing. When vSAN *is* absent it still emits
+`vmware_vsan_enabled 0` for each cluster and stops there, so `0` means "vSAN is
+off" rather than "the collector is not running".
+
+Permissions: a **read-only** account is enough. The collector deliberately avoids
+`VsanQueryClusterPhysicalDiskHealthSummary`, whose request body requires
+`EsxRootPassword` — the root password of every host in the cluster. Physical disk
+health is read out of the cluster health summary instead, which needs no host
+credentials. See `docs/DESIGN-resourcepool-vsan.md` §2.2.1.
+
+Two behaviours worth knowing before you write alerts on this:
+
+- **`vmware_vsan_health_status` can report `status="unknown"`.** vCenter caches its
+  health summary, and the cache is empty for a while after a restart or after vSAN
+  is first enabled. The collector then re-queries with the cache disabled, which
+  forces vCenter to actually run the health checks. If both attempts fail it emits
+  `unknown` rather than dropping the series — a broken health service and an absent
+  cluster should not look identical on a dashboard.
+- **Per-disk metrics may be missing while cluster health is fine.** The disk data is
+  an optional part of the health summary response. If your vCenter returns it empty,
+  `vmware_vsan_disk_health` and the two `vmware_vsan_disk_capacity_*` series will be
+  absent while `vmware_vsan_health_status` keeps working normally.
+
+`vmware_vsan_capacity_used_bytes` is derived as `capacity_bytes - capacity_free_bytes`;
+the API reports no used value directly. All three are exported so you can check the
+derivation against the raw numbers.
+
+**Resync metrics need vSphere API 6.7 or later.** `vmware_vsan_resync_bytes`,
+`vmware_vsan_resync_objects` and `vmware_vsan_resync_recovery_seconds` report how much
+data the cluster is still rebuilding. On older vCenters the underlying API does not
+exist, so the three series are simply absent and the reason is logged at debug level.
+
+All three are emitted **even when they are zero** — zero is the normal, healthy state
+("nothing is resyncing"), and that is exactly what you want to be able to assert on.
+Dropping the series when idle would make `absent()` unable to tell a healthy cluster
+from a broken collector. `..._recovery_seconds` is in seconds, as specified by the
+vSAN Management API.
+
+One implementation detail that leaks into behaviour: the managed object these metrics
+come from has no public lookup, so its reference is **derived from a host's** managed
+object id. The collector therefore tries the cluster's powered-on hosts in turn until
+one answers, which keeps resync data available while individual hosts are down or in
+maintenance mode.
+
+### The vSAN performance collector
+
+`-collector.vsan.perf` is separate from `-collector.vsan` on purpose. The health and
+capacity collector makes three light queries per cluster; this one queries CSV
+performance data per entity type and parses it, which costs an order of magnitude
+more. You may well want health and capacity without the performance series.
+
+**Prerequisite the flag cannot check for you:** the cluster must have the **vSAN
+performance service** enabled (it is off by default in vSphere). When it is off,
+vCenter answers the query with *no data rather than an error*, so the symptom is an
+enabled collector that emits nothing. The collector logs this at debug level; if you
+see no `vmware_vsan_perf_*` series, check the performance service first.
+
+**Cardinality.** Metric names come from vSAN metric labels, and the API is generous:
+the `disk-group` entity type alone exposes 79 labels. A ten-host cluster with two
+disk groups per host would be 20 entities x 79 series from that one entity type. The
+collector therefore ships two hardcoded whitelists:
+
+- **Entity types** (5): `cluster-domclient`, `host-domclient`, `disk-group`,
+  `capacity-disk`, `cache-disk`. These are intersected with what
+  `VsanPerfGetSupportedEntityTypes` reports for your environment, so unsupported
+  types are never queried. An empty intersection logs a warning naming the whitelist.
+- **Metric labels** (15): the IOPS, throughput, latency, congestion, outstanding-IO,
+  disk-group capacity and cache-hit families. The whitelist is passed to vCenter as
+  `VsanPerfQuerySpec.Labels`, so excluded metrics are never transferred, not fetched
+  and discarded. Notably excluded are the 24 resync classification counters and the
+  scheduler queue internals, which only matter during deep troubleshooting.
+
+Neither list is configurable. If you need an entity type the API declines to report,
+`-collector.vsan.perf.skip-verify` bypasses negotiation and queries the whole entity
+whitelist directly.
+
+**Aggregation semantics.** Every metric is treated as an instantaneous reading and
+**averaged over the query window**. vSAN's own `iops_*` and `throughput_*` values are
+already rates rather than cumulative counters, and latency is already an average, so
+the window mean is the window's average level. Nothing is summed and nothing is
+converted to a rate — do not wrap these in `rate()`.
+
+Metric names are `vmware_vsan_perf_<label>`, with the entity type in the `entity`
+label rather than in the name. That way `sum by (entity) (vmware_vsan_perf_iops_read)`
+works in one line instead of requiring a join across metric names. The `entityid`
+label carries the UUID vSAN reports for the entity; vSAN gives no friendly name, so
+join on `vmware_cluster_info` via `cmo` for cluster context.
 
 ### Environment variables: mind the case
 

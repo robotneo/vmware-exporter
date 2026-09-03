@@ -211,6 +211,7 @@ scrape_configs:
 | Datastore 性能计数器 | 完整 | 受限 | `disk.provisioned.latest` 等计数器依赖 vCenter 的历史汇总，ESXi 不做汇总 |
 | 采样间隔 | 可选实时或 5 分钟汇总 | **仅实时** | ESXi 不聚合历史统计，`-vmware.interval` 的期望值会被服务端 `RefreshRate` 覆盖 |
 | esxcli 采集 | 经 vCenter 转发 | 直连 | 走 SOAP 的 `vim.EsxCLI.*` 接口，**不是 SSH** |
+| vSAN 指标 | 完整 | **完全没有** | vSAN 的管理端点在 vCenter 上（`/vsanHealth`），单台 ESXi 不提供。`vsan` collector 会识别出这种情况并整体跳过，只打 debug 日志，不会报错 |
 
 **关于 `synthetic` label**：ESXi 上仍然输出 `vmware_datacenter_info` 与
 `vmware_compute_info`，是为了让依赖 `dcmo` / `cmo` 关联的 dashboard 查询不断链；
@@ -245,16 +246,98 @@ scrape_configs:
 | `-collector.datastore` | bool | 开启存储 (Datastore) 数据采集。 | `true` |
 | `-collector.host` | bool | 开启 ESXi 主机 (Host) 数据采集。 | `true` |
 | `-collector.vm` | bool | 开启虚拟机 (VM) 数据采集。 | `true` |
+| `-collector.resourcepool` | bool | 开启资源池 (Resource Pool) 数据采集：limit、reservation、shares 与瞬时用量。 | `true` |
+| `-collector.vsan` | bool | 开启 vSAN 数据采集：启用状态、去重压缩、集群容量与健康、物理盘健康、resync 重建进度。需要连接 vCenter；直连 ESXi 时整体跳过。resync 三项额外需要 vSphere API 6.7 及以上。 | `false` |
+| `-collector.vsan.perf` | bool | 开启 vSAN 性能采集：各 vSAN 实体的 IOPS、吞吐、延迟、拥塞与磁盘组容量。需要连接 vCenter，**且**集群已开启 vSAN 性能服务；与 `-collector.vsan` 相互独立。 | `false` |
+| `-collector.vsan.perf.skip-verify` | bool | 跳过 vSAN 性能实体类型协商，直接按内置白名单查询。之所以需要它，是因为 `VsanPerfGetSupportedEntityTypes` 并不申报全部可查实体类型。 | `false` |
 | `-collector.esxcli.host.nic` | bool | 开启基于 esxcli 的主机网卡采集。 | `false` |
 | `-collector.esxcli.storage` | bool | 开启基于 esxcli 的存储采集。 | `false` |
 
 > **`-disable.default.collectors` 从未存在。** 本表此前列出过它，但二进制
 > 从来没有注册这个 flag —— 传它会让 exporter 直接以
 > `flag provided but not defined` 退出。要只跑一个子集，请逐个显式关闭默认项：
-> `-collector.datacenter=false -collector.cluster=false -collector.datastore=false -collector.host=false -collector.vm=false`。
+> `-collector.datacenter=false -collector.cluster=false -collector.datastore=false -collector.host=false -collector.vm=false -collector.resourcepool=false`。
 >
 > `scripts/check_config.py` 现在会对「出现在参考表里但代码未注册」的 flag
 > 报错，所以这类文档漂移不会再回来。
+
+#### 关于 vSAN 采集器
+
+`-collector.vsan` 是**默认关闭**的，与其余非 esxcli 采集器相反。这不是单纯的
+保守：多数 vSphere 环境并没有启用 vSAN，在这些环境上开着它，每个集群每轮抓取
+都要多花两次 SOAP 往返（容量与健康）却什么也拿不到。即便 vSAN 不存在，它仍会
+为每个集群输出 `vmware_vsan_enabled 0` 然后就此停下 —— 也就是说 `0` 的含义是
+「vSAN 没开」，而不是「采集器没跑」。
+
+**权限：只读账号就够。** 采集器刻意绕开了
+`VsanQueryClusterPhysicalDiskHealthSummary` —— 那个接口的请求体要求
+`EsxRootPassword`，也就是集群内每台主机的 root 密码。物理盘健康改从集群健康
+摘要里读取，不需要任何主机凭据。详见 `docs/DESIGN-resourcepool-vsan.md` 2.2.1 节。
+
+写告警之前需要知道的两个行为：
+
+- **`vmware_vsan_health_status` 可能报 `status="unknown"`。** vCenter 会缓存健康
+  摘要，而在重启后、或 vSAN 刚启用时，这个缓存有一段时间是空的。此时采集器会
+  关掉缓存再查一次，强制 vCenter 真的跑一遍健康检查。两次都失败才输出
+  `unknown`，而不是让序列消失 —— 「健康服务坏了」和「没有这个集群」在
+  dashboard 上不该长得一样。
+- **盘级指标可能缺失，而集群健康正常。** 盘数据是健康摘要响应里的可选部分。
+  如果你的 vCenter 返回为空，`vmware_vsan_disk_health` 与两个
+  `vmware_vsan_disk_capacity_*` 序列都不会出现，但
+  `vmware_vsan_health_status` 照常工作。
+
+`vmware_vsan_capacity_used_bytes` 是由 `capacity_bytes - capacity_free_bytes`
+推导出来的，接口本身不直接给已用量。三条都导出，便于你用原始值核对这个推导。
+
+**resync 三条指标需要 vSphere API 6.7 及以上。** `vmware_vsan_resync_bytes`、
+`vmware_vsan_resync_objects` 与 `vmware_vsan_resync_recovery_seconds` 反映集群
+还有多少数据在重建。低版本 vCenter 上底层接口根本不存在，这三条序列会直接缺失，
+原因写在 Debug 日志里。
+
+**三条恒输出，包括值为 0 的时候** —— 0 正是正常健康态（「没有任何 resync」），
+而这恰恰是你要能断言的东西。空闲时省略序列会让 `absent()` 无法区分「集群健康」
+和「采集失败」。`..._recovery_seconds` 的单位是秒，由 vSAN Management API 明确规定。
+
+有一个实现细节会体现在行为上：这三条指标所在的管理对象没有公开查询入口，它的
+引用是**从主机的 MoRef 拼出来的**。因此采集器会逐台尝试集群内已通电的主机，
+直到某台返回数据 —— 这样即使个别主机关机或处于维护模式，resync 数据依然可用。
+
+#### 关于 vSAN 性能采集器
+
+`-collector.vsan.perf` 与 `-collector.vsan` 分开是刻意的。后者每个集群三次轻量
+查询；本采集器按实体类型逐个查询 CSV 性能数据并解析，代价高一个量级。你完全
+可能只想要健康与容量，而不要性能序列。
+
+**flag 无法替你检查的前提条件**：集群必须已开启 **vSAN 性能服务**（vSphere 里
+默认不开）。未开启时 vCenter 返回的是*空数据而不是报错*，所以症状是「采集器开着
+却一条指标都没有」。这种情况采集器会留 Debug 日志；如果看不到任何
+`vmware_vsan_perf_*` 序列，先去查性能服务。
+
+**基数问题。** 指标名来自 vSAN 的 metric label，而这个接口给得很多：单是
+`disk-group` 实体类型就有 79 个 label。一个 10 主机、每主机 2 个磁盘组的集群，
+仅这一个实体类型就是 20 × 79 条序列。因此采集器内置了两道白名单：
+
+- **实体类型**（5 个）：`cluster-domclient`、`host-domclient`、`disk-group`、
+  `capacity-disk`、`cache-disk`。它们会与 `VsanPerfGetSupportedEntityTypes`
+  申报的环境支持清单取交集，环境不支持的类型不会被查询。交集为空时会输出一条
+  写明白名单内容的 Warn 日志。
+- **指标 label**（15 个）：IOPS、吞吐、延迟、拥塞、未完成 IO、磁盘组容量与缓存
+  命中这几族。白名单会作为 `VsanPerfQuerySpec.Labels` 传给 vCenter，所以被排除的
+  指标**根本不会传输**，不是拿回来再丢掉。刻意排除的主要是 24 个 resync 分类
+  计数与调度器队列细节 —— 它们只在深度排障时有意义。
+
+两份清单都不可配置。如果你需要某个接口不申报但实际可查的实体类型，用
+`-collector.vsan.perf.skip-verify` 跳过协商、直接按整份实体白名单查询。
+
+**聚合语义。** 全部指标都按瞬时量处理，并在**查询窗口内求平均**。vSAN 自己给的
+`iops_*` 与 `throughput_*` 本身已经是速率而非累计计数，延迟本身也已经是平均值，
+所以窗口均值就是这段窗口的平均水平。既没有求和也没有转速率 —— **不要**再套
+`rate()`。
+
+指标名是 `vmware_vsan_perf_<label>`，实体类型放在 `entity` label 里而不是名字里。
+这样 `sum by (entity) (vmware_vsan_perf_iops_read)` 一行就够，不必跨指标名做 join。
+`entityid` label 是 vSAN 给出的实体 UUID；vSAN 不提供友好名，需要集群上下文时
+通过 `cmo` 与 `vmware_cluster_info` join。
 
 ### 3. 性能与采样设置
 | 参数 | 类型 | 说明 | 默认值 |
@@ -262,6 +345,7 @@ scrape_configs:
 | `-vmware.timeout` | int | 单次抓取的整体超时（秒），覆盖登录、属性检索与性能采样全过程。 | `60` |
 | `-vmware.interval` | int | PerfManager 采样窗口（秒）。**不再参与超时计算。** | `20` |
 | `-vmware.granularity` | int | 采样数据的时间粒度（秒）。必须大于 0，且不大于 `-vmware.interval`。 | `20` |
+| `-vmware.vsan.interval` | int | vSAN 性能查询的时间窗口（秒）。vSAN 统计的最小采集粒度就是 5 分钟，低于 300 拿不到更多数据点。仅 `-collector.vsan.perf` 使用。 | `300` |
 | `-collector.max-concurrency` | int | 并发上限，同时约束两处：`CollectorSet` 层同时运行的 collector 数，以及 esxcli collector 内部按主机 fan-out 的宽度。设为 0 则不限制 collector 层，但 per-host fan-out 仍有内建下限。 | `8` |
 
 > **取代了 `-prom.maxRequests`**：那个参数是死参数 —— 上游框架把它存进

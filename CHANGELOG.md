@@ -501,6 +501,199 @@ default configuration (`samples=1`) the old and new aggregations agree anyway.
   from vCenter's own counter names via `net.bytesRx.average`). The exemption list
   is itself checked: an entry that no longer triggers fails the test, so it
   cannot linger and silently excuse a future regression.
+- **`resourcepool` collector** (`-collector.resourcepool`, **default enabled**) —
+  18 new metrics covering resource pool limits, reservations, shares and
+  instantaneous usage.
+
+  **This adds series to your TSDB without any configuration change on your
+  part.** Pass `-collector.resourcepool=false` to opt out. The cardinality is
+  dominated by `vmware_resourcepool_vm`, which emits one series per virtual
+  machine — the same order of magnitude as `vmware_vm_info`. If you pay per
+  series on a hosted Prometheus, budget for that before upgrading.
+
+  It closes the gap between `vmware_vm_info` and the cluster: until now there was
+  no way to answer *which resource pool constrains this VM*, because nothing
+  exported the intermediate layer. `vmware_resourcepool_vm{rpmo,vmmo}` makes
+  `vm → resourcepool → cluster` joinable.
+
+  Unlike telegraf's `inputs.vsphere`, this reads the `ResourcePool` runtime and
+  config properties rather than performance counters. One `ContainerView`
+  retrieval instead of an extra `QueryPerf` round trip, and — the deciding
+  reason — `reservation`, `limit` and `shares` exist **only** in `Config`. Those
+  three are what explain *why a VM cannot get CPU*, and no performance counter
+  carries them.
+
+  `limit` needs care when reading the metrics: vSphere represents *unlimited* as
+  `-1`, and exporting that verbatim would let `limit - usage` return a negative
+  number and pollute any `sum()` over it. So an unlimited pool emits **no**
+  `cpu_limit_hertz` / `mem_limit_bytes` series at all; use
+  `vmware_resourcepool_{cpu,mem}_limited` (`1` = a limit is configured, `0` =
+  unlimited) to tell *unlimited* apart from *not collected*. A missing series is
+  an empty result in PromQL — safer than a sentinel that arithmetic will happily
+  consume as a real value.
+
+  CPU values are converted MHz → hertz (`×1e6`) and configured memory MB → bytes
+  (`×1048576`), matching the base-unit convention the rest of the exporter
+  follows. Note the asymmetry in vSphere's own API, which the two different
+  factors reflect: `Runtime.Memory.*` is already in bytes while
+  `Config.MemoryAllocation.*` is in MB.
+
+  On ESXi the implicit `ha-root-pool` is labelled `synthetic="true"`, the same
+  treatment `ha-datacenter` and `ha-compute-res` already get.
+- **`vsan` collector** (`-collector.vsan`, **default disabled**) — 9 new metrics
+  covering vSAN enablement, deduplication, cluster capacity and health, and
+  physical disk health.
+
+  **Off by default, unlike every other non-esxcli collector.** Most vSphere
+  estates do not run vSAN, and on those the collector would spend two extra SOAP
+  round trips per cluster per scrape to learn nothing. Enabling it costs you
+  nothing retroactively — no series appear until you pass the flag.
+
+  When vSAN is absent it still emits `vmware_vsan_enabled 0` per cluster and then
+  **stops**, issuing no further queries. So `0` means *vSAN is off*, not *the
+  collector is not running*. telegraf needs a `vsan_cluster_include` list for
+  mixed estates; the early return handles it without a list that goes stale the
+  moment someone builds a new vSAN cluster.
+
+  **A read-only account suffices.** This is not incidental — it forced a design
+  change. The obvious API for disk health,
+  `VsanQueryClusterPhysicalDiskHealthSummary`, requires `EsxRootPassword` in its
+  request body: the root password of *every host in the cluster*. No monitoring
+  account should hold those, so disk health is read out of the cluster health
+  summary response instead (`physicalDisksHealth`), which needs no host
+  credentials. Zero extra round trips, and it happens to carry per-disk capacity
+  as well. See `docs/DESIGN-resourcepool-vsan.md` §2.2.1.
+
+  `vmware_vsan_health_status` puts the state in a label with a constant value of
+  `1`, and **can report `status="unknown"`**. vCenter caches its health summary
+  and that cache is empty for a while after a restart or after vSAN is first
+  enabled; the collector then re-queries with caching disabled, forcing vCenter
+  to actually run the checks. Only if both attempts fail does it emit `unknown`.
+  telegraf instead returns silently here, which makes *the health service is
+  broken* and *there is no vSAN* indistinguishable — one of those should page
+  someone. For the same reason the state is not mapped to `green=0/yellow=1/red=2`
+  as telegraf does: that scale has no room for `unknown`.
+
+  `vmware_vsan_capacity_used_bytes` is **derived** as
+  `capacity_bytes - capacity_free_bytes`; the API reports no used value. All
+  three are exported so the derivation can be checked against the raw numbers.
+  (`FreeCapacityB` is `omitempty`, so a missing value yields `used == total` —
+  semantically correct: no free space is all space used.)
+
+  Per-disk series carry no `state` or `uuid` on the capacity metrics, only on
+  `vmware_vsan_disk_health`. Putting a mutable state into a capacity series' label
+  set would mint a new series and orphan the old one every time a disk's health
+  flips. Capacity is also omitted entirely when the API reports `0`, rather than
+  exporting a zero that reads as *this disk holds nothing*.
+
+  **Resync metrics** — `vmware_vsan_resync_bytes`, `vmware_vsan_resync_objects`
+  and `vmware_vsan_resync_recovery_seconds` — ship in the same collector but are
+  gated on **vSphere API 6.7 or later**, where `VsanQuerySyncingVsanObjects` was
+  introduced. Below that the three series are simply absent, with the reason at
+  debug level. The `_seconds` suffix is not a guess: the vSAN Management API
+  specifies `totalRecoveryETA` as *"the estimated time in seconds"*. telegraf
+  exports it unsuffixed as `total_recovery_eta`, which is fine for InfluxDB but
+  not for Prometheus naming.
+
+  All three are emitted **even when zero**, because zero is the healthy state and
+  the one operators most want to assert on. Dropping the series while idle would
+  leave `absent()` unable to distinguish a quiet cluster from a broken collector.
+
+  Three deliberate departures from telegraf's implementation, all in the same
+  function:
+
+  - **The hosts are polled in turn, not just `hosts[0]`.** `VsanSystemEx` has no
+    public lookup, so its managed object reference is *derived* from a host's
+    (`host-42` → `vsanSystemEx-42`). telegraf takes the cluster's first host and
+    stops; if that host happens to be in maintenance mode, resync data vanishes.
+    This is the same fallback telegraf itself applies to CMMDS queries — it just
+    never applied it here.
+  - **The numeric part is validated as numeric.** telegraf only checks that
+    splitting on `-` yields two parts, so `host-abc` passes and yields a
+    `vsanSystemEx-abc` that cannot exist. Worse, its error path there is
+    `return err` where `err` is provably `nil` at that point, so a malformed
+    reference is skipped silently and not counted as a failure.
+  - **An unparsable API version means no resync query.** telegraf's
+    `versionLowerThan` returns `false` ("not lower") when the major version fails
+    to parse, so a malformed version string proceeds to call a method that may not
+    exist. For an exporter, one missing metric beats a guaranteed-failing round
+    trip and an error log on every single scrape.
+
+- **`vsan.perf` collector** (`-collector.vsan.perf`, **default disabled**) — vSAN
+  performance statistics: IOPS, throughput, latency, congestion, outstanding IO,
+  disk-group capacity and cache-hit rate, per vSAN performance entity.
+
+  **A separate flag from `-collector.vsan`, deliberately.** The health/capacity
+  collector makes three light queries per cluster; this one queries CSV
+  performance data per entity type and parses it — an order of magnitude more
+  work, and far more series. Wanting health and capacity without the performance
+  data is a reasonable position, and two flags are what it takes to express it.
+
+  **Requires the vSAN performance service**, which vSphere leaves off by default.
+  When it is off vCenter answers with *no data rather than an error*, so the
+  symptom is an enabled collector emitting nothing. That case is logged at debug
+  level and is explicitly not treated as a collector failure — it must not
+  inflate `vmware_scrape_errors_total`.
+
+  **Two hardcoded whitelists, because the API's cardinality is a hazard.** The
+  `disk-group` entity type alone exposes 79 metric labels; a ten-host cluster
+  with two disk groups per host is 20 x 79 series from that one type. Shipped
+  are 5 entity types (`cluster-domclient`, `host-domclient`, `disk-group`,
+  `capacity-disk`, `cache-disk`) and 15 metric labels. The label whitelist is
+  passed to vCenter as `VsanPerfQuerySpec.Labels`, so excluded metrics are never
+  transferred — request-side pruning, not fetch-and-discard. Excluded are the 24
+  resync classification counters and the scheduler queue internals.
+
+  Entity types are intersected with `VsanPerfGetSupportedEntityTypes`, so
+  unsupported types are never queried and an empty intersection logs a warning
+  naming the whitelist rather than returning silently. Because that API does not
+  report every queryable entity type (telegraf documents the same gap),
+  `-collector.vsan.perf.skip-verify` exists to bypass negotiation.
+
+  **Every metric is averaged over the query window as an instantaneous reading.**
+  No delta/rate distinction is attempted. vSAN's `VsanPerfMetricId` does carry
+  `statsType` and `rollupType`, but telegraf reads neither — there is no
+  field-tested mapping to copy, and inventing one means guessing per label whether
+  it is cumulative, with silent numeric errors as the failure mode. The 15
+  whitelisted labels are all instantaneous by nature (vSAN's `iops_*` and
+  `throughput_*` are already rates, latency is already an average), so the window
+  mean is the window's average level. **Do not wrap these in `rate()`.**
+
+  Metric names are `vmware_vsan_perf_<label>` with the entity type in the `entity`
+  label rather than the metric name, so `sum by (entity) (...)` works without a
+  join across metric names. `entityid` carries the entity UUID; vSAN provides no
+  friendly name.
+
+  CSV values are parsed with `ParseFloat(v, 64)`, not telegraf's 32-bit parse —
+  32-bit floats carry about 7 significant decimal digits, and throughput in
+  bytes/sec passes that on any sizeable cluster. Sample and value counts are
+  **checked for equality before iterating**: telegraf indexes `timeStamps[i]` by
+  the value index and panics when they disagree, which in an exporter would take
+  down the whole scrape. A single unparsable sample is skipped rather than
+  discarding the window; a series with no parsable sample is omitted rather than
+  exported as `0`.
+
+  New flag `-vmware.vsan.interval` (default 300) sets the query window. It lives
+  under `vmware.*` with the other collection parameters rather than opening a new
+  top-level namespace for one flag. 300 is not conservatism: vSAN statistics land
+  at 5-minute granularity, so a shorter window returns the same single point.
+
+  Two managed object references are **hardcoded string literals** because govmomi
+  does not provide them: `vsan-cluster-space-report-system` and
+  `vsan-cluster-health-system`. They are transcribed from telegraf's
+  `plugins/inputs/vsphere/vsan.go`, cannot be derived from govmomi's type system,
+  and cannot be verified against vcsim (its vSAN simulator registers only the
+  cluster config and stretched-cluster systems). Changing them requires a real
+  vCenter — the source is recorded in the design document as D9.
+
+  Direct ESXi connections skip this collector entirely: the vSAN management
+  endpoints live on vCenter, so a standalone host would only ever return 404.
+
+  Tested against a `soap.RoundTripper` stub rather than vcsim, out of necessity:
+  vcsim implements 3 vSAN methods and covers only 1 of the 3 this collector uses.
+  Every assertion was verified in reverse — the degradation paths, the
+  total-minus-free derivation and the cached-then-uncached ordering were each
+  confirmed to fail on a deliberately broken build before being trusted.
 
 ### Fixed
 

@@ -389,8 +389,11 @@ var collectorDescriptions = map[string]string{
 	"datastore":       "Datastore metrics",
 	"host":            "ESXi host metrics",
 	"vm":              "Virtual machine metrics",
+	"resourcepool":    "Resource pool limits, reservations and usage",
 	"esxcli.host.nic": "ESXi NIC driver info",
 	"esxcli.storage":  "ESXi storage info",
+	"vsan":            "vSAN cluster health, capacity and resync",
+	"vsan.perf":       "vSAN performance statistics (requires the vSAN performance service)",
 }
 
 // collectorListHTML 从 collector 清单生成首页的可用 collector 列表。
