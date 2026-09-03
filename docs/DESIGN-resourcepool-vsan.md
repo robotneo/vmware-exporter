@@ -1,6 +1,16 @@
 # 设计：resourcepool 与 vsan 两个新采集器
 
-**状态：设计稿，待确认。本文不含任何代码改动。**
+> **状态：已全部实施完毕并合并到 `master`。**
+> 本文从"待确认的设计稿"转为**设计决策记录**：D1~D9 的取舍、
+> 与 telegraf 的逐项对比、以及实施过程中被实证推翻的前提，都保留在原处。
+>
+> 落地对应关系：
+> - R1 → `vmware/collectors/resourcepool.go`（默认启用）
+> - R2 → `vmware/collectors/vsan.go` 组 A（默认禁用）+ SOAP 替身测试基建
+> - R3 → `vsan.go` 的 resync 三指标 + `vmware/collectors/vsanperf.go`（默认禁用）
+>
+> 文中标有「**R2 实测**」「**R3 实施结论**」的段落是实施期回填的修正，
+> 与原设计不一致时**以这些段落为准**。
 
 范围由用户界定：
 - **要做**：
