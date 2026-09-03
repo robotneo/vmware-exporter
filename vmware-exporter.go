@@ -261,6 +261,7 @@ func metricsHandler(logger *slog.Logger) http.HandlerFunc {
 			Target:         "", // 空表示用 -vmware.vcenter
 			Login:          vmware.NewAPI(),
 			Logger:         logger,
+			Enabled:        collector.Registered(),
 			MaxConcurrency: *maxConcurrency,
 			Errors:         scrapeErrors,
 		})

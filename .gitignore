@@ -21,3 +21,7 @@ dist/
 # scripts/migrate_dashboards.py.
 *.json.bak
 *.json.premigrate
+
+# The binary from a local `go build -o vmware-exporter .`. Named after the
+# module, so it sits next to the source and is easy to commit by accident.
+/vmware-exporter

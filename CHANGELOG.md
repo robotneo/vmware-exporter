@@ -719,6 +719,17 @@ default configuration (`samples=1`) the old and new aggregations agree anyway.
 - Three cluster metrics had their help text copy-pasted from
   `vmware_cluster_info` (`"This is basic cluster info to be used for parent
   reference"`) and now describe what they actually measure.
+- **`/metrics` ignored every `-collector.<name>` flag.** `metricsHandler` built
+  its `collector.Options` without the `Enabled` field, so `NewCollectorSet` fell
+  back to each collector's compiled-in default for every one of them. Turning a
+  disabled collector on (`-collector.vsan=true`) did nothing — the log said
+  `collector disabled` while the command line said otherwise — and turning a
+  default-on collector off (`-collector.vm=false`) did nothing either, which is
+  the quieter half: the symptom is load on vCenter that cannot be shed, not
+  missing data. `/probe` was always correct because it derives `Enabled` from
+  the URL parameters, so the two endpoints disagreed about the same flags.
+  Found by running the built binary against a simulator rather than by reading
+  the code.
 - **`.dockerignore` excluded `Changelog.md`, a file that does not exist.** The
   actual file is `CHANGELOG.md`. Docker matches these patterns case-sensitively
   on the daemon, which runs on Linux — so the rule never matched anything, and

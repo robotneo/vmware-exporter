@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -236,6 +237,110 @@ func TestMetricsHandlerServesBuildInfo(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "vmware_exporter_build_info") {
 		t.Fatalf("response body = %q, want it to contain %q", rec.Body.String(), "vmware_exporter_build_info")
 	}
+}
+
+// TestMetricsHandlerHonoursCollectorFlags 断言 /metrics 尊重 -collector.<name>。
+//
+// 回归测试。metricsHandler 构造 Options 时漏了 Enabled 字段，于是
+// NewCollectorSet 对每个 collector 都退回 def.DefaultEnabled
+// （set.go:178），命令行开关在这条路径上完全失效：
+//
+//   - -collector.vsan=true 打不开默认禁用的 collector，用户看不到任何
+//     vsan 指标，日志里只有一行 "collector disabled"，与命令行矛盾；
+//   - -collector.vm=false 也关不掉默认启用的 collector，本该被排除的
+//     采集照跑不误。
+//
+// 后者是更隐蔽的一半：症状是「关不掉」而不是「没数据」，在大规模环境里
+// 表现为无法通过关闭 collector 来降低 vCenter 压力。
+//
+// /probe 一直是对的（它从 URL 参数构造 Enabled），所以两条路径的行为
+// 在这个 bug 下是分叉的 —— 同一份 flag，/probe 生效、/metrics 不生效。
+func TestMetricsHandlerHonoursCollectorFlags(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	restoreExporterFlags(t)
+	*disableExporterMetrics = false
+	*disableExporterTarget = false
+
+	// 不连 vCenter：登录必然失败，但那正好够用 —— 登录失败时
+	// CollectorSet 会为**每个启用的 collector** 产出 success=0
+	// （set.go:291），这份名单就是「哪些 collector 被启用了」的
+	// 可观测投影，不需要一个能连上的 target 就能断言。
+	restoreVMwareTargetFlags(t)
+
+	// 一开一关，覆盖 bug 的两个方向。
+	setBoolFlag(t, "collector.vsan", true) // 默认禁用，要能打开
+	setBoolFlag(t, "collector.vm", false)  // 默认启用，要能关掉
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+
+	metricsHandler(logger)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+
+	if want := `vmware_scrape_collector_success{collector="vsan"}`; !strings.Contains(body, want) {
+		t.Errorf("-collector.vsan=true did not enable the collector: %s is absent.\n"+
+			"metricsHandler must pass Enabled: collector.Registered() to NewCollectorSet.\nbody:\n%s",
+			want, body)
+	}
+
+	if notWant := `vmware_scrape_collector_success{collector="vm"}`; strings.Contains(body, notWant) {
+		t.Errorf("-collector.vm=false did not disable the collector: %s is present.\n"+
+			"metricsHandler must pass Enabled: collector.Registered() to NewCollectorSet.\nbody:\n%s",
+			notWant, body)
+	}
+}
+
+// setBoolFlag 设置一个已注册的 bool flag 并在测试结束时还原。
+//
+// 直接改 flag.Lookup 拿到的 Value 而不是包级变量指针：collector 的开关
+// 定义在 vmware/collectors 包内且未导出，根包测试碰不到。
+func setBoolFlag(t *testing.T, name string, v bool) {
+	t.Helper()
+
+	f := flag.Lookup(name)
+	if f == nil {
+		t.Fatalf("flag -%s is not registered", name)
+	}
+
+	old := f.Value.String()
+	if err := f.Value.Set(strconv.FormatBool(v)); err != nil {
+		t.Fatalf("could not set -%s: %v", name, err)
+	}
+
+	t.Cleanup(func() {
+		if err := f.Value.Set(old); err != nil {
+			t.Errorf("could not restore -%s: %v", name, err)
+		}
+	})
+}
+
+// restoreVMwareTargetFlags 把 -vmware.vcenter 指向一个必定连不上的地址，
+// 并在测试结束后还原。
+func restoreVMwareTargetFlags(t *testing.T) {
+	t.Helper()
+
+	f := flag.Lookup("vmware.vcenter")
+	if f == nil {
+		t.Fatal("flag -vmware.vcenter is not registered")
+	}
+
+	old := f.Value.String()
+	// 127.0.0.1:1 —— 保留端口，不会有服务在听，连接立刻被拒绝而不是超时。
+	if err := f.Value.Set("127.0.0.1:1"); err != nil {
+		t.Fatalf("could not set -vmware.vcenter: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := f.Value.Set(old); err != nil {
+			t.Errorf("could not restore -vmware.vcenter: %v", err)
+		}
+	})
 }
 
 // restoreExporterFlags 存取根包 flag，避免测试之间互相污染。
