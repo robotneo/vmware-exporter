@@ -586,6 +586,98 @@ default configuration (`samples=1`) the old and new aggregations agree anyway.
   flips. Capacity is also omitted entirely when the API reports `0`, rather than
   exporting a zero that reads as *this disk holds nothing*.
 
+  **Resync metrics** — `vmware_vsan_resync_bytes`, `vmware_vsan_resync_objects`
+  and `vmware_vsan_resync_recovery_seconds` — ship in the same collector but are
+  gated on **vSphere API 6.7 or later**, where `VsanQuerySyncingVsanObjects` was
+  introduced. Below that the three series are simply absent, with the reason at
+  debug level. The `_seconds` suffix is not a guess: the vSAN Management API
+  specifies `totalRecoveryETA` as *"the estimated time in seconds"*. telegraf
+  exports it unsuffixed as `total_recovery_eta`, which is fine for InfluxDB but
+  not for Prometheus naming.
+
+  All three are emitted **even when zero**, because zero is the healthy state and
+  the one operators most want to assert on. Dropping the series while idle would
+  leave `absent()` unable to distinguish a quiet cluster from a broken collector.
+
+  Three deliberate departures from telegraf's implementation, all in the same
+  function:
+
+  - **The hosts are polled in turn, not just `hosts[0]`.** `VsanSystemEx` has no
+    public lookup, so its managed object reference is *derived* from a host's
+    (`host-42` → `vsanSystemEx-42`). telegraf takes the cluster's first host and
+    stops; if that host happens to be in maintenance mode, resync data vanishes.
+    This is the same fallback telegraf itself applies to CMMDS queries — it just
+    never applied it here.
+  - **The numeric part is validated as numeric.** telegraf only checks that
+    splitting on `-` yields two parts, so `host-abc` passes and yields a
+    `vsanSystemEx-abc` that cannot exist. Worse, its error path there is
+    `return err` where `err` is provably `nil` at that point, so a malformed
+    reference is skipped silently and not counted as a failure.
+  - **An unparsable API version means no resync query.** telegraf's
+    `versionLowerThan` returns `false` ("not lower") when the major version fails
+    to parse, so a malformed version string proceeds to call a method that may not
+    exist. For an exporter, one missing metric beats a guaranteed-failing round
+    trip and an error log on every single scrape.
+
+- **`vsan.perf` collector** (`-collector.vsan.perf`, **default disabled**) — vSAN
+  performance statistics: IOPS, throughput, latency, congestion, outstanding IO,
+  disk-group capacity and cache-hit rate, per vSAN performance entity.
+
+  **A separate flag from `-collector.vsan`, deliberately.** The health/capacity
+  collector makes three light queries per cluster; this one queries CSV
+  performance data per entity type and parses it — an order of magnitude more
+  work, and far more series. Wanting health and capacity without the performance
+  data is a reasonable position, and two flags are what it takes to express it.
+
+  **Requires the vSAN performance service**, which vSphere leaves off by default.
+  When it is off vCenter answers with *no data rather than an error*, so the
+  symptom is an enabled collector emitting nothing. That case is logged at debug
+  level and is explicitly not treated as a collector failure — it must not
+  inflate `vmware_scrape_errors_total`.
+
+  **Two hardcoded whitelists, because the API's cardinality is a hazard.** The
+  `disk-group` entity type alone exposes 79 metric labels; a ten-host cluster
+  with two disk groups per host is 20 x 79 series from that one type. Shipped
+  are 5 entity types (`cluster-domclient`, `host-domclient`, `disk-group`,
+  `capacity-disk`, `cache-disk`) and 15 metric labels. The label whitelist is
+  passed to vCenter as `VsanPerfQuerySpec.Labels`, so excluded metrics are never
+  transferred — request-side pruning, not fetch-and-discard. Excluded are the 24
+  resync classification counters and the scheduler queue internals.
+
+  Entity types are intersected with `VsanPerfGetSupportedEntityTypes`, so
+  unsupported types are never queried and an empty intersection logs a warning
+  naming the whitelist rather than returning silently. Because that API does not
+  report every queryable entity type (telegraf documents the same gap),
+  `-collector.vsan.perf.skip-verify` exists to bypass negotiation.
+
+  **Every metric is averaged over the query window as an instantaneous reading.**
+  No delta/rate distinction is attempted. vSAN's `VsanPerfMetricId` does carry
+  `statsType` and `rollupType`, but telegraf reads neither — there is no
+  field-tested mapping to copy, and inventing one means guessing per label whether
+  it is cumulative, with silent numeric errors as the failure mode. The 15
+  whitelisted labels are all instantaneous by nature (vSAN's `iops_*` and
+  `throughput_*` are already rates, latency is already an average), so the window
+  mean is the window's average level. **Do not wrap these in `rate()`.**
+
+  Metric names are `vmware_vsan_perf_<label>` with the entity type in the `entity`
+  label rather than the metric name, so `sum by (entity) (...)` works without a
+  join across metric names. `entityid` carries the entity UUID; vSAN provides no
+  friendly name.
+
+  CSV values are parsed with `ParseFloat(v, 64)`, not telegraf's 32-bit parse —
+  32-bit floats carry about 7 significant decimal digits, and throughput in
+  bytes/sec passes that on any sizeable cluster. Sample and value counts are
+  **checked for equality before iterating**: telegraf indexes `timeStamps[i]` by
+  the value index and panics when they disagree, which in an exporter would take
+  down the whole scrape. A single unparsable sample is skipped rather than
+  discarding the window; a series with no parsable sample is omitted rather than
+  exported as `0`.
+
+  New flag `-vmware.vsan.interval` (default 300) sets the query window. It lives
+  under `vmware.*` with the other collection parameters rather than opening a new
+  top-level namespace for one flag. 300 is not conservatism: vSAN statistics land
+  at 5-minute granularity, so a shorter window returns the same single point.
+
   Two managed object references are **hardcoded string literals** because govmomi
   does not provide them: `vsan-cluster-space-report-system` and
   `vsan-cluster-health-system`. They are transcribed from telegraf's

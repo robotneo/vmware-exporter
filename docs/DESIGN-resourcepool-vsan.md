@@ -183,8 +183,12 @@ ready 100ms 意味着这一分钟共 300ms，求平均得到 100ms 是错的。
 难点在于**判断 vSAN 指标是不是 delta**：现有路径靠
 `PerfCounterInfo.UnitInfo` + `perfnames.go` 的映射表得出 `spec.Delta`，
 而 vSAN 的 `VsanPerfMetricId` 有自己的 `StatsType` / `RollupType` 字段
-（语义与 vSphere 的不同，见前提③）。**R3 要建一张 vSAN 侧的等价映射表**，
-这是那一轮实际工作量的主要来源，比 CSV 切分本身难得多。
+（语义与 vSphere 的不同，见前提③）。**R3 实现时已确认 telegraf 完全不读
+`StatsType`/`RollupType`（只用 `Label` 做蛇形字段名），且白名单的 15 个
+label 全部是瞬时量语义（iops/throughput 已是速率、latency 已是平均延迟、
+congestion/oio/capacity 是瞬时读数），因此最终采用**全部按窗口内求平均**
+的聚合策略，不建 delta 映射表。**这是设计稿该处唯一被实证推翻的假设**：从
+"需要建映射表"回退为"全平均，反被 telegraf 证据简化了"。
 
 ---
 
@@ -455,6 +459,27 @@ vsanSystemEx := types.ManagedObjectReference{
 依赖"集群至少有一台可达主机"，三个前提都可能不成立。组 A 应当只保留
 容量与健康这两个真正稳的。这是对我原设计的降级，不是加码。
 
+**R3 落地记录（三处刻意不照抄 telegraf）：**
+
+1. **多主机轮询而不是只试 `hosts[0]`。** telegraf 取集群第一台主机就
+   收工，那台恰好在维护模式时 resync 直接没有数据。我们遍历集群内
+   所有 `poweredOn` 主机，逐台试到某台成功为止——这正是 telegraf 自己
+   在 CMMDS 上用的容错模式，只是它没用在 resync 上。
+
+2. **`host-<num>` 形态校验要求数字段真的是数字。** telegraf 只检查
+   `len(parts) != 2`，所以 `host-abc` 能通过并拼出不存在的
+   `vsanSystemEx-abc`。而且它校验失败时 `return err`，此刻 err 恒为
+   nil（上一次赋值是成功的 `clusterObj.Hosts`）——静默跳过且不记为失败。
+
+3. **版本号无法解析时不做 resync。** telegraf 的 `versionLowerThan` 在
+   主版本解析失败时 `return false`（判定为"不低于"），于是畸形版本号会
+   继续往下调一个可能不存在的方法。对 exporter 来说宁可少一条指标，
+   也不要每轮抓取都产生一次注定失败的往返和一条错误日志。
+
+指标单位：`totalRecoveryETA` 的单位是**秒**，由 vSAN Management API 文档
+明确规定（"The estimated time in seconds to recover all vSAN objects"），
+所以指标名是 `vmware_vsan_resync_recovery_seconds` 而不是照抄 API 的 eta。
+
 #### 该抄的 ③：CMMDS 查询要在多台主机上轮询重试
 
 telegraf `getCmmdsMap`（`vsan.go:169-185`）的注释写得很直白：
@@ -467,6 +492,28 @@ telegraf 是在采集侧容忍主机不可达，我们是在过滤侧误删了�
 
 **若做组 B 的盘级指标就必须抄这个**，因为盘的 hostname/devicename 只能从
 CMMDS 拿到。但这也说明组 B 的复杂度比我初稿估的更高。
+
+**R3 实测后的修正：CMMDS 不做。** R2 落地时发现健康摘要
+（`VsanQueryVcClusterHealthSummary` 的 `physicalDisksHealth`）已经同时给出
+`Hostname`、盘的 `Name` 与 `Uuid`——也就是 CMMDS 那张映射表的全部内容，
+而且是一次调用拿到，不必逐台主机轮询。组 A 的 `vmware_vsan_disk_health`
+正是用它输出的（`vsan.go` 的 `emitDiskHealth`）。
+
+组 B 的 `entityid` label 携带的就是同一个盘 uuid，所以要把性能数据关联到
+盘名与主机名，PromQL 侧一个 join 即可：
+
+```promql
+vmware_vsan_perf_latency_read{entity="capacity-disk"}
+  * on (entityid) group_left(host, device)
+  label_replace(vmware_vsan_disk_health, "entityid", "$1", "uuid", "(.*)")
+```
+
+这比在 exporter 里多打一套 CMMDS 轮询更划算：少一类 SOAP 调用、少一处
+"所有主机都不可达"的失败模式，而代价只是查询侧多写一行 join。
+
+**但 telegraf 的多主机轮询模式本身仍然抄了**，用在 resync 上——见上面
+"该抄的②"，resync 的 `VsanSystemEx` MoRef 同样是从主机 MoRef 拼出来的，
+同样会因单台主机不可达而失败。
 
 #### 该抄的 ④：`GetSupportedEntityTypes` 让实体清单不必硬编码
 
@@ -592,10 +639,12 @@ vmware_vsan_disk_capacity_bytes{cmo, vmwcluster, host, device, vcenter}
 vmware_vsan_disk_capacity_used_bytes{cmo, vmwcluster, host, device, vcenter}
 vmware_vsan_dedup_enabled{cmo, vmwcluster, vcenter}                            0|1
 
-# 以下三条推迟到 R3，理由见 2.1.1 节②（版本门槛 + 拼 MoRef + 依赖主机可达）
+# 以下三条原计划推迟到 R3（理由见 2.1.1 节②：版本门槛 + 拼 MoRef +
+# 依赖主机可达）。R3 已实现，代码在 vsan.go 的 collectResync，
+# 仍归属 vsan collector（组 A 的 flag），不占用 vsan.perf 那个开关。
 vmware_vsan_resync_bytes{cmo, vmwcluster, vcenter}
 vmware_vsan_resync_objects{cmo, vmwcluster, vcenter}
-vmware_vsan_resync_eta{cmo, vmwcluster, vcenter}     # 单位待查证，见下文
+vmware_vsan_resync_recovery_seconds{cmo, vmwcluster, vcenter}   # 单位：秒，API 文档明确
 ```
 
 #### 2.2.1 盘健康不能用 `VsanQueryClusterPhysicalDiskHealthSummary`（R2 实测发现）
@@ -686,17 +735,20 @@ FreeCapacityB  int64 `xml:"freeCapacityB,omitempty"`   // omitempty
 `TotalRecoveryETA`，我原设计漏了第三个。**同一次调用已经返回它，不导出纯属浪费**
 —— 而且 ETA 恰好是运维最关心的那个（"还要多久恢复完"比"还剩多少字节"可读）。
 
-**但 `_seconds` 这个后缀我还不能确定，R3 实现前必须查证。**
+**`_seconds` 这个后缀在 R3 实现时已查证落实。**
 三个字段在 govmomi 里都是 `int64`
 （`vsan/types/types.go:4772-4774`，结构体 `VsanHostVsanObjectSyncQueryResult`），
 **源码里没有任何单位注释**，telegraf 也只是原样导出成 `total_recovery_eta`
 而不做换算 —— 它是 InfluxDB 口径，不像 Prometheus 那样要求单位进指标名。
 
-所以这里有三种可能：秒、毫秒、或"预计完成时刻的时间戳"。
-按 Prometheus 命名规范，猜错单位比不带后缀更糟（`_seconds` 会让用户直接
-拿去做时间运算）。**R3 的第一步是在真实环境或 VMware API 文档里确认单位**，
-确认前先按 `vmware_vsan_resync_eta`（无后缀）实现，确认后再补后缀 ——
-加后缀是兼容的（旧名保留一版），改单位不是。
+写这段时列了三种可能：秒、毫秒、或"预计完成时刻的时间戳"。**R3 实施时在
+Broadcom 官方 vSAN Management API 文档中查到了确定答案**：
+`totalRecoveryETA` 的定义是 "The estimated time **in seconds** to recover
+all vSAN objects of specified types."（`vim.vsan.host.VsanSyncingObjectQueryResult`
+数据对象说明，8.0 与 9.x 两版文档一致）。
+
+所以最终指标名直接定为 `vmware_vsan_resync_recovery_seconds`，
+不需要走"先无后缀、确认后再补"的两步路径。
 
 **这一组的价值最高**：容量满和盘故障是 vSAN 最常见的两类事故，而它们都在
 这一组里。而且这组不涉及 CSV 解析，实现代价明显低于组 B。
