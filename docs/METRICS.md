@@ -1,5 +1,7 @@
 # Metrics reference
 
+[中文文档](./METRICS-zh.md)
+
 Every metric this exporter can emit, with its labels and what it means.
 
 **This file is part of the contract.** Adding, renaming or removing a metric, a
@@ -28,6 +30,7 @@ but missing here (or listed here but absent from the code) fails the check.
   vCenter performance manager, emitted by `host`, `vm` and `datastore`
 - [Deprecated metrics](#deprecated-metrics)
 - [Common labels](#common-labels)
+- [Joining on `_info` metrics](#joining-on-_info-metrics)
 
 ## Self-monitoring
 
@@ -128,7 +131,7 @@ Static inventory metrics from `Summary`:
 | `vmware_datastore_accessible` | `dsmo`, `ds`, `vcenter` | `1` when the datastore is reachable, `0` when it is not. |
 | `vmware_datastore_capacity_bytes` | `dsmo`, `ds`, `vcenter` | Datastore capacity in bytes. |
 | `vmware_datastore_free_bytes` | `dsmo`, `ds`, `vcenter` | Available space in bytes. |
-| `vmware_datastore_info` | `dsmo`, `ds`, `type`, `pfinstance`, `foldermo`, `vcenter` | Datastore metadata: `type` (VMFS, NFS, vSAN, etc.), `pfinstance` is the storage pod or protocol endpoint. |
+| `vmware_datastore_info` | `dsmo`, `ds`, `type`, `pfinstance`, `foldermo`, `vcenter` | Datastore metadata: `type` (VMFS, NFS, vSAN, etc.). `pfinstance` is the datastore URL with the `ds://`, `/vmfs/volumes/` and leading-slash prefixes stripped — this is the form the performance counters use as their instance name, so it is what you join on. |
 
 Performance counters (`disk.provisioned.latest`, `disk.used.latest`):
 
@@ -399,10 +402,55 @@ ID" — the vSphere internal identifier that stays stable across renames.
 | `ds` | Datastore display name. | `datastore_*` |
 | `rpmo` | Resource pool MOID. | `resourcepool_*` |
 | `rp` | Resource pool display name. | `resourcepool_*` |
-| `synthetic` | `"true"` when the object is a vSphere auto-created placeholder (e.g. `ha-datacenter` on ESXi, root resource pool). | `datacenter_info`, `compute_info`, `resourcepool_info` |
+| `synthetic` | `"true"` when the object is a pseudo-object that only exists on standalone ESXi, where the API keeps the vCenter shape by inventing a placeholder: `ha-datacenter`, `ha-compute-res`, `ha-root-pool`. **Not** applied to vCenter's own root resource pool, which is a real object. | `datacenter_info`, `compute_info`, `resourcepool_info` |
 | `mo` | Generic MOID — used in esxcli collectors. | `esxcli_*` |
 | `pfinstance` | Performance counter instance name (e.g. `vmnic0`). | Performance counters (instanced only). |
 
 You can filter out synthetic objects with `{synthetic!="true"}`. These are
 pseudo-objects that vSphere auto-creates and have no real counterpart in the
 inventory.
+
+## Joining on `_info` metrics
+
+Numeric metrics carry MOIDs, not human-readable names or the inventory hierarchy.
+That is what the `_info` metrics (value always `1`) are for: they supply the
+**labels** you join on.
+
+The common case: host memory capacity carries `hostmo` and `host` but nothing
+about the cluster. To aggregate by cluster you pick up `cmo` from
+`vmware_host_info`, then the cluster name from `vmware_cluster_info`:
+
+```promql
+# step one: attach cmo (the cluster MOID) to host memory capacity
+vmware_host_mem_capacity_bytes
+  * on (hostmo) group_left(cmo) vmware_host_info
+```
+
+`group_left(cmo)` means "keep every label on the left, and additionally bring
+`cmo` over from the right". `on (hostmo)` restricts matching to `hostmo` —
+without it Prometheus requires both sides to carry identical label sets, which
+they do not here, and the match fails outright rather than degrading.
+
+The second step swaps in the cluster name. By now the left side carries
+`hostmo` and `host`, which `vmware_cluster_info` does not have, so `on (cmo)`
+remains mandatory:
+
+```promql
+# host memory capacity, aggregated per cluster
+sum by (vmwcluster) (
+  vmware_host_mem_capacity_bytes
+    * on (hostmo) group_left(cmo) vmware_host_info
+    * on (cmo)    group_left(vmwcluster) vmware_cluster_info
+)
+```
+
+Two things worth knowing:
+
+- **The multiplication is only a carrier for the join.** `_info` metrics are
+  always `1`, so multiplying leaves the left-hand value untouched. Use `*` and
+  not `+` — `+` would add 1 and corrupt the value.
+- **Not every relationship needs a join.** Check the label set first:
+  `vmware_vsan_disk_health` already carries `vmwcluster`, so
+  `sum by (vmwcluster) (...)` is enough and an extra join only adds surface for
+  mistakes.
+

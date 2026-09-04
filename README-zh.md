@@ -553,16 +553,17 @@ increase(vmware_scrape_errors_total{collector="login"}[15m]) > 0
 
 ## 完整指标参考
 
-上面那张表只是 exporter 自己的健康信号。**[`docs/METRICS.md`](docs/METRICS.md)
-才是完整的指标参考** —— 这个 exporter 能吐出的每一个指标、它带的确切标签集、
-数值到底代表什么，也包括 vSphere 性能计数器在进入 Prometheus 之前经过的那套
-命名规则（rollup 后缀剥离、语义改写、单位换算、delta 计数器加 `_total`）。
+上面那张表只是 exporter 自己的健康信号。**[`docs/METRICS-zh.md`](docs/METRICS-zh.md)
+才是完整的指标参考**（英文版：[`docs/METRICS.md`](docs/METRICS.md)）—— 这个 exporter
+能吐出的每一个指标、它带的确切标签集、数值到底代表什么，也包括 vSphere 性能计数器
+在进入 Prometheus 之前经过的那套命名规则（rollup 后缀剥离、语义改写、单位换算、
+delta 计数器加 `_total`）。
 
 这份文档属于契约，不是附带说明。**新增、改名、删除任何一个指标或标签，都必须在
-同一次改动里同步更新 `docs/METRICS.md`** —— 而且这件事不靠记性，是被强制的：
-`scripts/check_config.py` 会从 Go 源码里解析出指标声明，与该文档里的表格做
-**双向**比对。代码里声明了但文档里没有 → 检查失败；指标已经改名或删掉、文档里
-的条目还留着 → 同样失败。
+同一次改动里同步更新两个语言版本** —— 而且这件事不靠记性，是被强制的：
+`scripts/check_config.py` 会从 Go 源码里解析出指标声明，与**两份文档**里的表格各做
+一次**双向**比对。代码里声明了但文档里没有 → 检查失败；指标已经改名或删掉、文档里
+的条目还留着 → 同样失败。只校验英文版会让中译版慢慢烂掉，所以两份一起管。
 
 ```bash
 python3 scripts/check_config.py

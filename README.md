@@ -476,17 +476,19 @@ The esxcli collectors are a very specific use case that probably is not going to
 ## The full metric reference
 
 The metrics above are only the exporter's own health signals. **[`docs/METRICS.md`](docs/METRICS.md)
-is the complete reference** — every metric this exporter can emit, the exact
-label set it carries, and what the value actually means, including the naming
-rules the vSphere performance counters go through before they reach Prometheus.
+is the complete reference** ([中文版](docs/METRICS-zh.md)) — every metric this
+exporter can emit, the exact label set it carries, and what the value actually
+means, including the naming rules the vSphere performance counters go through
+before they reach Prometheus.
 
 That document is part of the contract, not commentary. Adding, renaming or
-removing a metric or a label means updating `docs/METRICS.md` **in the same
+removing a metric or a label means updating **both language versions in the same
 change** — and this is enforced rather than remembered: `scripts/check_config.py`
 parses the metric declarations out of the Go sources and compares them against
-the tables in that document, in both directions. A metric declared in the code
-but missing from the document fails the check, and so does an entry left in the
-document after the metric was renamed or dropped.
+the tables in each document, in both directions. A metric declared in the code
+but missing from a document fails the check, and so does an entry left in a
+document after the metric was renamed or dropped. Checking only the English file
+would let the translation rot, so both are held to the same contract.
 
 ```bash
 python3 scripts/check_config.py

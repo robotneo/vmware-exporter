@@ -62,12 +62,17 @@ documentation check:
    unit to match, so removing the handler makes `ExecReload` a failure again
    rather than silently restoring the original footgun.
 
-8. **Metrics missing from docs/METRICS.md, or documented but gone.** Same
+8. **Metrics missing from the metric references, or documented but gone.** Same
    bidirectional argument as the README flag check, and the same failure mode:
    a metric added without a doc entry is undiscoverable, and a doc entry left
    behind after a rename points users at a series that will never appear. Both
    directions are silent in Prometheus -- an absent metric is indistinguishable
    from a target that has not scraped yet.
+
+   Both docs/METRICS.md and its Chinese translation docs/METRICS-zh.md are
+   checked. Holding only the English one to the contract would let a rename be
+   enforced there and skipped in the translation, which is the drift both files
+   promise in their own header to prevent.
 
    The metric list is parsed from the Go sources rather than from a running
    binary, because most metrics only materialise once vCenter has been queried:
@@ -636,24 +641,39 @@ def check_unit(failures: list[str], flags: set[str]) -> None:
 
 
 DOC_REL = os.path.join("docs", "METRICS.md")
+DOC_REL_ZH = os.path.join("docs", "METRICS-zh.md")
 
-# Metrics the parser must not expect to find in METRICS.md by name, with the
+# Every metrics reference that must stay in step with the code. The Chinese
+# translation is checked too, not just the English original: enforcing only one
+# of them would let a rename be caught in METRICS.md and skipped in
+# METRICS-zh.md, leaving a translation that documents series the exporter no
+# longer emits. Both files open by declaring themselves part of the contract, so
+# both have to be held to it.
+DOC_RELS = (DOC_REL, DOC_REL_ZH)
+
+# Metrics the parser must not expect to find in the references by name, with the
 # reason. Everything else is required to match in both directions.
 #
 # Performance counters are the interesting case: their names are computed at
 # scrape time from vCenter's own counter metadata (see perfnames.go), so there
 # is no literal `vmware_host_cpu_usage_hertz` anywhere in the source to compare
-# against. METRICS.md documents them by naming rule instead, and the rule itself
-# is covered by TestPerfCounterNamesAreMapped in the Go tests.
+# against. The references document them by naming rule instead, and the rule
+# itself is covered by TestPerfCounterNamesAreMapped in the Go tests.
 DOC_ONLY_PREFIXES = (
     # Emitted by prometheus/common versioncollector, not by this repository.
     "vmware_exporter_build_info",
 )
 
-# Metric names that appear in the source but are generated per-counter rather
-# than declared. Matching them by name would require reimplementing
-# translatePerfCounter in Python.
-PERF_DOC_SECTION = "## Performance counters"
+# The heading that introduces the illustrative performance-counter rows, per
+# document. Rows under it are worked examples of the naming rule rather than a
+# registry of emitted series, so they are excluded from the comparison. The
+# translated heading differs, hence the per-file mapping -- and a heading that
+# stops matching is reported as a failure rather than silently excluding
+# nothing.
+PERF_DOC_SECTIONS = {
+    DOC_REL: "## Performance counters",
+    DOC_REL_ZH: "## 性能计数器",
+}
 
 
 def go_metric_sources() -> dict[str, str]:
@@ -817,24 +837,24 @@ def metrics_from_source(failures: list[str]) -> set[str]:
             )
 
     return found
-def metrics_from_doc(failures: list[str]) -> set[str]:
-    """Every metric name in a METRICS.md table row.
+def metrics_from_doc(doc_rel: str, failures: list[str]) -> set[str]:
+    """Every metric name in a table row of the given metrics document.
 
     Only table rows are counted. Prose mentions are ignored on purpose: a rename
     updates the table reliably but leaves the surrounding paragraph alone, so
     accepting prose would let a stale name count as documented forever. This is
     the same reasoning as check_readme_flags.
     """
-    path = os.path.join(REPO, DOC_REL)
+    path = os.path.join(REPO, doc_rel)
     if not os.path.exists(path):
-        failures.append(f"{DOC_REL} does not exist, so every metric is undocumented")
+        failures.append(f"{doc_rel} does not exist, so every metric is undocumented")
         return set()
     text = open(path, encoding="utf-8").read()
     return set(re.findall(r"^\|\s*`(vmware_[a-z0-9_]+)`\s*\|", text, re.M))
 
 
 def check_metrics(failures: list[str]) -> None:
-    """Compare the metrics the code declares against docs/METRICS.md, both ways.
+    """Compare the metrics the code declares against every metrics document.
 
     Same shape as check_readme_flags, for the same reason. A metric with no doc
     entry is undiscoverable; a doc entry naming a metric the code no longer
@@ -842,51 +862,87 @@ def check_metrics(failures: list[str]) -> None:
     appear. Neither direction produces an error anywhere else -- in Prometheus a
     metric that does not exist looks exactly like one whose target has not been
     scraped yet.
+
+    Both the English and the Chinese reference are checked. Checking only the
+    English one would leave the translation free to rot: a rename would be
+    enforced in METRICS.md and silently skipped in METRICS-zh.md, which is
+    exactly the drift both documents claim in their own header to prevent.
+    Parsing is language-independent -- metric names and the table pipes are
+    identical in both -- so the same parser serves both files.
     """
     code = metrics_from_source(failures)
-    doc = metrics_from_doc(failures)
+
+    for doc_rel in DOC_RELS:
+        check_one_metrics_doc(doc_rel, code, failures)
+
+
+def check_one_metrics_doc(doc_rel: str, code: set[str], failures: list[str]) -> None:
+    """Compare the code's metric set against one metrics document, both ways."""
+    doc = metrics_from_doc(doc_rel, failures)
 
     # Names that legitimately appear on only one side. Both entries are
     # exhaustive: anything not listed here must match in both directions.
     #
     # Performance counters are computed at scrape time from vCenter's counter
     # metadata (perfnames.go), so no literal name exists in the source to
-    # compare against. METRICS.md documents them by naming rule instead, and
+    # compare against. The documents describe them by naming rule instead, and
     # the rule is covered by the Go tests. Listing the handful that appear as
     # table rows keeps the rest of the check strict.
     doc_only = {
         # Emitted by prometheus/common's versioncollector, not by this repo.
         "vmware_exporter_build_info",
-        # PerfMgr-derived, documented in ## Datastores next to the static ones.
+        # PerfMgr-derived, documented in the datastore section next to the
+        # static ones.
         "vmware_datastore_disk_provisioned_bytes",
         "vmware_datastore_disk_used_bytes",
     }
     doc -= doc_only
 
-    # Everything under ## Performance counters is illustrative -- the rows there
-    # are worked examples of the naming rule, not a registry of emitted series.
+    # Everything under the performance-counter heading is illustrative -- the
+    # rows there are worked examples of the naming rule, not a registry of
+    # emitted series.
     #
     # The slice must stop at the next `## ` heading. Taking everything after the
-    # heading instead swallowed ## Deprecated metrics and ## Common labels, which
-    # do document real metrics -- and because they were then subtracted from the
-    # doc side, 14 correctly documented metrics were reported as missing.
-    text = open(os.path.join(REPO, DOC_REL), encoding="utf-8").read()
-    perf_section = text.split(PERF_DOC_SECTION, 1)
+    # heading instead swallowed the deprecated-metrics and common-labels
+    # sections, which do document real metrics -- and because they were then
+    # subtracted from the doc side, 14 correctly documented metrics were
+    # reported as missing.
+    #
+    # The heading is matched as a whole line. A plain substring split accepts any
+    # heading that merely starts with the expected text, so renaming
+    # `## Performance counters` to `## Performance counters (v2)` would still
+    # match and the mismatch guard below would never fire.
+    text = open(os.path.join(REPO, doc_rel), encoding="utf-8").read()
+    heading = PERF_DOC_SECTIONS[doc_rel]
+    perf_section = re.split(
+        r"^" + re.escape(heading) + r"[ \t]*$", text, maxsplit=1, flags=re.M
+    )
     if len(perf_section) == 2:
         body = re.split(r"^## ", perf_section[1], maxsplit=1, flags=re.M)[0]
         doc -= set(re.findall(r"`(vmware_[a-z0-9_]+)`", body))
+    else:
+        # The heading is how the illustrative rows get excluded. If it stops
+        # matching -- renamed, translated, reformatted -- every worked example
+        # under it turns into a phantom "documented but not declared" entry, and
+        # the natural reaction is to add them to doc_only rather than to notice
+        # the parser broke. Fail loudly instead.
+        failures.append(
+            f"{doc_rel}: heading {heading!r} not found, so the "
+            "performance-counter examples cannot be excluded; update "
+            "PERF_DOC_SECTIONS to match the document"
+        )
 
     missing = sorted(code - doc)
     stale = sorted(doc - code)
 
     if missing:
         failures.append(
-            f"{DOC_REL}: {len(missing)} metric(s) declared in the code but not "
+            f"{doc_rel}: {len(missing)} metric(s) declared in the code but not "
             "documented:\n" + "\n".join(f"    {n}" for n in missing)
         )
     if stale:
         failures.append(
-            f"{DOC_REL}: {len(stale)} metric(s) documented but not declared in "
+            f"{doc_rel}: {len(stale)} metric(s) documented but not declared in "
             "the code:\n" + "\n".join(f"    {n}" for n in stale)
         )
 

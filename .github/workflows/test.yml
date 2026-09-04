@@ -140,9 +140,11 @@ jobs:
       # Fails if a credential reappears in a shipped config file or README, if a
       # password lands on a container command line, if a VMWARE_ variable name
       # maps to no registered flag (envflag ignores those silently), or if the
-      # metrics declared in the Go sources and the tables in docs/METRICS.md
-      # have drifted apart in either direction -- a metric added without a doc
-      # entry, or an entry left behind after a rename.
+      # metrics declared in the Go sources and the tables in docs/METRICS.md or
+      # docs/METRICS-zh.md have drifted apart in either direction -- a metric
+      # added without a doc entry, or an entry left behind after a rename. Both
+      # translations are checked, so a rename cannot be applied to one and
+      # forgotten in the other.
       - name: Check shipped configuration
         run: python scripts/check_config.py
 
