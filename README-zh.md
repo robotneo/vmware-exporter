@@ -7,26 +7,83 @@
 
 ### 二进制运行
 
-下载二进制包，解压包，把二进制文件 vmware-exporter 放入到 `/usr/bin` 目录下，然后新建目录 `/etc/vmware-exporter/`
+从 [Releases](https://github.com/robotneo/vmware-exporter/releases) 下载对应架构的包并解压。包里除二进制外还含 `vmware.conf` 与 `vmware-exporter.service`，直接拿来用即可。
 
 ```bash
-wget https://github.com/robotneo/vmware-exporter/releases/download/v0.1.12/vmware-exporter-v0.1.12-linux-amd64.tar.gz
+VERSION=v0.1.12   # 换成你要装的版本
+wget https://github.com/robotneo/vmware-exporter/releases/download/${VERSION}/vmware-exporter-${VERSION}-linux-amd64.tar.gz
+tar -zxvf vmware-exporter-${VERSION}-linux-amd64.tar.gz
+cd vmware-exporter-${VERSION}-linux-amd64
 
-mkdir -pv /opt/vmware
-mkdir -pv /etc/vmware-exporter/
+# 二进制装到 /usr/bin —— 必须与 unit 里 ExecStart 的路径一致。
+# 装到 /usr/local/bin 而不改 unit，服务会以 status=203/EXEC 起不来。
+sudo install -m 0755 vmware-exporter /usr/bin/vmware-exporter
 
-tar -zxvf vmware-exporter-v0.1.12-linux-amd64.tar.gz -C /opt/vmware
-cd /opt/vmware
-mv vmware-exporter /usr/bin
+# 配置文件：0600 root:root。
+# 尽管服务以非特权的 DynamicUser 身份运行，这个权限依然正确 ——
+# EnvironmentFile 是 systemd 以 root 身份读取后注入子进程环境的，
+# 服务账号本身不需要能打开它。
+sudo install -d -m 0755 /etc/vmware-exporter
+sudo install -m 0600 -o root -g root vmware.conf /etc/vmware-exporter/vmware.conf
 
-# 把 vmware.conf 文件放入 /etc/vmware-exporter/ 目录中，vmware.conf 通过命令行选项加载参数
-ARGS="-vmware.username=administrator@vsphere.local -vmware.password=<VCENTER_PASSWORD> -vmware.vcenter=<VCENTER_HOST>:443 -vmware.insecureTLS"
-# 更多参数 可通过空格进行添加 
+# 填入真实的 vCenter 地址与只读账号
+sudo vi /etc/vmware-exporter/vmware.conf
 
-# 复制项目中 system 目录下的 vmware-exporter.service 文件到 /etc/systemd/system/ 目录中，实现 systemd 管理 vmware-exporter 服务。
+sudo install -m 0644 vmware-exporter.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now vmware-exporter
 ```
 
-system 目录下的 vmware-exporter.service 文件需要放入 `/etc/systemd/system/` 目录中，并可通过 systemctl 命令进行管理。
+`/etc/vmware-exporter/vmware.conf` 采用**每行一个环境变量**的格式，配合 unit 里的
+`-envflag.enable` 生效：
+
+```ini
+VMWARE_vmware_vcenter=vcenter.example.com:443
+VMWARE_vmware_username=readonly@vsphere.local
+VMWARE_vmware_password=<VCENTER_PASSWORD>
+VMWARE_vmware_insecureTLS=true
+```
+
+> **不要写成 `ARGS="-vmware.password=..."`。** 早期版本用的是那种形式，由 unit 展开到
+> `ExecStart` 上 —— 于是密码进了进程 cmdline，主机上任何用户 `ps` 或读
+> `/proc/<pid>/cmdline` 都能看到。现在改用环境变量注入，密码不再出现在那里。
+> `scripts/check_config.py` 会把残留的 `ARGS=` 行判为回归并让 CI 失败。
+>
+> **变量名的大小写**：前缀 + flag 名把 `.` 换 `_`，**flag 名保持原样不转大写**。
+> `VMWARE_VMWARE_PASSWORD` 会被静默忽略，详见[环境变量名的大小写](#环境变量名的大小写容易踩坑)。
+
+改完配置用 **restart**，不要用 reload：
+
+```bash
+sudo systemctl restart vmware-exporter
+sudo systemctl status vmware-exporter
+journalctl -u vmware-exporter -f
+curl -s localhost:9169/metrics | grep '^vmware_up'
+```
+
+> **本 unit 刻意不提供 `ExecReload`。** exporter 没有注册任何信号处理器（源码里
+> 没有 `signal.Notify`），SIGHUP 走 Go 的默认处置 —— **直接终止进程**。实测向运行中的
+> exporter 发 SIGHUP，`/metrics` 从 HTTP 200 变为不可达。此前 unit 里的
+> `ExecReload=/bin/kill -HUP $MAINPID` 因此不是空操作而是陷阱：`systemctl reload`
+> 会一边报成功一边把服务停掉。
+
+<details>
+<summary>systemd 版本低于 232（CentOS 7 等）</summary>
+
+unit 用了 `DynamicUser=yes`，它需要 systemd 232+。旧系统上改用真实账号：
+
+```bash
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin vmware-exporter
+sudo sed -i 's/^DynamicUser=yes/User=vmware-exporter\nGroup=vmware-exporter/' \
+  /etc/systemd/system/vmware-exporter.service
+sudo systemctl daemon-reload && sudo systemctl restart vmware-exporter
+```
+
+同时可能需要删掉旧版 systemd 不认识的加固项（`ProtectKernelLogs`、
+`ProtectClock`、`RestrictSUIDSGID` 等）—— 它们会被记为警告并忽略，不影响启动。
+用 `systemd-analyze verify /etc/systemd/system/vmware-exporter.service` 可以确认。
+
+</details>
 
 ### Docker 运行
 
@@ -517,7 +574,10 @@ docker run -d --name vmware-exporter -p 9169:9169 \
   -envflag.enable -envflag.prefix=VMWARE_ -vmware.insecureTLS
 ```
 
-systemd 部署时，把密码放在 root 所有、权限 `600` 的 `EnvironmentFile` 里，而不是写进 `vmware.conf`。
+systemd 部署时，`/etc/vmware-exporter/vmware.conf` **就是**那个 `EnvironmentFile`：
+它以 root 所有、权限 `600` 存放，由 systemd 在降权前以 root 读取并注入子进程环境，
+unit 上的 `-envflag.enable` 负责把这些变量变成 flag 值。密码因此不进 cmdline。
+详见[二进制运行](#二进制运行)。
 
 用 file_sd 做多凭证（`__meta_password`）时，凭证是明文写在 target 文件里的 —— 那个文件同样要 `chmod 600` 并限制属主。
 

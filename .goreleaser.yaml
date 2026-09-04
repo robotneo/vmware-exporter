@@ -56,6 +56,19 @@ archives:
     files:
       - LICENSE*
       - README*
+      # Ship the deployment files with the binary.
+      #
+      # Both used to live only in the git tree, so the README's "copy
+      # vmware-exporter.service to /etc/systemd/system/" instruction had nothing
+      # to copy from for anybody who installed from a release tarball -- the
+      # documented path required cloning the repository at the right tag.
+      #
+      # src is needed because the unit sits in a subdirectory: the default would
+      # recreate `system/` inside the archive, and the README refers to the file
+      # by name.
+      - vmware.conf
+      - src: system/vmware-exporter.service
+        dst: .
 
 checksum:
   name_template: "{{ .ProjectName }}_checksums.txt"

@@ -15,10 +15,10 @@ documentation check:
    that no new one gets added. Every text file tracked by git is scanned, not a
    curated list of them -- see LEAK_SCAN_EXCEPTIONS for why.
 
-2. **Credentials on the command line.** Anything in a compose `command:` ends
-   up in the container's cmdline, readable via `docker inspect`, via `ps`
-   inside the container, and via /proc. Moving the password to `environment:`
-   plus `-envflag.enable` keeps it out.
+2. **Credentials on the command line.** Anything in a compose `command:`, or on
+   the systemd unit's `ExecStart`, ends up in the process cmdline -- readable via
+   `docker inspect`, via `ps`, and via /proc. Moving the password to
+   `environment:` / `EnvironmentFile` plus `-envflag.enable` keeps it out.
 
 3. **Environment variables that map to no flag.** This is the one worth
    automating. envflag derives the variable name from the flag name -- prefix,
@@ -50,6 +50,13 @@ documentation check:
    silent in Grafana: a stale metric name draws an empty panel, and a leftover
    `* 1024` draws a number that is wrong by three orders of magnitude. The rules
    are reused from scripts/migrate_dashboards.py rather than duplicated.
+
+7. **A systemd unit that kills the service on reload.** The exporter installs no
+   signal handlers, so SIGHUP hits Go's default disposition and terminates the
+   process -- verified by signalling a running exporter, which took /metrics from
+   HTTP 200 to unreachable. The shipped unit therefore must not carry an
+   `ExecReload`: `systemctl reload` would report success while stopping the
+   service. Reading the unit does not reveal that, which is why it is checked.
 
 Exit code is 0 when clean, 1 when any check fails, 2 on a missing dependency.
 """
@@ -397,39 +404,173 @@ def check_compose(failures: list[str], flags: set[str]) -> None:
 
 
 def check_conf(failures: list[str], flags: set[str]) -> None:
-    """vmware.conf holds a single ARGS= line of flags; validate the flag names."""
+    """vmware.conf holds VARIABLE=value lines for the unit's EnvironmentFile.
+
+    It used to hold a single `ARGS="-vmware.password=..."` line that the unit
+    expanded onto ExecStart, which put the password into the process cmdline --
+    readable by any user on the host via /proc/<pid>/cmdline or `ps`. That is the
+    same leak docker-compose.yml was fixed for, so this file now uses the
+    environment instead and the check moved with it.
+
+    An ARGS= line is therefore treated as a regression, not just a stale style:
+    it silently reintroduces the leak, and it does so while looking like a
+    working configuration.
+    """
     path = os.path.join(REPO, "vmware.conf")
     if not os.path.exists(path):
         return
     text = open(path, encoding="utf-8").read()
 
-    args_lines = [
-        ln for ln in text.splitlines()
-        if ln.strip().startswith("ARGS=") and not ln.strip().startswith("#")
+    body = [
+        ln.strip() for ln in text.splitlines()
+        if ln.strip() and not ln.strip().startswith("#")
     ]
-    if not args_lines:
-        failures.append("vmware.conf: no uncommented ARGS= line found")
+
+    for ln in body:
+        if ln.startswith("ARGS="):
+            failures.append(
+                "vmware.conf: ARGS= line found; the unit no longer expands it "
+                "onto ExecStart.\n"
+                "    Flags passed that way land in the process cmdline, where "
+                "any user can read the password out of /proc.\n"
+                "    Use VMWARE_<flag> variables instead -- see the header of "
+                "the file."
+            )
+
+    # The unit is useless without a target, so these three must be present.
+    # Without this, emptying the file would pass every other check here.
+    assignments = {}
+    for ln in body:
+        if ln.startswith("ARGS=") or "=" not in ln:
+            continue
+        name, value = ln.split("=", 1)
+        assignments[name.strip()] = value.strip()
+
+    required = (
+        "VMWARE_vmware_vcenter",
+        "VMWARE_vmware_username",
+        "VMWARE_vmware_password",
+    )
+    for name in required:
+        if name not in assignments:
+            failures.append(
+                f"vmware.conf: {name} is not set; the shipped example must stay "
+                "runnable after filling in the placeholders"
+            )
+
+    # Every variable, including the commented-out optional ones, must derive a
+    # real flag. This is the check that actually earns its keep: envflag keeps
+    # the flag's original case, so VMWARE_VMWARE_PASSWORD is accepted by the
+    # file, ignored by the exporter, and reported by nothing.
+    prefix = "VMWARE_"
+    names = set(assignments)
+    names |= set(re.findall(rf"^#\s*({re.escape(prefix)}\S+?)=", text, re.MULTILINE))
+
+    for name in sorted(names):
+        if not name.startswith(prefix):
+            failures.append(
+                f"vmware.conf: variable {name!r} does not start with {prefix!r}, "
+                "so -envflag.prefix=VMWARE_ would never look at it"
+            )
+            continue
+        derived = name[len(prefix):].replace("_", ".")
+        if derived not in flags:
+            failures.append(
+                f"vmware.conf: variable {name!r} derives flag {derived!r}, which "
+                "no flag registration matches.\n"
+                "    envflag keeps the flag's original case, so it would ignore "
+                "this variable without reporting anything."
+            )
+
+    # A placeholder must stay a placeholder.
+    for name in ("VMWARE_vmware_password", "VMWARE_vmware_username"):
+        value = assignments.get(name)
+        if value is None:
+            continue
+        if not (value.startswith("<") and value.endswith(">")):
+            failures.append(
+                f"vmware.conf: {name} carries a literal value ({value!r}); "
+                "it must stay a <PLACEHOLDER>"
+            )
+
+
+def check_unit(failures: list[str], flags: set[str]) -> None:
+    """Assert the shipped systemd unit cannot kill the service on reload.
+
+    The exporter installs no signal handlers, so SIGHUP hits Go's default
+    disposition and terminates the process. Verified by sending SIGHUP to a
+    running exporter: /metrics went from HTTP 200 to unreachable.
+
+    `ExecReload=/bin/kill -HUP $MAINPID` was therefore not a harmless no-op --
+    `systemctl reload` reported success while stopping the service. Nothing about
+    that is visible by reading the unit, which is exactly why it needs a check.
+    """
+    path = os.path.join(REPO, "system", "vmware-exporter.service")
+    if not os.path.exists(path):
+        return
+    text = open(path, encoding="utf-8").read()
+
+    live = [
+        ln.strip() for ln in text.splitlines()
+        if ln.strip() and not ln.strip().startswith("#")
+    ]
+
+    for ln in live:
+        if ln.startswith("ExecReload="):
+            failures.append(
+                f"system/vmware-exporter.service: {ln!r}\n"
+                "    The exporter has no signal handlers, so SIGHUP terminates "
+                "it (verified). A reload directive here makes `systemctl "
+                "reload` stop the service while reporting success.\n"
+                "    Configuration changes require a restart; there is no "
+                "reload path to expose."
+            )
+
+    exec_start = [ln for ln in live if ln.startswith("ExecStart=")]
+    if not exec_start:
+        failures.append("system/vmware-exporter.service: no ExecStart")
         return
 
-    for ln in args_lines:
-        body = ln.split("=", 1)[1].strip().strip('"')
-        for token in body.split():
+    for ln in exec_start:
+        low = ln.lower()
+        # The credential leak this unit was changed to avoid. `$ARGS` counts:
+        # its expansion is what used to carry the password.
+        if "password" in low or "username" in low or "$args" in low:
+            failures.append(
+                f"system/vmware-exporter.service: credentials reachable from "
+                f"ExecStart: {ln!r}\n"
+                "    Anything here lands in /proc/<pid>/cmdline. Pass "
+                "credentials through EnvironmentFile with -envflag.enable."
+            )
+        if "-envflag.enable" not in ln:
+            failures.append(
+                "system/vmware-exporter.service: ExecStart lacks "
+                "-envflag.enable, so the EnvironmentFile entries would be "
+                "ignored entirely"
+            )
+
+        # The binary path must match what the READMEs tell people to install,
+        # or the service dies with status=203/EXEC and the docs still look right.
+        m = re.match(r"^ExecStart=(\S+)", ln)
+        if m and m.group(1) != "/usr/bin/vmware-exporter":
+            failures.append(
+                f"system/vmware-exporter.service: ExecStart runs {m.group(1)!r}, "
+                "but the READMEs install to /usr/bin/vmware-exporter.\n"
+                "    A mismatch fails at start with status=203/EXEC."
+            )
+
+    # Flags named on ExecStart must exist, same reasoning as everywhere else.
+    for ln in exec_start:
+        for token in ln.split()[1:]:
             if not token.startswith("-"):
                 continue
             name = token.lstrip("-").split("=", 1)[0]
             if name not in flags:
                 failures.append(
-                    f"vmware.conf: flag {name!r} is not registered by the exporter"
+                    f"system/vmware-exporter.service: flag {name!r} is not "
+                    "registered by the exporter"
                 )
-        # A placeholder must stay a placeholder.
-        for token in body.split():
-            if token.startswith("-vmware.password="):
-                value = token.split("=", 1)[1]
-                if not (value.startswith("<") and value.endswith(">")):
-                    failures.append(
-                        f"vmware.conf: -vmware.password carries a literal value "
-                        f"({value!r}); it must stay a <PLACEHOLDER>"
-                    )
+
 
 
 def check_dashboards(failures: list[str]) -> None:
@@ -499,6 +640,7 @@ def main() -> int:
     check_leaks(failures, files)
     check_compose(failures, flags)
     check_conf(failures, flags)
+    check_unit(failures, flags)
     check_readme_flags(failures, flags, source)
     check_dependabot(failures)
     check_dashboards(failures)
