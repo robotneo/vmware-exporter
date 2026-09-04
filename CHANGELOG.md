@@ -7,14 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ✨ Added
+
+- **`systemctl reload` now applies configuration changes without restarting.**
+  The exporter registers a SIGHUP handler that re-reads `-file` and the
+  environment variables and writes the values back into the flags the request
+  path reads. Because every scrape re-reads the collector switches and every
+  login re-reads the `-vmware.*` credentials, the next scrape picks up the new
+  configuration — no restart, no gap in the time series. `-log.level` is
+  reloadable too, which makes temporarily switching to `debug` non-disruptive.
+  `ExecReload=/bin/kill -HUP $MAINPID` is back in the shipped unit.
+  (verified end-to-end: `/metrics` stayed HTTP 200 across SIGHUP and the new
+  `log.level` took effect)
+
+  Reload keeps the previous configuration when it fails, and never applies a
+  partial one — the new values are computed on a shadow flag set first and
+  committed only if all of them are valid. Two new metrics make a failed reload
+  alertable, which matters because `systemctl reload` still exits 0 (the signal
+  *was* delivered): `vmware_exporter_config_last_reload_successful` and
+  `vmware_exporter_config_last_reload_success_timestamp_seconds`.
+
+  `-http.address`, `-web.config.file` and `-log.format` cannot be reloaded (the
+  listener is bound, TLS is loaded, the log handler type is fixed). Changing
+  them is logged as a warning instead of being silently ignored.
+
 ### 🔧 Fixed
 
-- **systemd unit no longer kills the service on reload.** The exporter registers
-  no signal handlers, so SIGHUP hits Go's default disposition and terminates the
-  process. `ExecReload=/bin/kill -HUP $MAINPID` was therefore a footgun:
-  `systemctl reload` reported success while stopping the service. Removed from
-  the shipped unit and rejected by `scripts/check_config.py` going forward.
-  (verified by signalling a running exporter)
+- **systemd unit no longer kills the service on reload.** The exporter used to
+  register no signal handlers, so SIGHUP hit Go's default disposition and
+  terminated the process — `ExecReload=/bin/kill -HUP $MAINPID` was a footgun:
+  `systemctl reload` reported success while stopping the service. Fixed properly
+  by the SIGHUP handler above; the interim fix was to ship the unit without
+  `ExecReload`. `scripts/check_config.py` now validates the unit against the
+  source in *both* directions — it requires `ExecReload` while the handler
+  exists, and rejects it if the handler is ever removed — so the two cannot
+  drift apart again. (verified by signalling a running exporter)
 
 - **vmware.conf no longer puts the password into the process cmdline.** The file
   held a single `ARGS="-vmware.password=..."` line that the unit expanded onto

@@ -55,6 +55,231 @@ func setPrefix(t *testing.T, v string) {
 	t.Cleanup(func() { *prefix = old })
 }
 
+// newReloadFlagSet 构造一个带非字符串 flag 的 FlagSet，用于重载测试。
+//
+// 必须有一个 *int flag：reload 的影子集是纯字符串的，类型校验只发生在提交
+// 阶段。若测试全用 string flag，「坏类型被拒绝」这条分支永远不会被执行。
+func newReloadFlagSet(t *testing.T, args ...string) (*flag.FlagSet, map[string]*string, *int) {
+	t.Helper()
+
+	fs := flag.NewFlagSet("reload-test", flag.ContinueOnError)
+	fs.SetOutput(new(strings.Builder))
+
+	vals := map[string]*string{
+		"vmware.vcenter":  fs.String("vmware.vcenter", "default-vc", "target"),
+		"vmware.username": fs.String("vmware.username", "default-user", "user"),
+		"vmware.password": fs.String("vmware.password", "default-pass", "password"),
+		"log.format":      fs.String("log.format", "logfmt", "format"),
+	}
+
+	interval := fs.Int("vmware.interval", 20, "interval")
+
+	if err := fs.Parse(args); err != nil {
+		t.Fatalf("parsing %v failed: %s", args, err)
+	}
+
+	return fs, vals, interval
+}
+
+// TestReloadPicksUpFileChanges 断言重载能读到配置文件的新内容。
+func TestReloadPicksUpFileChanges(t *testing.T) {
+	path := writeConfig(t, "vmware.vcenter: first\n")
+
+	fs, vals, _ := newReloadFlagSet(t)
+
+	base := snapshot(fs)
+	cli := explicitlySet(fs)
+
+	if err := applyFileAndEnv(fs, path, false); err != nil {
+		t.Fatalf("initial applyFileAndEnv failed: %s", err)
+	}
+
+	if got := *vals["vmware.vcenter"]; got != "first" {
+		t.Fatalf("vmware.vcenter = %q before reload, want %q", got, "first")
+	}
+
+	if err := os.WriteFile(path, []byte("vmware.vcenter: second\n"), 0o600); err != nil {
+		t.Fatalf("rewriting the config file failed: %s", err)
+	}
+
+	if _, err := reload(fs, path, false, base, cli); err != nil {
+		t.Fatalf("reload failed: %s", err)
+	}
+
+	if got := *vals["vmware.vcenter"]; got != "second" {
+		t.Errorf("vmware.vcenter = %q after reload, want %q", got, "second")
+	}
+}
+
+// TestReloadKeepsCommandLinePrecedence 断言重载不会覆盖命令行显式给的参数。
+//
+// 这是「方案 A」的核心保证，也是最容易实现错的一条：重载走的是与启动不同的
+// 代码路径，很容易变成「文件优先」。若这条失效，systemctl reload 会静默改掉
+// ExecStart 上写死的参数 —— 运维改配置文件时完全不会预期这个副作用。
+func TestReloadKeepsCommandLinePrecedence(t *testing.T) {
+	path := writeConfig(t, "vmware.vcenter: from-file\n")
+
+	fs, vals, _ := newReloadFlagSet(t, "-vmware.vcenter=from-cli")
+
+	base := snapshot(fs)
+	cli := explicitlySet(fs)
+
+	if _, err := reload(fs, path, false, base, cli); err != nil {
+		t.Fatalf("reload failed: %s", err)
+	}
+
+	if got := *vals["vmware.vcenter"]; got != "from-cli" {
+		t.Errorf("vmware.vcenter = %q after reload, want the command line value %q", got, "from-cli")
+	}
+}
+
+// TestReloadRevertsRemovedFileEntries 断言从配置文件里删掉一行后，该 flag
+// 回到启动时的基线值，而不是留着上一次重载写进去的值。
+//
+// 没有 baseline 快照的实现会漏掉这条：reload 只是「叠加」新文件的内容，
+// 上一次写进 flag 的值没人清理。表现是删掉配置行、reload、然后发现配置还在
+// 生效 —— 而配置文件里已经找不到它了，排查时无从下手。
+func TestReloadRevertsRemovedFileEntries(t *testing.T) {
+	path := writeConfig(t, "vmware.username: from-file\n")
+
+	fs, vals, _ := newReloadFlagSet(t)
+
+	base := snapshot(fs)
+	cli := explicitlySet(fs)
+
+	if err := applyFileAndEnv(fs, path, false); err != nil {
+		t.Fatalf("initial applyFileAndEnv failed: %s", err)
+	}
+
+	if got := *vals["vmware.username"]; got != "from-file" {
+		t.Fatalf("vmware.username = %q before reload, want %q", got, "from-file")
+	}
+
+	// 配置文件里删掉这一行。
+	if err := os.WriteFile(path, []byte("vmware.vcenter: unrelated\n"), 0o600); err != nil {
+		t.Fatalf("rewriting the config file failed: %s", err)
+	}
+
+	if _, err := reload(fs, path, false, base, cli); err != nil {
+		t.Fatalf("reload failed: %s", err)
+	}
+
+	if got := *vals["vmware.username"]; got != "default-user" {
+		t.Errorf("vmware.username = %q after the entry was removed, want the startup default %q", got, "default-user")
+	}
+}
+
+// TestReloadKeepsOldConfigOnBadYAML 断言坏 YAML 不会改动任何现有配置。
+//
+// 这是「失败时保持旧配置不变」的第一条：一个正在正常抓取的 exporter 不应该
+// 因为运维在配置文件里打错一个字符就降级。旧值全部保留、reload 报错、
+// 下一轮抓取照常用旧配置。
+func TestReloadKeepsOldConfigOnBadYAML(t *testing.T) {
+	path := writeConfig(t, "vmware.vcenter: good\nvmware.username: good-user\n")
+
+	fs, vals, _ := newReloadFlagSet(t)
+
+	base := snapshot(fs)
+	cli := explicitlySet(fs)
+
+	if err := applyFileAndEnv(fs, path, false); err != nil {
+		t.Fatalf("initial applyFileAndEnv failed: %s", err)
+	}
+
+	if err := os.WriteFile(path, []byte("vmware.vcenter: [unclosed\n"), 0o600); err != nil {
+		t.Fatalf("rewriting the config file failed: %s", err)
+	}
+
+	if _, err := reload(fs, path, false, base, cli); err == nil {
+		t.Fatal("reload accepted malformed YAML, want an error")
+	}
+
+	// 两个 flag 都必须保持重载前的值。username 尤其关键：它在坏行之后，
+	// 一个「中途失败」的实现可能已经把 vcenter 改坏了却没碰 username，
+	// 于是配置处于半新半旧的状态。
+	for name, want := range map[string]string{
+		"vmware.vcenter":  "good",
+		"vmware.username": "good-user",
+	} {
+		if got := *vals[name]; got != want {
+			t.Errorf("%s = %q after a failed reload, want the previous value %q", name, got, want)
+		}
+	}
+}
+
+// TestReloadKeepsOldConfigOnBadValue 断言类型不匹配的值同样不改动旧配置。
+//
+// 与坏 YAML 的区别在于失败点：YAML 语法错误在影子集阶段就被 Unmarshal 拒绝，
+// 而 -vmware.interval=abc 语法完全合法，要到提交给真实 *int flag 时才失败。
+// 两条路径都必须保证原子性，所以两条都要测。
+func TestReloadKeepsOldConfigOnBadValue(t *testing.T) {
+	path := writeConfig(t, "vmware.interval: 30\nvmware.vcenter: good\n")
+
+	fs, vals, interval := newReloadFlagSet(t)
+
+	base := snapshot(fs)
+	cli := explicitlySet(fs)
+
+	if err := applyFileAndEnv(fs, path, false); err != nil {
+		t.Fatalf("initial applyFileAndEnv failed: %s", err)
+	}
+
+	if *interval != 30 {
+		t.Fatalf("vmware.interval = %d before reload, want 30", *interval)
+	}
+
+	if err := os.WriteFile(path, []byte("vmware.interval: abc\nvmware.vcenter: changed\n"), 0o600); err != nil {
+		t.Fatalf("rewriting the config file failed: %s", err)
+	}
+
+	if _, err := reload(fs, path, false, base, cli); err == nil {
+		t.Fatal("reload accepted a non-numeric vmware.interval, want an error")
+	}
+
+	if *interval != 30 {
+		t.Errorf("vmware.interval = %d after a failed reload, want the previous value 30", *interval)
+	}
+
+	// vcenter 在同一个文件里且值是合法的。它也必须保持旧值：一次 reload 要么
+	// 整体生效要么整体不生效，不能只应用「碰巧排在坏行之前」的那部分。
+	if got := *vals["vmware.vcenter"]; got != "good" {
+		t.Errorf("vmware.vcenter = %q after a failed reload, want the previous value %q", got, "good")
+	}
+}
+
+// TestReloadReportsSkippedFlags 断言不可热重载的 flag 被报告而非静默忽略。
+//
+// 静默忽略会让运维改完 -http.address、reload、然后以为端口换了。调用方拿到
+// 这份名单后会记进日志，明确告诉运维这几项需要 restart。
+func TestReloadReportsSkippedFlags(t *testing.T) {
+	path := writeConfig(t, "log.format: json\nvmware.vcenter: changed\n")
+
+	fs, vals, _ := newReloadFlagSet(t)
+
+	base := snapshot(fs)
+	cli := explicitlySet(fs)
+
+	skipped, err := reload(fs, path, false, base, cli)
+	if err != nil {
+		t.Fatalf("reload failed: %s", err)
+	}
+
+	if len(skipped) != 1 || skipped[0] != "log.format" {
+		t.Errorf("skipped = %v, want exactly [log.format]", skipped)
+	}
+
+	// 被跳过的 flag 的值必须没变 —— 报告它不生效，就真的不能生效。
+	if got := *vals["log.format"]; got != "logfmt" {
+		t.Errorf("log.format = %q, want it unchanged at %q", got, "logfmt")
+	}
+
+	// 同一次 reload 里可以热改的 flag 仍然要生效：跳过一项不能连带
+	// 让整次重载失效。
+	if got := *vals["vmware.vcenter"]; got != "changed" {
+		t.Errorf("vmware.vcenter = %q, want %q", got, "changed")
+	}
+}
+
 // TestPrecedenceCommandLineBeatsFileAndEnv 锁住三来源的优先级顺序。
 //
 // 这个顺序不是任选的：命令行是运维当场的显式意图，配置文件是这台机器的

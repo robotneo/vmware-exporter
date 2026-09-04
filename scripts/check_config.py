@@ -51,12 +51,16 @@ documentation check:
    `* 1024` draws a number that is wrong by three orders of magnitude. The rules
    are reused from scripts/migrate_dashboards.py rather than duplicated.
 
-7. **A systemd unit that kills the service on reload.** The exporter installs no
-   signal handlers, so SIGHUP hits Go's default disposition and terminates the
-   process -- verified by signalling a running exporter, which took /metrics from
-   HTTP 200 to unreachable. The shipped unit therefore must not carry an
-   `ExecReload`: `systemctl reload` would report success while stopping the
-   service. Reading the unit does not reveal that, which is why it is checked.
+7. **A systemd unit whose reload directive disagrees with the binary.** The rule
+   here is bidirectional, because it has already been wrong in both directions.
+   The exporter originally installed no signal handlers, so SIGHUP terminated the
+   process and an `ExecReload` made `systemctl reload` report success while
+   killing the service. It now installs a SIGHUP handler that re-reads `-file`
+   and the environment, so the unit *should* carry `ExecReload` -- omitting it
+   forces a restart and drops metrics for that window. The check reads
+   vmware-exporter.go for `signal.Notify` + `syscall.SIGHUP` and requires the
+   unit to match, so removing the handler makes `ExecReload` a failure again
+   rather than silently restoring the original footgun.
 
 Exit code is 0 when clean, 1 when any check fails, 2 on a missing dependency.
 """
@@ -495,15 +499,25 @@ def check_conf(failures: list[str], flags: set[str]) -> None:
 
 
 def check_unit(failures: list[str], flags: set[str]) -> None:
-    """Assert the shipped systemd unit cannot kill the service on reload.
+    """Assert the shipped systemd unit exposes reload and never leaks credentials.
 
-    The exporter installs no signal handlers, so SIGHUP hits Go's default
-    disposition and terminates the process. Verified by sending SIGHUP to a
-    running exporter: /metrics went from HTTP 200 to unreachable.
+    The reload rule here is INVERTED relative to an earlier version of this
+    script, and the inversion is the point.
 
-    `ExecReload=/bin/kill -HUP $MAINPID` was therefore not a harmless no-op --
-    `systemctl reload` reported success while stopping the service. Nothing about
-    that is visible by reading the unit, which is exactly why it needs a check.
+    Originally the exporter installed no signal handlers, so SIGHUP hit Go's
+    default disposition and terminated the process -- `ExecReload=/bin/kill -HUP
+    $MAINPID` made `systemctl reload` report success while killing the service.
+    This check therefore rejected any ExecReload line.
+
+    The binary now installs a SIGHUP handler (handleReloadSignals in
+    vmware-exporter.go) that re-reads -file and the environment. So the unit
+    SHOULD carry ExecReload, and the failure mode has flipped: a unit without it
+    forces operators into a restart, which drops metrics for the restart window.
+
+    Both halves are checked against the source, not assumed: if the handler is
+    ever removed, requiring ExecReload would reintroduce the original footgun.
+    That is why the signal.Notify grep below is a hard failure rather than a
+    comment.
     """
     path = os.path.join(REPO, "system", "vmware-exporter.service")
     if not os.path.exists(path):
@@ -515,16 +529,46 @@ def check_unit(failures: list[str], flags: set[str]) -> None:
         if ln.strip() and not ln.strip().startswith("#")
     ]
 
-    for ln in live:
-        if ln.startswith("ExecReload="):
+    # The unit may only advertise reload while the binary can actually handle it.
+    # Checking the source keeps the two from drifting apart in either direction.
+    main_src = os.path.join(REPO, "vmware-exporter.go")
+    handler_present = False
+    if os.path.exists(main_src):
+        src = open(main_src, encoding="utf-8").read()
+        handler_present = "signal.Notify" in src and "syscall.SIGHUP" in src
+
+    reload_lines = [ln for ln in live if ln.startswith("ExecReload=")]
+
+    if not handler_present:
+        # No handler: SIGHUP kills the process. ExecReload must not exist.
+        for ln in reload_lines:
             failures.append(
                 f"system/vmware-exporter.service: {ln!r}\n"
-                "    The exporter has no signal handlers, so SIGHUP terminates "
-                "it (verified). A reload directive here makes `systemctl "
-                "reload` stop the service while reporting success.\n"
-                "    Configuration changes require a restart; there is no "
-                "reload path to expose."
+                "    vmware-exporter.go installs no SIGHUP handler (no "
+                "signal.Notify + syscall.SIGHUP), so SIGHUP terminates the "
+                "process. This directive would make `systemctl reload` stop the "
+                "service while reporting success."
             )
+    elif not reload_lines:
+        failures.append(
+            "system/vmware-exporter.service: no ExecReload\n"
+            "    vmware-exporter.go handles SIGHUP and reloads -file plus the "
+            "environment in place, so reload works. Without this directive "
+            "`systemctl reload` fails and operators must restart, dropping "
+            "metrics for the restart window.\n"
+            "    Expected: ExecReload=/bin/kill -HUP $MAINPID"
+        )
+    else:
+        # The handler only listens for SIGHUP. Any other signal here either does
+        # nothing or kills the service, and the unit gives no hint which.
+        for ln in reload_lines:
+            if "-HUP" not in ln and "SIGHUP" not in ln:
+                failures.append(
+                    f"system/vmware-exporter.service: {ln!r}\n"
+                    "    The exporter only handles SIGHUP. Any other signal is "
+                    "either ignored or fatal.\n"
+                    "    Expected: ExecReload=/bin/kill -HUP $MAINPID"
+                )
 
     exec_start = [ln for ln in live if ln.startswith("ExecStart=")]
     if not exec_start:

@@ -52,20 +52,46 @@ VMWARE_vmware_insecureTLS=true
 > **变量名的大小写**：前缀 + flag 名把 `.` 换 `_`，**flag 名保持原样不转大写**。
 > `VMWARE_VMWARE_PASSWORD` 会被静默忽略，详见[环境变量名的大小写](#环境变量名的大小写容易踩坑)。
 
-改完配置用 **restart**，不要用 reload：
+改完配置用 **reload** 即可，不会中断采集：
 
 ```bash
-sudo systemctl restart vmware-exporter
+sudo systemctl reload vmware-exporter
+```
+
+exporter 收到 SIGHUP 后重新读 `-file` 与环境变量，把值写回请求路径读的那批
+flag。由于每轮抓取都会重新读各 collector 开关、每次登录都会重新读 `-vmware.*`
+凭证，**下一轮抓取自动用上新配置** —— 不重启、时间序列不断点。
+
+重载失败时**保持旧配置不变**，不会让进程带着半套配置继续跑，并通过指标暴露：
+
+```promql
+# 建议对这条配告警：systemctl reload 仍然返回 0（信号确实发出去了），
+# 只有指标和日志能看出失败
+vmware_exporter_config_last_reload_successful == 0
+```
+
+有三个参数无法热重载，改动它们仍需 `restart`。改了会在日志里告警，而不是静默忽略：
+
+| 参数 | 原因 |
+|------|------|
+| `-http.address` | 监听端口已经 bind 了 |
+| `-web.config.file` | TLS 与 basic auth 在监听时装载 |
+| `-log.format` | 日志 handler 的类型在构造时已固定 |
+
+`-log.level` **可以**热重载 —— 这也是 reload 最常见的用途：临时开 `debug`
+排查问题，不用中断采集。
+
+> 早期版本没有注册任何信号处理器，SIGHUP 走 Go 默认处置直接终止进程，
+> `systemctl reload` 会一边报成功一边把服务停掉。如果你跑的是本次改动之前的
+> 二进制，请用 `restart`。现在 `scripts/check_config.py` 会双向校验 unit 与源码
+> 是否一致，两边不会再各自漂移。
+
+```bash
+sudo systemctl restart vmware-exporter   # 仅上面三个参数需要
 sudo systemctl status vmware-exporter
 journalctl -u vmware-exporter -f
 curl -s localhost:9169/metrics | grep '^vmware_up'
 ```
-
-> **本 unit 刻意不提供 `ExecReload`。** exporter 没有注册任何信号处理器（源码里
-> 没有 `signal.Notify`），SIGHUP 走 Go 的默认处置 —— **直接终止进程**。实测向运行中的
-> exporter 发 SIGHUP，`/metrics` 从 HTTP 200 变为不可达。此前 unit 里的
-> `ExecReload=/bin/kill -HUP $MAINPID` 因此不是空操作而是陷阱：`systemctl reload`
-> 会一边报成功一边把服务停掉。
 
 <details>
 <summary>systemd 版本低于 232（CentOS 7 等）</summary>

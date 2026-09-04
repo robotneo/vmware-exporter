@@ -29,19 +29,29 @@ Type=simple
 EnvironmentFile=-/etc/vmware-exporter/vmware.conf
 ExecStart=/usr/bin/vmware-exporter -envflag.enable -envflag.prefix=VMWARE_
 
-# No ExecReload on purpose.
+# SIGHUP reloads the configuration in place.
 #
-# The exporter installs no signal handlers -- there is no signal.Notify anywhere
-# in the tree -- so SIGHUP hits Go's default disposition and TERMINATES the
-# process. Verified: sending SIGHUP to a running exporter took /metrics from
-# HTTP 200 to unreachable.
+# The exporter installs a SIGHUP handler that re-reads -file and the environment
+# variables and writes the values back into the same flags the request path
+# reads. Because every scrape re-reads the collector switches and every login
+# re-reads the vmware.* credentials, the next scrape picks up the new
+# configuration -- no restart, no gap in the metrics.
 #
-# `ExecReload=/bin/kill -HUP $MAINPID` was therefore not a no-op but a footgun:
-# `systemctl reload` reported success while killing the service, and with
-# Restart=on-failure it would not even come back (a signal death is not a
-# failure exit for a Type=simple unit unless declared as one).
+# This was NOT always true. Before the handler existed there was no signal.Notify
+# anywhere in the tree, so SIGHUP hit Go's default disposition and TERMINATED the
+# process: `systemctl reload` reported success while killing the service.
+# If you are packaging an older binary, remove this line.
 #
-# To apply a configuration change: systemctl restart vmware-exporter
+# A failed reload keeps the previous configuration and sets
+# vmware_exporter_config_last_reload_successful to 0 -- alert on that, because
+# `systemctl reload` still exits 0 (the signal was delivered successfully).
+#
+# These three cannot be reloaded and still need a restart:
+#   -http.address      the listener is already bound
+#   -web.config.file   TLS and basic auth are loaded at listen time
+#   -log.format        the log handler type is fixed at construction
+# Changing them is reported in the log as a warning rather than applied silently.
+ExecReload=/bin/kill -HUP $MAINPID
 
 # SIGTERM is Go's default for a clean shutdown and the exporter exits normally on
 # it (verified). No ExecStop is needed -- systemd sends KillSignal to the main

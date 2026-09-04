@@ -338,14 +338,46 @@ with dots replaced by underscores, and the flag name *keeps its original case*.
 `VMWARE_VMWARE_PASSWORD` is silently ignored — see [Environment variables:
 mind the case](#environment-variables-mind-the-case).
 
-**Use `restart`, not `reload`.** The exporter installs no signal handlers
-(no `signal.Notify` anywhere in the tree), so SIGHUP hits Go's default
-disposition and **terminates the process**. Verified: sending SIGHUP to a
-running exporter took `/metrics` from HTTP 200 to unreachable. The unit ships
-without `ExecReload` for this reason.
+**`reload` applies configuration changes without dropping metrics.** The
+exporter handles SIGHUP by re-reading `-file` and the environment variables and
+writing the values back into the flags the request path reads. Every scrape
+re-reads the collector switches and every login re-reads the `-vmware.*`
+credentials, so the next scrape picks up the new configuration — no restart, no
+gap in the time series.
 
 ```bash
-sudo systemctl restart vmware-exporter
+sudo systemctl reload vmware-exporter
+```
+
+A failed reload **keeps the previous configuration** rather than leaving the
+process half-configured, and reports itself through a metric:
+
+```promql
+# alert on this: `systemctl reload` still exits 0, because the signal was
+# delivered successfully — only the metric and the log show the failure
+vmware_exporter_config_last_reload_successful == 0
+```
+
+Three settings cannot be reloaded and still need a `restart`. Changing them is
+reported in the log as a warning rather than applied silently:
+
+| Flag | Why |
+|------|-----|
+| `-http.address` | the listener is already bound |
+| `-web.config.file` | TLS and basic auth are loaded at listen time |
+| `-log.format` | the log handler type is fixed at construction |
+
+`-log.level` **is** reloadable, which is the most common reason to reload:
+temporarily switch to `debug` without interrupting collection.
+
+> Earlier versions installed no signal handler at all, so SIGHUP terminated the
+> process and `systemctl reload` reported success while killing the service. If
+> you are running a binary from before this change, use `restart`.
+> `scripts/check_config.py` now checks the unit against the source in both
+> directions so the two cannot drift apart again.
+
+```bash
+sudo systemctl restart vmware-exporter   # for the three flags above
 sudo systemctl status vmware-exporter
 journalctl -u vmware-exporter -f
 curl -s localhost:9169/metrics | grep '^vmware_up'
