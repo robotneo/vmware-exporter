@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔧 Fixed
+
+- **systemd unit no longer kills the service on reload.** The exporter registers
+  no signal handlers, so SIGHUP hits Go's default disposition and terminates the
+  process. `ExecReload=/bin/kill -HUP $MAINPID` was therefore a footgun:
+  `systemctl reload` reported success while stopping the service. Removed from
+  the shipped unit and rejected by `scripts/check_config.py` going forward.
+  (verified by signalling a running exporter)
+
+- **vmware.conf no longer puts the password into the process cmdline.** The file
+  held a single `ARGS="-vmware.password=..."` line that the unit expanded onto
+  `ExecStart`, making the password readable by any user on the host via
+  `/proc/<pid>/cmdline`. Changed to an `EnvironmentFile` of `VMWARE_<flag>`
+  variables, matching the approach `docker-compose.yml` already used. The old
+  `ARGS=` form is now rejected by `scripts/check_config.py` as a regression.
+  (verified by `ps` inspection + end-to-end run)
+
+- **Deployment files are now included in the release tarball.** The README
+  instruction to copy `vmware-exporter.service` to `/etc/systemd/system/` had
+  nothing to copy from when installing from a release archive. Both
+  `vmware.conf` and `vmware-exporter.service` ship in the archive now.
+
+### 🔐 Security — systemd unit hardened
+
+- `ProtectSystem=full` → `strict`; added `NoNewPrivileges`,
+  `SystemCallFilter=@system-service`, empty `CapabilityBoundingSet`,
+  `RestrictAddressFamilies` limited to `AF_INET AF_INET6 AF_UNIX`,
+  `MemoryDenyWriteExecute`, `LockPersonality`, `ProtectKernel*`,
+  `PrivateDevices`, `ProtectClock`, `ProtectHostname`, `RestrictSUIDSGID`,
+  `RestrictRealtime`, `RestrictNamespaces`. `LimitNOFILE` drops from 1048576 to
+  65536; `LimitCORE=infinity` removed — together they meant a crash could write
+  a multi-gigabyte core dump. `StandardOutput=syslog` → `journal` (deprecated
+  since systemd 246).
+
+### 🧰 Maintenance
+
+- **`scripts/check_config.py` validates the shipped systemd unit and the new
+  vmware.conf format.** Two new functions — `check_unit()` and `check_conf()` —
+  with 6 reverse-verified defect injections (each injected → specific message →
+  restored → clean). `check_conf()` now requires `VMWARE_vmware_vcenter`,
+  `VMWARE_vmware_username` and `VMWARE_vmware_password` to be present, so
+  emptying the file does not bypass the other checks.
+
+- **`README.md` and `README-zh.md` updated.** Both now document the environment-
+  variable-based `vmware.conf`, the `restart`-not-`reload` requirement, and a
+  `DynamicUser` fallback for systemd < 232. The old `ARGS=` form is removed from
+  both.
+
+- **`vmware.conf` is now an EnvironmentFile of `VMWARE_<flag>` variables.**
+  The unit runs with `-envflag.enable -envflag.prefix=VMWARE_`. Place and
+  permissions are documented in the file header, including the reason 0600
+  root:root is correct despite the unprivileged DynamicUser (systemd reads
+  EnvironmentFile as root before dropping privileges).
+
+- **`.goreleaser.yaml` archives now include `vmware.conf` and
+  `system/vmware-exporter.service`.** The unit file uses `src: system/...` +
+  `dst: .` to flatten the directory structure in the archive.
+
 ### 🔐 Security — rotate your vCenter credentials
 
 **This repository shipped working vCenter passwords in plain text. They are in
