@@ -506,7 +506,24 @@ func collectorDocs() []ui.Collector {
 	return docs
 }
 
-// pageData 组装两个页面共用的模板数据。
+// defaultScrapeAddr 把 -http.address 的值变成一个可以放进 Prometheus 配置的
+// 地址。
+//
+// -http.address 的惯例写法是省略主机的 ":9169"，表示监听所有网卡。但
+// relabel_configs 里的 replacement 要的是一个 host:port —— 直接把 ":9169"
+// 写进去，Prometheus 会拿到一个空主机名的 target，抓取全部失败，而配置本身
+// 通过校验，所以症状是「target 全 down」而不是一条错误。这里补上 localhost，
+// 让生成的配置在单机部署下开箱可用；跨机部署的人本来就必须改成真实主机名，
+// 页面上那一栏可编辑。
+func defaultScrapeAddr(listen string) string {
+	if strings.HasPrefix(listen, ":") {
+		return "localhost" + listen
+	}
+
+	return listen
+}
+
+// pageData 组装三个页面共用的模板数据。
 func pageData() ui.Data {
 	// version.Info() 在没有 ldflags 的构建里返回带空字段的字符串，页面上
 	// 显示成一串括号很难看。这种情况直接标 dev —— 本地 go build 出来的
@@ -522,12 +539,13 @@ func pageData() ui.Data {
 		Collectors:            collectorDocs(),
 		DebugConsole:          *debugConsole,
 		MetricsTargetDisabled: *disableExporterTarget,
+		DefaultListenAddr:     defaultScrapeAddr(*listenAddress),
 	}
 }
 
-// registerUI 把落地页、调试页与静态资源注册到 mux 上。
+// registerUI 把落地页、调试页、配置生成页与静态资源注册到 mux 上。
 //
-// 抽成函数而不是留在 main() 里，是为了让这三条路由可测。留在 main() 里时
+// 抽成函数而不是留在 main() 里，是为了让这几条路由可测。留在 main() 里时
 // 它们注册在 http.DefaultServeMux 上，而 DefaultServeMux 是全局单例、
 // 同一路径重复注册会 panic —— 测试无从构造一个干净的 mux 去断言
 // 「-web.debug-console=false 时 /debug 返回 404」这类行为。
@@ -592,16 +610,41 @@ func registerUI(mux *http.ServeMux, logger *slog.Logger, enableDebugConsole bool
 				logger.Error("failed to write debug response", "error", err)
 			}
 		})
+
+		// /config 生成 Prometheus 的 scrape_configs 与 file_sd 目标文件。
+		//
+		// 与 /debug 共用同一个开关，因为两者是同一类东西：面向人的交互页面，
+		// 而不是抓取路径的一部分。把 exporter 收拢成一个纯粹的指标端点时，
+		// 应该一起消失 —— 分成两个 flag 只会让「怎样才算全关」需要查文档。
+		//
+		// 生成完全在浏览器里完成，这个 handler 只发页面：服务端不需要知道
+		// 用户填了哪些 vCenter，凭证也就没有任何理由离开浏览器。
+		mux.HandleFunc("/config", func(w http.ResponseWriter, _ *http.Request) {
+			page, err := ui.RenderConfig(pageData())
+			if err != nil {
+				logger.Error("could not render the config page", "error", err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+
+				return
+			}
+
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+			if _, err := w.Write(page); err != nil {
+				logger.Error("failed to write config response", "error", err)
+			}
+		})
 	}
 
-	// 静态资源。两个页面都引用 app.css；app.js 只有调试页需要，但无条件
-	// 提供 —— 它不含任何配置或凭证，藏起来只会在 -web.debug-console=false
-	// 时留下一个 404 的引用。
+	// 静态资源。三个页面都引用 app.css；app.js 只有调试页需要、config.js
+	// 只有配置页需要，但都无条件提供 —— 它们不含任何配置或凭证，藏起来
+	// 只会在 -web.debug-console=false 时留下一个 404 的引用。
 	for _, asset := range []struct {
 		path, contentType string
 	}{
 		{"app.css", "text/css; charset=utf-8"},
 		{"app.js", "text/javascript; charset=utf-8"},
+		{"config.js", "text/javascript; charset=utf-8"},
 	} {
 		body, err := ui.Asset(asset.path)
 		if err != nil {

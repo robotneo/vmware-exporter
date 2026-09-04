@@ -306,6 +306,45 @@ input::placeholder { color: var(--text-3); }
 
 .metrics-box pre .hl { background: var(--warn-soft); border-radius: 2px; }
 
+/* 配置生成页。
+ *
+ * 目标清单用 textarea 而不是「一行一个输入框加加号按钮」：运维手上的
+ * vCenter 清单通常已经在某个 CSV 或工单里，能整段粘贴远比逐行点按钮快。
+ * 复用上面的输入框视觉，只额外给等宽字体与可拉伸高度。 */
+textarea {
+  width: 100%;
+  padding: 9px 11px;
+  font: 400 12.5px/1.6 var(--mono);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  outline: none;
+  resize: vertical;
+  transition: border-color .12s, box-shadow .12s;
+}
+
+textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* 输出区的按钮行。.actions 是调试页那个「主按钮撑满」的布局，这里要的是
+ * 左对齐的小按钮加右侧路径提示，所以单独一条。 */
+.out-actions { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
+
+.out-path {
+  margin-left: auto; font: 400 11.5px var(--mono); color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 配置页的输出框直接在 card-body 里，外层已经有 16px 内边距。 */
+.card-body .metrics-box { padding: 0; }
+
+/* 输出区的标签栏。与 .coll-toolbar 视觉一致，但单独一个类：那个类下的
+ * 按钮是一次性动作（全选/清空），这里的是互斥选中态。 */
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* 选中的输出标签。.chip 本身没有选中态，采集器工具栏那三个是动作按钮。 */
+.chip.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
 .status-ok { background: var(--ok-soft); }
 .status-err { background: var(--err-soft); }
 .ep-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }

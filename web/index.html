@@ -18,7 +18,8 @@
     <nav class="nav">
       <a href="/" class="on">Overview</a>
       <a href="/metrics">/metrics</a>
-      {{ if .DebugConsole }}<a href="/debug">/debug</a>{{ end }}
+      {{ if .DebugConsole }}<a href="/debug">/debug</a>
+      <a href="/config">/config</a>{{ end }}
     </nav>
   </div>
 </div>
@@ -56,6 +57,15 @@
       </div>
       <h3>Try a scrape from the browser</h3>
       <p>Fill in a target, pick collectors, and read back the metrics a scrape would return. Useful for checking credentials and permissions before wiring up Prometheus.</p>
+    </a>
+
+    <a class="ep" href="/config">
+      <div class="ep-top">
+        <span class="ep-path">/config</span>
+        <span class="ep-kind">generator</span>
+      </div>
+      <h3>Build the Prometheus configuration</h3>
+      <p>Turn a list of vCenters into a <code>scrape_configs</code> job and its file service discovery targets, for either endpoint. Nothing is sent to the exporter: the files are built in the browser.</p>
     </a>
     {{ end }}
   </div>
@@ -133,6 +143,7 @@
     <details class="doc">
       <summary>Prometheus configuration</summary>
       <div class="doc-body">
+        {{ if .DebugConsole }}<p>The <a href="/config">configuration generator</a> builds these files from a list of vCenters, including the target file. The example below is what it produces for two jobs with different collectors.</p>{{ end }}
         <p>Different collectors for different vCenters, with credentials carried in the service discovery file rather than the scrape config:</p>
         <pre><code>scrape_configs:
   # Production vCenter - all collectors

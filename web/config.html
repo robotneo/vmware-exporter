@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Config generator &middot; {{ .ExporterName }}</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <div class="brand-mark"><span></span></div>
+      {{ .ExporterName }}
+    </div>
+    <div class="badge">{{ .Version }}</div>
+    <nav class="nav">
+      <a href="/">Overview</a>
+      <a href="/metrics">/metrics</a>
+      <a href="/debug">/debug</a>
+      <a href="/config" class="on">/config</a>
+    </nav>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="page-head">
+    <h1>Prometheus configuration</h1>
+    <p>Generate a <code>scrape_configs</code> job and its file service discovery targets. Targets live in a separate file that Prometheus re-reads on change, so adding a vCenter never requires a Prometheus reload.</p>
+  </div>
+
+  <div class="grid">
+    <div>
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-head">
+          <h2>Mode</h2>
+          <span class="hint">what the job scrapes</span>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <label class="lbl" for="mode">Endpoint</label>
+            <select id="mode">
+              <option value="probe">/probe &mdash; many vCenters, one exporter</option>
+              <option value="metrics">/metrics &mdash; one target per exporter</option>
+            </select>
+            <div class="help" id="modeHelp"></div>
+          </div>
+
+          <div class="field" id="styleField">
+            <label class="lbl" for="style">Target file style</label>
+            <select id="style">
+              <option value="relabel">Addresses only, mapped by relabel_configs</option>
+              <option value="inline">Parameters inlined as labels</option>
+            </select>
+            <div class="help" id="styleHelp"></div>
+          </div>
+
+          <div class="field">
+            <label class="lbl" for="job">Job name<span class="req">*</span></label>
+            <input type="text" id="job" value="vmware" autocomplete="off" spellcheck="false">
+            <div class="help">Becomes the <code>job</code> label on every series this job produces.</div>
+          </div>
+
+          <div class="row2">
+            <div class="field">
+              <label class="lbl" for="interval">Scrape interval</label>
+              <input type="text" id="interval" value="60s" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="field">
+              <label class="lbl" for="timeout">Scrape timeout</label>
+              <input type="text" id="timeout" value="55s" autocomplete="off" spellcheck="false">
+            </div>
+          </div>
+          <div class="note" id="timeoutWarn" hidden></div>
+
+          <div class="field" id="exporterField">
+            <label class="lbl" for="exporter">Exporter address<span class="req">*</span></label>
+            <input type="text" id="exporter" value="{{ .DefaultListenAddr }}" autocomplete="off" spellcheck="false">
+            <div class="help">Where Prometheus reaches <em>this</em> exporter. Every target is scraped through it.</div>
+          </div>
+
+          <div class="field">
+            <label class="lbl" for="sdPath">Target file path</label>
+            <input type="text" id="sdPath" value="/etc/prometheus/targets/vmware.yml" autocomplete="off" spellcheck="false">
+            <div class="help">Must end in <code>.yml</code>, <code>.yaml</code> or <code>.json</code>, otherwise Prometheus ignores it.</div>
+          </div>
+
+          <div class="row2" id="tlsRow">
+            <div class="field">
+              <label class="lbl" for="schema">vCenter scheme</label>
+              <select id="schema">
+                <option value="https">https</option>
+                <option value="http">http</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="lbl">vCenter TLS</label>
+              <label class="switch">
+                <input type="checkbox" id="insecure" checked>
+                <span class="track"></span>
+                <span class="txt">Skip verify<em>insecure</em></span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Collectors</h2>
+          <span class="hint"><span id="selCount">0</span> of {{ len .Collectors }} selected</span>
+        </div>
+        <div class="card-body">
+          <div class="coll-toolbar">
+            <button type="button" class="chip" data-act="all">Select all</button>
+            <button type="button" class="chip" data-act="default">Defaults</button>
+            <button type="button" class="chip" data-act="none">Clear</button>
+          </div>
+          <div class="coll-list" id="collList">
+            {{ range .Collectors }}
+            <label class="coll">
+              <input type="checkbox" value="{{ .Name }}" data-default="{{ .DefaultEnabled }}"{{ if .DefaultEnabled }} checked{{ end }}>
+              <div style="min-width:0">
+                <div class="coll-name">{{ .Name }}</div>
+                <div class="coll-desc">{{ .Description }}</div>
+              </div>
+              {{ if .Cost }}<span class="tag cost">{{ .Cost }}</span>
+              {{ else if .DefaultEnabled }}<span class="tag on">default on</span>
+              {{ else }}<span class="tag off">default off</span>{{ end }}
+            </label>
+            {{ end }}
+          </div>
+          <div class="help" id="collHelp" style="margin-top:10px"></div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card" style="margin-bottom:20px" id="targetsCard">
+        <div class="card-head">
+          <h2>Targets</h2>
+          <span class="hint"><span id="tCount">0</span> vCenters</span>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <label class="lbl" for="targets">One per line: <code>address</code>, or <code>address,username,password</code></label>
+            <textarea id="targets" rows="7" spellcheck="false" placeholder="vcenter-prod-01.example.com,svc-prom@vsphere.local,secret
+vcenter-prod-02.example.com,svc-prom@vsphere.local,secret
+vcenter-dev.example.com"></textarea>
+            <div class="help">Credentials are optional here. Lines without them fall back to the job-wide username and password below.</div>
+          </div>
+
+          <div class="row2">
+            <div class="field">
+              <label class="lbl" for="username">Job-wide username</label>
+              <input type="text" id="username" placeholder="svc-prometheus@vsphere.local" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="field">
+              <label class="lbl">Credentials in output</label>
+              <label class="switch">
+                <input type="checkbox" id="redact" checked>
+                <span class="track"></span>
+                <span class="txt">Redact<em>write placeholders</em></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="note" id="credNote"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Output</h2>
+          <span class="hint" id="outHint"></span>
+        </div>
+        <div class="card-body">
+          <div class="tabs" id="outTabs">
+            <button type="button" class="chip on" data-tab="sd">Target file</button>
+            <button type="button" class="chip" data-tab="job">prometheus.yml</button>
+            <button type="button" class="chip" data-tab="flags">Exporter flags</button>
+          </div>
+
+          <div class="out-actions">
+            <button type="button" class="btn" id="copyBtn">Copy</button>
+            <button type="button" class="btn" id="dlBtn">Download</button>
+            <span class="out-path" id="outPath"></span>
+          </div>
+
+          <div class="metrics-box"><pre id="out"></pre></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>How this works</h2>
+
+    <details class="doc">
+      <summary>Why file service discovery</summary>
+      <div class="doc-body">
+        <p>A <code>static_configs</code> block lives inside <code>prometheus.yml</code>, so every new vCenter means editing the Prometheus configuration and reloading it. With <code>file_sd_configs</code> the target list is a separate file that Prometheus watches: writing a new entry takes effect on the next scrape, with no reload and no restart.</p>
+        <p>The watch is filesystem based, and <code>refresh_interval</code> (5 minutes by default) is only a fallback for when change notifications are missed. The file must end in <code>.json</code>, <code>.yml</code> or <code>.yaml</code>.</p>
+      </div>
+    </details>
+
+    <details class="doc">
+      <summary>Target file styles</summary>
+      <div class="doc-body">
+        <p><strong>Addresses only.</strong> The file holds nothing but real vCenter addresses; <code>relabel_configs</code> rewrites each one into <code>__param_target</code>, copies it into <code>instance</code>, and then replaces <code>__address__</code> with the exporter. The exporter address appears exactly once, and the file stays readable.</p>
+        <p><strong>Parameters inlined.</strong> Each entry carries its own <code>__param_*</code> labels, so different vCenters can use different schemes, TLS settings or collectors within a single job. The scrape config shrinks to almost nothing, at the cost of repeating the exporter address on every line.</p>
+        <div class="note"><strong><code>instance</code> must be set explicitly in this style.</strong> Prometheus only derives <code>instance</code> from <code>__address__</code>, which here is the exporter — so without it every vCenter reports under the same instance and their series overwrite each other.</div>
+      </div>
+    </details>
+
+    <details class="doc">
+      <summary>Where credentials live</summary>
+      <div class="doc-body">
+        <p>For <code>/probe</code>, credentials travel as request parameters. Keeping them in the target file rather than in <code>prometheus.yml</code> means the file can be permissioned separately (<code>chmod 600</code>, owned by the Prometheus user) and per-vCenter accounts stay possible.</p>
+        <p>For <code>/metrics</code>, credentials are exporter start-up flags and appear in no Prometheus file at all — the trade-off being one exporter process per vCenter.</p>
+        <div class="note"><strong>Redaction is on by default.</strong> Generated output carries placeholders instead of the passwords you typed, so it is safe to paste into a ticket. Turn it off only when writing the real file.</div>
+      </div>
+    </details>
+
+    <details class="doc">
+      <summary>Single target mode: one process, one port, per vCenter</summary>
+      <div class="doc-body">
+        <p>Enter vCenters in both modes — the difference is what comes out. For <code>/metrics</code> each vCenter becomes its own exporter process, so the generated ports count up from the one in the form and the scrape targets are those <em>listen</em> addresses, not the vCenters. Two processes cannot share a port: the second exits with <code>address already in use</code>.</p>
+        <p>Renumber the ports to match whatever your configuration management allocates — just keep the target file and the command lines in step, because nothing downstream will notice if they drift.</p>
+        <div class="note"><strong>The <code>vcenter</code> label is why each entry is its own group.</strong> This exporter emits no <code>vcenter</code> label of its own, so without one added here the only thing distinguishing two vCenters is an <code>instance</code> like <code>localhost:9170</code> — technically unique, unreadable on a dashboard.</div>
+      </div>
+    </details>
+  </div>
+
+  <div class="foot">
+    <span>{{ .Version }}</span>
+    <a href="https://prometheus.io/docs/prometheus/latest/configuration/configuration/#file_sd_config">file_sd_config reference</a>
+    <span>Validate with promtool check config</span>
+  </div>
+</div>
+
+<script src="config.js"></script>
+</body>
+</html>

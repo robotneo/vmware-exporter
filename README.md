@@ -23,6 +23,8 @@ Exporter scrapes the target configured at startup when the `/metrics` path is us
 
 `/debug` is not a scrape mode — it is an interactive page for trying a target out
 before adding it to `prometheus.yml`. See [The debug console](#the-debug-console).
+`/config` generates the `prometheus.yml` job and the file service discovery
+targets for either mode. See [The configuration generator](#the-configuration-generator).
 
 **Target type is detected automatically** by reading `ServiceContent.About.ApiType`
 (`VirtualCenter` / `HostAgent`) right after login. No extra flag, no separate
@@ -108,7 +110,7 @@ The options available are:
 | -log.format | Can be either json or logfmt (default: logfmt) |
 | -log.level | One of debug,info,warn or error (default: debug) - Don't expect much..|
 | -web.config.file | Path to a web configuration file enabling TLS and/or HTTP basic auth on the exporter's own listener - see [Securing the exporter](#securing-the-exporter) |
-| -web.debug-console | Serves the interactive debug console on `/debug` (default: **true**). Pass `=false` to remove the route entirely - see [The debug console](#the-debug-console) |
+| -web.debug-console | Serves the interactive pages on `/debug` and `/config` (default: **true**). Pass `=false` to remove both routes entirely - see [The debug console](#the-debug-console) |
 | -collector.max-concurrency | Maximum number of collectors running in parallel, and the fan-out width used inside the esxcli collectors (default: 8). Use 0 to leave the collector layer unlimited; the per-host fan-out keeps a built-in floor. Replaces `-prom.maxRequests`, which was accepted but never had any effect |
 | -disable.exporter.metrics | Disables the exporter's own `go_*` and `process_*` metrics (default: **true**, so they are absent unless you pass `=false`) |
 | -disable.exporter.target | Disables exporter default target - /metrics will only return exporter data - use /probe. `/metrics` then serves client_golang's default registry, which carries the Go and process collectors regardless of the flag above |
@@ -283,13 +285,66 @@ workstation. The form lets anyone who can load the page make the exporter open a
 connection to an arbitrary address with arbitrary credentials — on an
 unauthenticated port that is a credential probe with someone else's source IP.
 With the flag off the route does not exist at all and returns 404; `/metrics`,
-`/probe` and the landing page are unaffected.
+`/probe` and the landing page are unaffected. The same flag also removes
+`/config`, since both are interactive pages rather than scrape endpoints.
 
 The landing page at `/` lists every registered collector with its default state
 and, where relevant, its cost (`per-host serial` for the esxcli collectors,
 `needs vSAN` / `needs perf service` for the vSAN ones). That list is generated
 from the collector registry, so it cannot drift from what the binary actually
 supports.
+
+## The configuration generator
+
+`/config` turns a list of vCenters into the two files Prometheus needs: a
+`scrape_configs` job and the file service discovery target list it reads. Paste
+the addresses in — one per line, optionally with `address,username,password` —
+pick the collectors, and copy or download the result.
+
+Everything is generated in the browser. The page posts nothing back, so the
+credentials you type never reach the exporter, and nothing is written to disk on
+the server. Passwords are replaced with a `<password>` placeholder by default,
+because the generated text is meant to be pasted into a ticket or a review.
+
+**Why file service discovery** rather than `static_configs`: a static list lives
+inside `prometheus.yml`, so adding a vCenter means editing the Prometheus
+configuration and reloading it. A `file_sd_configs` target file is watched by
+Prometheus and picked up on change — no reload, no restart. The file must end in
+`.json`, `.yml` or `.yaml`, otherwise it is ignored silently.
+
+Two target file styles are offered for the `/probe` mode:
+
+| Style | Target file holds | Scrape config holds | Use when |
+| :--- | :--- | :--- | :--- |
+| **Addresses only** (default) | vCenter addresses and credentials | `relabel_configs` mapping them into request parameters | Normal case. The exporter address appears once, the file stays readable |
+| **Parameters inlined** | Each entry's full `__param_*` set | Almost nothing | vCenters that need different schemes, TLS settings or collectors inside one job |
+
+The inlined style has one trap the generator handles for you: `instance` must be
+set explicitly. Prometheus only derives `instance` from `__address__`, which in
+this mode is the exporter — so without it every vCenter reports under the same
+instance and their series overwrite each other. Nothing errors; the data is just
+wrong. Note also that several collectors cannot be inlined, because a label holds
+a single value while `collect[]` needs to repeat; the generator falls back to a
+job-wide `params` list in that case.
+
+For the single-target `/metrics` mode the generator emits the exporter start-up
+flags instead, with the credentials there rather than in any Prometheus file. The
+input is still a list of vCenters, but each one becomes its own exporter process,
+so the generated ports count up from the one in the form and the scrape targets
+are those listen addresses — not the vCenters. Two processes cannot share a port;
+the second exits with `address already in use`. Renumber the ports to match what
+your configuration management allocates, keeping the target file and the command
+lines in step.
+
+Each target in that mode gets a `vcenter` label, because the exporter emits no
+such label itself: without one the only thing telling two vCenters apart is an
+`instance` like `localhost:9170`.
+
+Validate the result before shipping it:
+
+```bash
+promtool check config prometheus.yml
+```
 
 ## Securing the exporter
 

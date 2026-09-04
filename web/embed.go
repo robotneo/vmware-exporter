@@ -1,4 +1,4 @@
-// Package web 提供 exporter 的 HTTP 界面：概览页与调试页。
+// Package web 提供 exporter 的 HTTP 界面：概览页、调试页与配置生成页。
 //
 // 为什么单独成包而不是继续内嵌在 vmware-exporter.go 里：改动前落地页是一段
 // 拼接在 main() 里的字符串常量，既没有 <!DOCTYPE> 也没有 <html>/<body> 的
@@ -22,7 +22,7 @@ import (
 // 注意 embed 的路径是包目录的相对路径，且不受 .gitignore 影响但受
 // .dockerignore 影响 —— 已确认 .dockerignore 未排除 web/，镜像构建拿得到。
 //
-//go:embed index.html debug.html app.css app.js
+//go:embed index.html debug.html config.html app.css app.js config.js
 var assets embed.FS
 
 // Collector 描述一个采集器在页面上的呈现方式。
@@ -56,9 +56,18 @@ type Data struct {
 	// 这一点，否则「/metrics 里为什么没有 vmware_* 指标」会变成一个
 	// 需要翻源码才能回答的问题。
 	MetricsTargetDisabled bool
+
+	// DefaultListenAddr 是 -http.address 的当前值，用作配置生成页里
+	// 「exporter 地址」一栏的默认值。
+	//
+	// 为什么要从 flag 取而不是在页面里硬写 localhost:9169：生成的
+	// relabel_configs 会把 __address__ 替换成这个地址，写错的话整个 job
+	// 抓不到任何东西，而症状是 target 全部 down、不是配置报错。默认端口
+	// 被改过的部署尤其容易踩到。
+	DefaultListenAddr string
 }
 
-var tmpl = template.Must(template.ParseFS(assets, "index.html", "debug.html"))
+var tmpl = template.Must(template.ParseFS(assets, "index.html", "debug.html", "config.html"))
 
 // Asset 返回一个嵌入的静态文件。
 func Asset(name string) ([]byte, error) {
@@ -73,6 +82,11 @@ func RenderIndex(d Data) ([]byte, error) {
 // RenderDebug 渲染调试页。
 func RenderDebug(d Data) ([]byte, error) {
 	return render("debug.html", d)
+}
+
+// RenderConfig 渲染配置生成页。
+func RenderConfig(d Data) ([]byte, error) {
+	return render("config.html", d)
 }
 
 // render 把模板渲染进内存再整体返回，而不是直接写 http.ResponseWriter。

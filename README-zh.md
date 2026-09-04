@@ -236,7 +236,8 @@ vmware_targets.yml 示例：
 | **单台 ESXi 直连** | 两者皆可 | 同上 | 无 vCenter 的独立主机，或需绕过 vCenter 直采 |
 
 `/debug` 不算采集模式 —— 它是一个交互页面，用于在把目标写进 `prometheus.yml`
-之前先试一下。详见[调试页](#调试页)。
+之前先试一下。详见[调试页](#调试页)。`/config` 则负责生成 `prometheus.yml` 里的
+job 与文件服务发现的目标清单，两种模式都支持。详见[配置生成页](#配置生成页)。
 
 **目标类型自动识别**：登录后读取 `ServiceContent.About.ApiType`
 （`VirtualCenter` / `HostAgent`）判定，无需任何额外配置，也**不需要单独的端点**。
@@ -455,7 +456,7 @@ scrape_configs:
 | `-log.format` | string | 日志格式: `logfmt` 或 `json`。 | `logfmt` |
 | `-file` | string | 指定配置文件的路径。 | - |
 | `-web.config.file` | string | Web 配置文件路径，用于给 exporter 自身的监听端口启用 TLS 与 HTTP Basic Auth。详见[安全加固](#安全加固)。 | - |
-| `-web.debug-console` | bool | 是否在 `/debug` 提供交互式调试页。传 `=false` 会让这条路由彻底不存在（返回 404），而不是渲染一张空页面。详见[调试页](#调试页)。 | `true` |
+| `-web.debug-console` | bool | 是否在 `/debug` 与 `/config` 提供交互式页面。传 `=false` 会让这两条路由彻底不存在（返回 404），而不是渲染一张空页面。详见[调试页](#调试页)与[配置生成页](#配置生成页)。 | `true` |
 | `-disable.exporter.metrics` | bool | 是否**不**在 `/metrics` 中导出 exporter 自身的运行指标（`go_*`、`process_*`）。 | `true` |
 | `-disable.exporter.target` | bool | 是否禁用 `/metrics` 的默认采集目标。开启后 `/metrics` 只返回 exporter 自身指标，vCenter 数据改由 `/probe` 提供。 | `false` |
 | `-metrics.legacy` | bool | 是否在导出规范化指标名的同时，一并导出改名前的旧指标名。如果你自己的 dashboard 或告警规则还在用旧名，可以打开它过渡；详见[指标命名](#指标命名)。仓库自带的 Grafana dashboard 已改用新名，不需要这个开关。 | `false` |
@@ -594,11 +595,61 @@ python3 scripts/check_config.py
 `-web.debug-console=false` 关掉它。** 这个表单意味着：任何能打开该页面的人，都能
 让 exporter 用任意凭证去连任意地址 —— 在一个不做认证的端口上，这等于给了别人一个
 用你的源 IP 发起的凭证探测器。关掉之后这条路由**根本不存在**，返回 404，而不是
-渲染一张空页面；`/metrics`、`/probe` 与落地页都不受影响。
+渲染一张空页面；`/metrics`、`/probe` 与落地页都不受影响。同一个开关也会一并去掉
+`/config` —— 两者都是面向人的交互页面，不是抓取端点。
 
 落地页 `/` 会列出每个已注册的采集器、它的默认开关状态，以及有额外代价时的提示
 （esxcli 两个是 `per-host serial`，vSAN 两个是 `needs vSAN` / `needs perf service`）。
 这份清单由采集器注册表生成，不会与二进制实际支持的内容脱节。
+
+---
+
+## 配置生成页
+
+`/config` 把一份 vCenter 清单变成 Prometheus 需要的两个文件：`scrape_configs` 里的
+job，以及它通过文件服务发现读取的目标清单。清单一行一台，可以只写地址，也可以写成
+`地址,用户名,密码`；勾好采集器之后复制或下载结果即可。
+
+全部生成在浏览器里完成。页面不向后端提交任何东西，所以你填的凭证从未离开浏览器，
+服务端也不会落盘任何文件。密码默认替换成 `<password>` 占位符 —— 这份文本的用途
+就是贴进工单或交给人 review。
+
+**为什么用文件服务发现而不是 `static_configs`**：静态清单写在 `prometheus.yml`
+里面，加一台 vCenter 就要改 Prometheus 配置再 reload 一次。而 `file_sd_configs`
+指向的目标文件是被 Prometheus 监视的，改动会被立即读到 —— 不需要 reload，也不需要
+重启。文件名必须以 `.json`、`.yml` 或 `.yaml` 结尾，否则会被**静默忽略**（不报错，
+只是 target 数量为 0）。
+
+`/probe` 模式下提供两种目标文件风格：
+
+| 风格 | 目标文件里放什么 | scrape config 里放什么 | 适用场景 |
+| :--- | :--- | :--- | :--- |
+| **只放地址**（默认） | vCenter 地址与凭证 | `relabel_configs`，负责把它们映射成请求参数 | 常规情况。exporter 地址只出现一次，文件也更好读 |
+| **参数内联** | 每条记录自带完整的 `__param_*` | 几乎什么都不用写 | 同一个 job 里各台 vCenter 需要不同的协议、TLS 设置或采集器 |
+
+内联风格有一个坑，生成器已经替你处理：**`instance` 必须显式写出来**。Prometheus
+只在 `instance` 缺失时用 `__address__` 兜底，而这个模式下 `__address__` 是 exporter
+自己 —— 不写的话几十台 vCenter 会全部落到同一个 `instance` 上，指标互相覆盖。
+这种情况**不会报任何错**，抓取也照常返回 200，只是数据是错的。另外，多个采集器
+无法内联：一个标签只能有一个值，而 `collect[]` 需要重复出现才能表达多项，所以生成器
+会在多项时退回到 job 级的 `params` 列表。
+
+单目标 `/metrics` 模式下，生成的是 exporter 的启动参数 —— 凭证在那里，不出现在
+任何 Prometheus 配置文件里。这个模式下输入的仍然是 vCenter 清单，但每台 vCenter
+对应一个独立的 exporter 进程：生成的端口从表单里那个开始依次加一，而抓取目标是
+**这些进程的监听地址**，不是 vCenter 的地址。两个进程不能共用一个端口 —— 第二个会
+以 `address already in use` 退出。端口按你的配置管理实际分配情况改掉即可，只要
+目标文件与启动命令保持一致。
+
+该模式下每条 target 都会带上 `vcenter` 标签，因为 exporter 自己的指标里没有这个
+标签：不加的话，区分两台 vCenter 就只剩形如 `localhost:9170` 的 `instance` —— 唯一，
+但看板上没人认得出那是哪台。
+
+上线之前先校验：
+
+```bash
+promtool check config prometheus.yml
+```
 
 ---
 

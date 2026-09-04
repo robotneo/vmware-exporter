@@ -33,6 +33,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the page make the exporter connect to an arbitrary address with arbitrary
   credentials.
 
+- **A configuration generator at `/config`.** Fill in the vCenters you want to
+  scrape and the page emits the three pieces you need: the file service
+  discovery target file, the `scrape_configs` job that reads it, and the
+  exporter flags to start the process with. It exists because writing this by
+  hand is easy to get *plausibly* wrong — the configuration loads, the scrape
+  succeeds, and the data is still incorrect.
+
+  Two shapes are offered for the multi-vCenter `/probe` layout:
+
+  - **`relabel` (default)** — the target file carries `__meta_*` labels and the
+    job maps them to `__param_*` in `relabel_configs`. Credentials live in one
+    file, the mapping in another; adding a vCenter means appending to the
+    target file only.
+  - **`inline`** — the target file carries `__param_*` labels directly, which
+    Prometheus turns into query parameters without any relabel rule. Shorter,
+    but every target must repeat every parameter.
+
+  Both emit `instance` explicitly, which is the part worth knowing about:
+  `instance` only falls back to `__address__`, and under `/probe` the address
+  *is* the exporter, so without an explicit `instance` every vCenter lands on
+  the same series and they overwrite each other. The generated `relabel`
+  ordering is also load-bearing — the rule that rewrites `__address__` to the
+  exporter must come last, or `__param_target` picks up the exporter's own
+  address.
+
+  Selecting more than one collector falls back to a job-level `params` list
+  instead of an inline label, because `collect[]` has to appear repeatedly to
+  carry several values and a YAML mapping cannot repeat a key. Single-vCenter
+  setups can instead generate the `/metrics` form, where the credentials are
+  flags on the exporter and the scrape config holds no secret at all. That mode
+  takes the same vCenter list and turns each entry into its own exporter
+  process: the ports count up from the one in the form, the scrape targets are
+  those listen addresses rather than the vCenters, and each target carries a
+  `vcenter` label — the exporter emits none itself, so otherwise the only thing
+  separating two of them is an `instance` like `localhost:9170`.
+
+  Passwords are replaced with `<password>` in the output by default so a
+  screenshot or a paste is safe; the redaction can be switched off.
+
+  The page shares `-web.debug-console` with `/debug` — one flag removes both,
+  and both then return 404 with no dead links left on the landing page. The
+  output is worth running through `promtool check config` before deploying, as
+  with anything generated.
+
 - **`/probe` now accepts its parameters in a POST form body**, in addition to
   the query string it has always accepted. The debug console uses this so that
   passwords stay out of the browser address bar, out of browser history, and
@@ -115,6 +159,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   since systemd 246).
 
 ### 🧰 Maintenance
+
+- **The generated configuration is parsed in the test suite, not eyeballed.**
+  `scripts/generate_config.js` drives `web/config.js` through a DOM stub so the
+  browser code that produces the YAML can be called from Go tests, and the
+  output is loaded with `yaml.v3` in strict mode — the same parser Prometheus
+  uses, so a duplicate key or an unknown field fails the test rather than the
+  deployment. Eight defects were injected and each one turned the suite red
+  before being restored: a repeated `__param_collect[]` key, a `relabel` rule
+  ordered before the address rewrite, a dropped `instance` label, a redaction
+  switch that leaked, a bare `:9169` used as a relabel replacement (which
+  yields an empty hostname, so the generator prefixes `localhost`), several
+  `/metrics` processes sharing one port, a target file scraping the vCenter
+  instead of the exporter, and a missing `vcenter` label. The collector list
+  the tests feed in comes from the real registry, so it cannot drift from what
+  the binary supports. The tests skip when `node` is absent instead of failing.
 
 - **`scripts/check_config.py` validates the shipped systemd unit and the new
   vmware.conf format.** Two new functions — `check_unit()` and `check_conf()` —
