@@ -62,11 +62,26 @@ documentation check:
    unit to match, so removing the handler makes `ExecReload` a failure again
    rather than silently restoring the original footgun.
 
+8. **Metrics missing from docs/METRICS.md, or documented but gone.** Same
+   bidirectional argument as the README flag check, and the same failure mode:
+   a metric added without a doc entry is undiscoverable, and a doc entry left
+   behind after a rename points users at a series that will never appear. Both
+   directions are silent in Prometheus -- an absent metric is indistinguishable
+   from a target that has not scraped yet.
+
+   The metric list is parsed from the Go sources rather than from a running
+   binary, because most metrics only materialise once vCenter has been queried:
+   `/metrics` on a process that never logged in emits the self-monitoring
+   handful and nothing else. Four declaration shapes are covered, and the
+   parser fails loudly if it can no longer resolve one of them, rather than
+   quietly checking a shrinking subset.
+
 Exit code is 0 when clean, 1 when any check fails, 2 on a missing dependency.
 """
 
 from __future__ import annotations
 
+import glob
 import importlib.util
 import os
 import pathlib
@@ -86,6 +101,9 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 COMPOSE = os.path.join(REPO, "docker-compose.yml")
 SERVICE_NAME = "vmware-exporter"
+
+# The metric prefix, as set in vmware-exporter.go.
+NAMESPACE = "vmware"
 
 # Values that were committed in plain text at some point. They stay in the git
 # history; the point of listing them is to notice if one is reintroduced.
@@ -617,6 +635,262 @@ def check_unit(failures: list[str], flags: set[str]) -> None:
 
 
 
+DOC_REL = os.path.join("docs", "METRICS.md")
+
+# Metrics the parser must not expect to find in METRICS.md by name, with the
+# reason. Everything else is required to match in both directions.
+#
+# Performance counters are the interesting case: their names are computed at
+# scrape time from vCenter's own counter metadata (see perfnames.go), so there
+# is no literal `vmware_host_cpu_usage_hertz` anywhere in the source to compare
+# against. METRICS.md documents them by naming rule instead, and the rule itself
+# is covered by TestPerfCounterNamesAreMapped in the Go tests.
+DOC_ONLY_PREFIXES = (
+    # Emitted by prometheus/common versioncollector, not by this repository.
+    "vmware_exporter_build_info",
+)
+
+# Metric names that appear in the source but are generated per-counter rather
+# than declared. Matching them by name would require reimplementing
+# translatePerfCounter in Python.
+PERF_DOC_SECTION = "## Performance counters"
+
+
+def go_metric_sources() -> dict[str, str]:
+    """Every non-test Go file that can declare a metric name."""
+    out: dict[str, str] = {}
+    pattern = os.path.join(REPO, "vmware", "collectors", "*.go")
+    for path in sorted(glob.glob(pattern)):
+        if path.endswith("_test.go"):
+            continue
+        out[path] = open(path, encoding="utf-8").read()
+    for extra in ("vmware-exporter.go", os.path.join("internal", "collector", "set.go")):
+        path = os.path.join(REPO, extra)
+        if os.path.exists(path):
+            out[path] = open(path, encoding="utf-8").read()
+    return out
+
+
+def balanced_args(text: str, start: int) -> str:
+    """Content of a call whose opening paren ends at `start`.
+
+    A plain regex cannot do this: `d("capacity", "..."+deprecatedFor(ns, sub,
+    "capacity_bytes"), "dsmo", ...)` contains a nested call whose last argument
+    is a metric name, and a non-greedy match to the first `)` truncates the
+    argument list right through it.
+    """
+    depth, instr, esc = 1, False, False
+    i = start
+    while i < len(text) and depth > 0:
+        ch = text[i]
+        if instr:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                instr = False
+        elif ch == '"':
+            instr = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        i += 1
+    return text[start:i - 1]
+
+
+def subsystem_consts(allsrc: str) -> dict[str, str]:
+    """`xxxSubsystem = "yyy"` constants, which live in the collector files."""
+    return dict(re.findall(r'(\w+Subsystem)\s*=\s*"([^"]+)"', allsrc))
+
+
+def pointer_subsystems(src: str) -> str | None:
+    """Resolve `*subsystem` for the esxcli collectors.
+
+    Those two collectors pass `&esxcliXxxSubsystem` down through several helpers
+    and build the name from `*subsystem`, so the constant is not visible at the
+    BuildFQName call site. The call sites are unambiguous -- one constant per
+    file -- so take it from there.
+    """
+    found = set(re.findall(r"&(\w+Subsystem)\b", src))
+    if len(found) == 1:
+        return found.pop()
+    return None
+
+
+def metrics_from_source(failures: list[str]) -> set[str]:
+    """Every metric name declared in the Go sources.
+
+    Parsed rather than probed. A running exporter only exposes what the last
+    scrape produced, and without a reachable vCenter that is the self-monitoring
+    handful -- so `--help`-style introspection, which works for flags, cannot
+    enumerate metrics.
+
+    Four declaration shapes exist, and each is claimed to yield at least one
+    name below. That assertion is the part that matters: if a refactor renames
+    `buildXxxDescs` or stops using `BuildFQName`, the parser would otherwise
+    return a smaller set and the bidirectional check would pass by comparing
+    almost nothing against almost nothing.
+    """
+    srcs = go_metric_sources()
+    allsrc = "".join(srcs.values())
+    consts = subsystem_consts(allsrc)
+
+    found: set[str] = set()
+    counts = {"descs": 0, "inline": 0, "gauge": 0, "vsanperf": 0}
+
+    for path, src in srcs.items():
+        ptr_const = pointer_subsystems(src)
+
+        # Shape 1: the `d("name", help, labels...)` helper inside each
+        # buildXxxDescs, where the subsystem comes from the enclosing
+        # BuildFQName(namespace, xxxSubsystem, name).
+        for chunk in re.split(r"\nfunc (build\w+Descs)\(namespace string\)", src)[2::2]:
+            body = chunk.split("\nfunc ")[0]
+            m = re.search(r"BuildFQName\(namespace,\s*(\w+),", body)
+            if not m:
+                continue
+            subsys = consts.get(m.group(1), m.group(1))
+            for call in re.finditer(r'\bd\(\s*"([^"]+)"', body):
+                found.add(f"{NAMESPACE}_{subsys}_{call.group(1)}")
+                counts["descs"] += 1
+
+        # Shape 2: BuildFQName called directly in a collector body.
+        for m in re.finditer(r"BuildFQName\(", src):
+            args = [a.strip() for a in balanced_args(src, m.end()).split(",")]
+            if len(args) < 3:
+                continue
+            ns, sub, name = args[0], args[1], args[2]
+            if "namespace" not in ns.lower():
+                continue
+
+            def literal(token: str) -> str | None:
+                quoted = re.fullmatch(r'"([^"]*)"', token)
+                if quoted:
+                    return quoted.group(1)
+                if token in consts:
+                    return consts[token]
+                # `*subsystem` in the esxcli helpers -- see pointer_subsystems.
+                if token == "*subsystem" and ptr_const in consts:
+                    return consts[ptr_const]
+                return None
+
+            sub_v, name_v = literal(sub), literal(name)
+            if name_v is None:
+                continue
+            if sub_v is None:
+                failures.append(
+                    f"{os.path.relpath(path, REPO)}: BuildFQName subsystem "
+                    f"{sub!r} could not be resolved to a string, so any metric "
+                    "it declares is invisible to the METRICS.md check.\n"
+                    "    Teach scripts/check_config.py how to resolve it "
+                    "rather than leaving the metric unchecked."
+                )
+                continue
+            parts = [NAMESPACE] + ([sub_v] if sub_v else []) + [name_v]
+            found.add("_".join(parts))
+            counts["inline"] += 1
+
+        # Shape 3: package-level gauges in the root package (the reload metrics).
+        for m in re.finditer(r'GaugeOpts\{[^}]*?Name:\s*"([^"]+)"', src, re.S):
+            found.add(m.group(1))
+            counts["gauge"] += 1
+
+        # Shape 4: the vSAN performance whitelist. One metric per entry; the
+        # entity type is a label value, not part of the name.
+        wl = re.search(r"vsanPerfLabelWhitelist = \[\]string\{(.*?)\n\}", src, re.S)
+        if wl:
+            subsys = consts.get("vsanPerfSubsystem", "vsan_perf")
+            for label in re.findall(r'"([^"]+)"', wl.group(1)):
+                found.add(f"{NAMESPACE}_{subsys}_{label}")
+                counts["vsanperf"] += 1
+
+    for shape, n in sorted(counts.items()):
+        if n == 0:
+            failures.append(
+                f"{DOC_REL} check: the {shape!r} metric declaration shape "
+                "matched nothing.\n"
+                "    Either it was refactored away (update this parser) or the "
+                "parser broke. Silently checking fewer metrics is the one "
+                "outcome this must not have."
+            )
+
+    return found
+def metrics_from_doc(failures: list[str]) -> set[str]:
+    """Every metric name in a METRICS.md table row.
+
+    Only table rows are counted. Prose mentions are ignored on purpose: a rename
+    updates the table reliably but leaves the surrounding paragraph alone, so
+    accepting prose would let a stale name count as documented forever. This is
+    the same reasoning as check_readme_flags.
+    """
+    path = os.path.join(REPO, DOC_REL)
+    if not os.path.exists(path):
+        failures.append(f"{DOC_REL} does not exist, so every metric is undocumented")
+        return set()
+    text = open(path, encoding="utf-8").read()
+    return set(re.findall(r"^\|\s*`(vmware_[a-z0-9_]+)`\s*\|", text, re.M))
+
+
+def check_metrics(failures: list[str]) -> None:
+    """Compare the metrics the code declares against docs/METRICS.md, both ways.
+
+    Same shape as check_readme_flags, for the same reason. A metric with no doc
+    entry is undiscoverable; a doc entry naming a metric the code no longer
+    emits sends people to write queries against a series that will never
+    appear. Neither direction produces an error anywhere else -- in Prometheus a
+    metric that does not exist looks exactly like one whose target has not been
+    scraped yet.
+    """
+    code = metrics_from_source(failures)
+    doc = metrics_from_doc(failures)
+
+    # Names that legitimately appear on only one side. Both entries are
+    # exhaustive: anything not listed here must match in both directions.
+    #
+    # Performance counters are computed at scrape time from vCenter's counter
+    # metadata (perfnames.go), so no literal name exists in the source to
+    # compare against. METRICS.md documents them by naming rule instead, and
+    # the rule is covered by the Go tests. Listing the handful that appear as
+    # table rows keeps the rest of the check strict.
+    doc_only = {
+        # Emitted by prometheus/common's versioncollector, not by this repo.
+        "vmware_exporter_build_info",
+        # PerfMgr-derived, documented in ## Datastores next to the static ones.
+        "vmware_datastore_disk_provisioned_bytes",
+        "vmware_datastore_disk_used_bytes",
+    }
+    doc -= doc_only
+
+    # Everything under ## Performance counters is illustrative -- the rows there
+    # are worked examples of the naming rule, not a registry of emitted series.
+    #
+    # The slice must stop at the next `## ` heading. Taking everything after the
+    # heading instead swallowed ## Deprecated metrics and ## Common labels, which
+    # do document real metrics -- and because they were then subtracted from the
+    # doc side, 14 correctly documented metrics were reported as missing.
+    text = open(os.path.join(REPO, DOC_REL), encoding="utf-8").read()
+    perf_section = text.split(PERF_DOC_SECTION, 1)
+    if len(perf_section) == 2:
+        body = re.split(r"^## ", perf_section[1], maxsplit=1, flags=re.M)[0]
+        doc -= set(re.findall(r"`(vmware_[a-z0-9_]+)`", body))
+
+    missing = sorted(code - doc)
+    stale = sorted(doc - code)
+
+    if missing:
+        failures.append(
+            f"{DOC_REL}: {len(missing)} metric(s) declared in the code but not "
+            "documented:\n" + "\n".join(f"    {n}" for n in missing)
+        )
+    if stale:
+        failures.append(
+            f"{DOC_REL}: {len(stale)} metric(s) documented but not declared in "
+            "the code:\n" + "\n".join(f"    {n}" for n in stale)
+        )
+
+
 def check_dashboards(failures: list[str]) -> None:
     """Assert the bundled dashboards match the metrics the exporter emits.
 
@@ -688,6 +962,7 @@ def main() -> int:
     check_readme_flags(failures, flags, source)
     check_dependabot(failures)
     check_dashboards(failures)
+    check_metrics(failures)
 
     if failures:
         print("config check FAILED:\n")
