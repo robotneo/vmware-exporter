@@ -1,21 +1,107 @@
 [Unit]
-Description=vmware-exporter is a simple prometheus exporter that collects various metrics from a vCenter.
-After=network.target
+Description=vmware-exporter is a simple prometheus exporter that collects various metrics from a vCenter or a standalone ESXi host.
+Documentation=https://github.com/robotneo/vmware-exporter
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
+
+# Credentials come from the environment, not from the command line.
+#
+# Anything on ExecStart lands in the process cmdline, which every user on the
+# host can read via /proc/<pid>/cmdline and `ps`. -envflag.enable makes the
+# exporter read flags from environment variables instead, so the password never
+# gets there. Verified: with the password supplied this way, `ps -o command=`
+# shows no trace of it.
+#
+# Priority is command line > -file > environment, so anything set below on
+# ExecStart still wins over the environment file. See internal/config/config.go.
+#
+# The variable name is the -envflag.prefix value followed by the flag name with
+# dots replaced by underscores, and the flag name KEEPS ITS ORIGINAL CASE:
+# VMWARE_vmware_password, not VMWARE_VMWARE_PASSWORD. The uppercase form is
+# silently ignored -- the exporter falls back to the flag default and just fails
+# to authenticate, with nothing in the logs explaining why.
+#
+# The leading `-` on EnvironmentFile means "start even if the file is absent",
+# which keeps `systemctl start` from failing before the operator has written it.
+EnvironmentFile=-/etc/vmware-exporter/vmware.conf
+ExecStart=/usr/bin/vmware-exporter -envflag.enable -envflag.prefix=VMWARE_
+
+# No ExecReload on purpose.
+#
+# The exporter installs no signal handlers -- there is no signal.Notify anywhere
+# in the tree -- so SIGHUP hits Go's default disposition and TERMINATES the
+# process. Verified: sending SIGHUP to a running exporter took /metrics from
+# HTTP 200 to unreachable.
+#
+# `ExecReload=/bin/kill -HUP $MAINPID` was therefore not a no-op but a footgun:
+# `systemctl reload` reported success while killing the service, and with
+# Restart=on-failure it would not even come back (a signal death is not a
+# failure exit for a Type=simple unit unless declared as one).
+#
+# To apply a configuration change: systemctl restart vmware-exporter
+
+# SIGTERM is Go's default for a clean shutdown and the exporter exits normally on
+# it (verified). No ExecStop is needed -- systemd sends KillSignal to the main
+# process by itself, and a hand-written ExecStop only adds a way to get it wrong.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
 Restart=on-failure
 RestartSec=5
-EnvironmentFile=-/etc/vmware-exporter/vmware.conf
-ExecStart=/usr/bin/vmware-exporter -http.address=:9169 $ARGS
-ExecStop=/bin/kill -s SIGTERM $MAINPID
-ExecReload=/bin/kill -HUP $MAINPID
-ProtectSystem=full
-LimitNOFILE=1048576
-LimitNPROC=1048576
-LimitCORE=infinity
-StandardOutput=syslog
-StandardError=syslog
+
+# Hardening.
+#
+# DynamicUser gives the service a transient, unprivileged uid/gid allocated at
+# start and released at stop, so there is no long-lived account to manage. It
+# requires systemd 232+ (2016). On anything older, delete this line and use a
+# real account instead:
+#
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin vmware-exporter
+#
+# then add `User=vmware-exporter` and `Group=vmware-exporter` here.
+DynamicUser=yes
+
+# The exporter needs nothing but an outbound TCP connection and a listening
+# socket. It never writes to disk, so the whole filesystem can be read-only.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+
+# Read-only because the exporter only ever reads its configuration. Combined
+# with ProtectSystem=strict this makes an accidental write fail loudly instead
+# of leaving state behind.
+ReadOnlyPaths=/etc/vmware-exporter
+
+# 65536 is enough for one listener plus a few hundred concurrent SOAP
+# connections. The previous 1048576 was cargo-culted and, together with
+# LimitCORE=infinity, meant a crash could dump a multi-gigabyte core file.
+LimitNOFILE=65536
+
+# Log to the journal. StandardOutput=syslog has been deprecated since systemd
+# 246 in favour of journal, which is where syslog= already routed anyway.
+StandardOutput=journal
+StandardError=journal
 SyslogIdentifier=vmware-exporter
 
 [Install]

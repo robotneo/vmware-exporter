@@ -300,8 +300,76 @@ docker run -d --name vmware-exporter -p 9169:9169 \
   -envflag.enable -envflag.prefix=VMWARE_ -vmware.insecureTLS
 ```
 
-For the systemd unit, keep the password in an `EnvironmentFile` owned by root
-with mode `600` rather than in `vmware.conf`.
+### systemd deployment
+
+The release tarball includes `vmware.conf` and `vmware-exporter.service` alongside
+the binary. Install them together:
+
+```bash
+sudo install -m 0755 vmware-exporter /usr/bin/vmware-exporter
+sudo install -d -m 0755 /etc/vmware-exporter
+sudo install -m 0600 -o root -g root vmware.conf /etc/vmware-exporter/vmware.conf
+sudo install -m 0644 vmware-exporter.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now vmware-exporter
+```
+
+Then edit `/etc/vmware-exporter/vmware.conf` with your vCenter credentials:
+
+```ini
+VMWARE_vmware_vcenter=vcenter.example.com:443
+VMWARE_vmware_username=readonly@vsphere.local
+VMWARE_vmware_password=<VCENTER_PASSWORD>
+VMWARE_vmware_insecureTLS=true
+```
+
+The unit uses `-envflag.enable -envflag.prefix=VMWARE_` so the password never
+appears in the process cmdline — systemd reads the `EnvironmentFile` as root
+before dropping privileges, and the exporter itself turns the environment
+variables into flag values.
+
+> **Do NOT use the old `ARGS="-vmware.password=..."` format.** That was expanded
+> onto `ExecStart` and put the password into `/proc/<pid>/cmdline`, visible to
+> any user on the host. The shipped `scripts/check_config.py` flags any
+> `ARGS=` line as a regression.
+
+**Mind the case.** The variable name is the prefix followed by the flag name
+with dots replaced by underscores, and the flag name *keeps its original case*.
+`VMWARE_VMWARE_PASSWORD` is silently ignored — see [Environment variables:
+mind the case](#environment-variables-mind-the-case).
+
+**Use `restart`, not `reload`.** The exporter installs no signal handlers
+(no `signal.Notify` anywhere in the tree), so SIGHUP hits Go's default
+disposition and **terminates the process**. Verified: sending SIGHUP to a
+running exporter took `/metrics` from HTTP 200 to unreachable. The unit ships
+without `ExecReload` for this reason.
+
+```bash
+sudo systemctl restart vmware-exporter
+sudo systemctl status vmware-exporter
+journalctl -u vmware-exporter -f
+curl -s localhost:9169/metrics | grep '^vmware_up'
+```
+
+<details>
+<summary>systemd < 232 (CentOS 7, etc.)</summary>
+
+The unit uses `DynamicUser=yes`, which requires systemd 232+. On older systems
+create a real account instead:
+
+```bash
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin vmware-exporter
+sudo sed -i 's/^DynamicUser=yes/User=vmware-exporter\nGroup=vmware-exporter/' \
+  /etc/systemd/system/vmware-exporter.service
+sudo systemctl daemon-reload && sudo systemctl restart vmware-exporter
+```
+
+Some hardening directives (`ProtectKernelLogs`, `ProtectClock`,
+`RestrictSUIDSGID`, etc.) may be unknown to older systemd versions — they
+produce warnings but are safely ignored. Run `systemd-analyze verify` to
+confirm.
+
+</details>
 
 Use a **read-only** vCenter service account. The exporter only reads properties
 and performance counters; it never writes.
