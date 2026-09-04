@@ -235,6 +235,9 @@ vmware_targets.yml 示例：
 | **多 vCenter** | `/probe?target=...` | 请求参数或 Basic Auth（每 target 独立） | 多套 vCenter，凭证各不相同 |
 | **单台 ESXi 直连** | 两者皆可 | 同上 | 无 vCenter 的独立主机，或需绕过 vCenter 直采 |
 
+`/debug` 不算采集模式 —— 它是一个交互页面，用于在把目标写进 `prometheus.yml`
+之前先试一下。详见[调试页](#调试页)。
+
 **目标类型自动识别**：登录后读取 `ServiceContent.About.ApiType`
 （`VirtualCenter` / `HostAgent`）判定，无需任何额外配置，也**不需要单独的端点**。
 Prometheus 侧不必为 ESXi 单写一份 `scrape_config`。
@@ -452,6 +455,7 @@ scrape_configs:
 | `-log.format` | string | 日志格式: `logfmt` 或 `json`。 | `logfmt` |
 | `-file` | string | 指定配置文件的路径。 | - |
 | `-web.config.file` | string | Web 配置文件路径，用于给 exporter 自身的监听端口启用 TLS 与 HTTP Basic Auth。详见[安全加固](#安全加固)。 | - |
+| `-web.debug-console` | bool | 是否在 `/debug` 提供交互式调试页。传 `=false` 会让这条路由彻底不存在（返回 404），而不是渲染一张空页面。详见[调试页](#调试页)。 | `true` |
 | `-disable.exporter.metrics` | bool | 是否**不**在 `/metrics` 中导出 exporter 自身的运行指标（`go_*`、`process_*`）。 | `true` |
 | `-disable.exporter.target` | bool | 是否禁用 `/metrics` 的默认采集目标。开启后 `/metrics` 只返回 exporter 自身指标，vCenter 数据改由 `/probe` 提供。 | `false` |
 | `-metrics.legacy` | bool | 是否在导出规范化指标名的同时，一并导出改名前的旧指标名。如果你自己的 dashboard 或告警规则还在用旧名，可以打开它过渡；详见[指标命名](#指标命名)。仓库自带的 Grafana dashboard 已改用新名，不需要这个开关。 | `false` |
@@ -571,6 +575,33 @@ python3 scripts/check_config.py
 
 ---
 
+## 调试页
+
+`/debug` 提供一个交互页面，用于在把目标接进 Prometheus 之前先验证一遍。填地址
+和凭证、勾上想跑的采集器、点**运行**，页面直接回显原始 exposition 文本，外加本次
+抓取耗时和每个采集器的成败。要回答「凭证对不对、这个账号有没有 vSAN 采集器需要
+的权限」，这比改 `prometheus.yml` 再等一个抓取周期快得多。
+
+页面用 **POST** 提交到 `/probe`，参数放在请求体里而不是查询串上。这是刻意的：
+密码出现在查询串里就会进浏览器地址栏、进浏览器历史，并且会被任何记录查询串的
+反向代理写进 access log；放在请求体里则不会。
+
+**复制 /probe URL** 会生成等价的 GET 形式 URL 供你贴进 `prometheus.yml`，其中
+密码被替换成 `<password>` 占位符 —— 这个 URL 的用途就是贴到配置文件或工单里，
+所以不能带真实密码。
+
+**调试页默认开启。凡是监听端口能被工位以外访问到的部署，都建议用
+`-web.debug-console=false` 关掉它。** 这个表单意味着：任何能打开该页面的人，都能
+让 exporter 用任意凭证去连任意地址 —— 在一个不做认证的端口上，这等于给了别人一个
+用你的源 IP 发起的凭证探测器。关掉之后这条路由**根本不存在**，返回 404，而不是
+渲染一张空页面；`/metrics`、`/probe` 与落地页都不受影响。
+
+落地页 `/` 会列出每个已注册的采集器、它的默认开关状态，以及有额外代价时的提示
+（esxcli 两个是 `per-host serial`，vSAN 两个是 `needs vSAN` / `needs perf service`）。
+这份清单由采集器注册表生成，不会与二进制实际支持的内容脱节。
+
+---
+
 ## 安全加固
 
 有两件需要分开看的事，很容易混淆：
@@ -578,7 +609,13 @@ python3 scripts/check_config.py
 1. **exporter 到 vCenter/ESXi 的连接** —— 由 `-vmware.schema` 与 `-vmware.insecureTLS` 控制，默认走 HTTPS。
 2. **exporter 自身的监听端口**（Prometheus 抓取的那个）—— 由 `-web.config.file` 控制，**默认完全没有保护**。
 
-第二项的风险比看上去大：`/probe` 接受以 URL 查询参数或 HTTP Basic Auth 形式传入的 vCenter 凭证。明文 HTTP 下这些凭证在网络上是裸奔的；而查询参数的形式还会被写进中间反向代理的 access log 以及 Prometheus 自己的日志里。**优先用 Basic Auth 而不是 `?password=`，并启用 TLS。**
+第二项的风险比看上去大：`/probe` 接受以 URL 查询参数、POST 表单体或 HTTP Basic Auth 形式传入的 vCenter 凭证。明文 HTTP 下这些凭证在网络上是裸奔的；而查询参数的形式还会被写进中间反向代理的 access log 以及 Prometheus 自己的日志里。**优先用 Basic Auth 或 POST 表单体而不是 `?password=`，并启用 TLS。**
+
+> **`basic_auth_users` 与 `/probe` 的 Basic Auth 不能同时用。** exporter 自身的
+> Basic Auth 读的是同一个 `Authorization` 头，而且校验通过后**不会**把这个头剥掉
+> —— 谁先被检查谁生效，vCenter 凭证根本传不进来。如果要用 `basic_auth_users`
+> 保护监听端口，vCenter 凭证就改用参数形式传（Prometheus 侧走查询串、调试页走
+> POST 表单体），靠 TLS 保证机密性。
 
 `-web.config.file` 指向一个 [exporter-toolkit 格式](https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md)的文件：
 

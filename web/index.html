@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ .ExporterName }}</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <div class="brand-mark"><span></span></div>
+      {{ .ExporterName }}
+    </div>
+    <div class="badge">{{ .Version }}</div>
+    <nav class="nav">
+      <a href="/" class="on">Overview</a>
+      <a href="/metrics">/metrics</a>
+      {{ if .DebugConsole }}<a href="/debug">/debug</a>{{ end }}
+    </nav>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="page-head">
+    <h1>Endpoints</h1>
+    <p>This exporter collects metrics from VMware vCenter Server and from standalone ESXi hosts. The target type is detected at login, so the same endpoint serves both.</p>
+  </div>
+
+  <div class="ep-grid">
+    <a class="ep" href="/metrics">
+      <div class="ep-top">
+        <span class="ep-path">/metrics</span>
+        <span class="ep-kind">single target</span>
+      </div>
+      <h3>One vCenter, or one ESXi host</h3>
+      <p>{{ if .MetricsTargetDisabled }}Currently serving only the exporter's own metrics: <code>-disable.exporter.target</code> is set, so no vCenter is contacted.{{ else }}Credentials come from the global <code>-vmware.*</code> flags. Point Prometheus straight at it.{{ end }}</p>
+    </a>
+
+    <a class="ep" href="/probe?target=vcenter.example.com">
+      <div class="ep-top">
+        <span class="ep-path">/probe</span>
+        <span class="ep-kind">many targets</span>
+      </div>
+      <h3>Many vCenters, one exporter</h3>
+      <p>Target and credentials are supplied per request, so a single exporter can serve an estate of vCenters with different collectors enabled for each.</p>
+    </a>
+
+    {{ if .DebugConsole }}
+    <a class="ep" href="/debug">
+      <div class="ep-top">
+        <span class="ep-path">/debug</span>
+        <span class="ep-kind">interactive</span>
+      </div>
+      <h3>Try a scrape from the browser</h3>
+      <p>Fill in a target, pick collectors, and read back the metrics a scrape would return. Useful for checking credentials and permissions before wiring up Prometheus.</p>
+    </a>
+    {{ end }}
+  </div>
+
+  <div class="section">
+    <h2>Collectors</h2>
+    <div class="card">
+      <div class="coll-list">
+        {{ range .Collectors }}
+        <div class="coll">
+          <div style="min-width:0">
+            <div class="coll-name">{{ .Name }}</div>
+            <div class="coll-desc">{{ .Description }}</div>
+          </div>
+          {{ if .Cost }}<span class="tag cost">{{ .Cost }}</span>
+          {{ else if .DefaultEnabled }}<span class="tag on">default on</span>
+          {{ else }}<span class="tag off">default off</span>{{ end }}
+        </div>
+        {{ end }}
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Reference</h2>
+
+    <details class="doc">
+      <summary>Single target mode</summary>
+      <div class="doc-body">
+        <p>Start the exporter with the target and its credentials, then let Prometheus scrape <code>/metrics</code>:</p>
+        <pre><code>./vmware-exporter \
+  -vmware.vcenter=vcenter.example.com \
+  -vmware.username=admin@vsphere.local \
+  -vmware.password=secret \
+  -vmware.insecureTLS=true</code></pre>
+        <p>The same flags work against a standalone ESXi host. There is no separate mode to select: the exporter reads <code>ServiceContent.About.ApiType</code> at login and adapts, because a lone host has no real datacenter or cluster objects to walk.</p>
+        <div class="note"><strong>Passwords on the command line are visible</strong> to anyone who can run <code>ps</code> or read <code>/proc</code>. Prefer <code>-envflag.enable</code> with an environment file.</div>
+      </div>
+    </details>
+
+    <details class="doc">
+      <summary>Timing flags</summary>
+      <div class="doc-body">
+        <table>
+          <tr><th>Flag</th><th>Default</th><th>Effect</th></tr>
+          <tr><td><code>-vmware.timeout</code></td><td>60</td><td>Overall budget in seconds for one scrape, covering login, property retrieval and performance sampling. Raise it for large inventories.</td></tr>
+          <tr><td><code>-vmware.interval</code></td><td>20</td><td>PerfManager sampling window in seconds. Independent of the scrape timeout.</td></tr>
+          <tr><td><code>-vmware.granularity</code></td><td>20</td><td>Sampling frequency in seconds. Must be greater than 0 and no larger than the interval.</td></tr>
+        </table>
+      </div>
+    </details>
+
+    <details class="doc">
+      <summary>Multi target mode</summary>
+      <div class="doc-body">
+        <p>Required parameters: <code>target</code>, <code>username</code>, <code>password</code>. Optional: <code>schema</code> (defaults to https), <code>insecure=true</code> to skip TLS verification.</p>
+        <p>Credentials may also arrive as HTTP Basic Auth instead of URL parameters.</p>
+        <div class="note"><strong>Basic Auth collides with <code>-web.config.file</code>.</strong> When the exporter's own listener has <code>basic_auth_users</code> configured, it consumes the <code>Authorization</code> header itself, so vCenter credentials cannot travel that way. Use URL parameters, or the debug console, which posts them as a form body.</div>
+        <p>Collectors are selected with repeatable <code>collect[]</code> and <code>nocollect[]</code> parameters:</p>
+        <pre><code># default collectors only
+/probe?target=vcenter.example.com&username=admin&password=secret&insecure=true
+
+# only VM and host metrics
+/probe?target=...&collect[]=vm&collect[]=host
+
+# everything
+/probe?target=...&collect[]=all
+
+# everything except the esxcli collectors
+/probe?target=...&collect[]=all&nocollect[]=esxcli.host.nic&nocollect[]=esxcli.storage</code></pre>
+        <p>A misspelled collector name is rejected with HTTP 400 and the list of valid names, rather than silently producing an empty metric set.</p>
+      </div>
+    </details>
+
+    <details class="doc">
+      <summary>Prometheus configuration</summary>
+      <div class="doc-body">
+        <p>Different collectors for different vCenters, with credentials carried in the service discovery file rather than the scrape config:</p>
+        <pre><code>scrape_configs:
+  # Production vCenter - all collectors
+  - job_name: 'vmware-prod'
+    scrape_interval: 60s
+    metrics_path: /probe
+    file_sd_configs:
+      - files: ['/etc/prometheus/targets/vmware_prod.yml']
+    params:
+      schema: ['https']
+      insecure: ['true']
+      collect[]: ['all']
+    relabel_configs:
+      - source_labels: [__meta_username]
+        target_label: __param_username
+      - source_labels: [__meta_password]
+        target_label: __param_password
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: localhost:9169
+
+  # Dev vCenter - basic collectors only, scraped less often
+  - job_name: 'vmware-dev'
+    scrape_interval: 120s
+    metrics_path: /probe
+    file_sd_configs:
+      - files: ['/etc/prometheus/targets/vmware_dev.yml']
+    params:
+      schema: ['https']
+      insecure: ['true']
+      collect[]: ['datacenter', 'host', 'vm']
+    relabel_configs:
+      - source_labels: [__meta_username]
+        target_label: __param_username
+      - source_labels: [__meta_password]
+        target_label: __param_password
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: localhost:9169</code></pre>
+      </div>
+    </details>
+  </div>
+
+  <div class="foot">
+    <span>{{ .Version }}</span>
+    <a href="https://github.com/prezhdarov/vmware-exporter">Source</a>
+    <span>Metric reference ships in docs/METRICS.md</span>
+  </div>
+</div>
+
+</body>
+</html>

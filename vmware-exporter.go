@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"html"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,12 +15,16 @@ import (
 	"github.com/prezhdarov/vmware-exporter/internal/config"
 	vmware "github.com/prezhdarov/vmware-exporter/vmware/api"
 	vmwareCollectors "github.com/prezhdarov/vmware-exporter/vmware/collectors"
+	// 本项目的 web 包与 exporter-toolkit 的 web 包同名，两者都要用，
+	// 因此给自己的这个起别名。
+	ui "github.com/prezhdarov/vmware-exporter/web"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	versioncollector "github.com/prometheus/client_golang/prometheus/collectors/version"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/promslog"
+	"github.com/prometheus/common/version"
 	"github.com/prometheus/exporter-toolkit/web"
 )
 
@@ -68,6 +71,18 @@ var (
 	webConfigFile = flag.String("web.config.file", "",
 		"Path to a web configuration file enabling TLS and/or HTTP basic auth. See "+
 			"https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md")
+
+	// debugConsole 控制 /debug 是否提供。
+	//
+	// 默认启用，因为「先在浏览器里试一次再去写 Prometheus 配置」是这个
+	// exporter 最常见的第一步：凭证是否够权限、哪些 collector 在这套环境里
+	// 真的有数据，都要试过才知道。让它默认关闭等于把这一步藏起来。
+	//
+	// 保留关掉的开关是因为调试页会在一个没有认证的页面上摆出凭证输入框。
+	// 这不会新增攻击面 —— /probe 本身就不带认证，凭证由请求方提供，页面
+	// 存不存在都一样 —— 但面向公网或多租户的部署应该能把它收掉。
+	debugConsole = flag.Bool("web.debug-console", true,
+		"Serve the interactive debug console on /debug. Disable it for deployments where the exporter's HTTP interface is reachable by untrusted users.")
 )
 
 // scrapeErrors 是 vmware_scrape_errors_total 的进程级累加状态。
@@ -310,7 +325,25 @@ func metricsHandler(logger *slog.Logger) http.HandlerFunc {
 
 // probeHandler 处理 probe 请求，支持多 target 和独立凭证。
 func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
-	params := r.URL.Query()
+	// ParseForm 让 GET 的查询串与 POST 的表单体走同一套取值逻辑。调试页
+	// 用 POST 提交，凭证因此留在请求体里，不进 URL、不进浏览器历史、也不进
+	// 任何记录查询串的反向代理日志。
+	//
+	// 必须无条件调用，不能写成 if r.Method == http.MethodPost。实测：只在
+	// POST 分支调用时，GET 请求的 r.Form 是一个空 map，现有的
+	// /probe?target=... 会全部拿不到参数 —— Prometheus 那一侧会直接失效。
+	//
+	// error 只记日志、不中断，是为了保持与 r.URL.Query() 相同的宽容语义：
+	// 那个函数遇到畸形百分号转义时静默丢弃该键，其余键照常返回；ParseForm
+	// 则返回 error，但同样会把能解析的键填进 r.Form。中断请求会把「某个
+	// 参数写错了」从「那个参数为空，于是报 400 缺少 target」变成「整个请求
+	// 400」，对既有调用方是行为变更。
+	if err := r.ParseForm(); err != nil {
+		logger.Warn("could not fully parse probe request parameters; continuing with what was parsed",
+			"error", err)
+	}
+
+	params := r.Form
 
 	target := params.Get("target")
 	if target == "" {
@@ -414,9 +447,9 @@ func (p *probeLogin) Login(ctx context.Context, _ string) (*collector.Scrape, fu
 	return p.api.LoginWithCredentials(ctx, p.creds, p.logger)
 }
 
-// collectorDescriptions 给首页文档提供人类可读的说明。
+// collectorDescriptions 给页面提供人类可读的说明。
 // 缺失的条目会退化为空说明，但 collector 本身仍会被列出 ——
-// 保证新增 collector 时首页不会漏项，最差也只是少一句描述。
+// 保证新增 collector 时页面不会漏项，最差也只是少一句描述。
 var collectorDescriptions = map[string]string{
 	"datacenter":      "vCenter and datacenter info",
 	"cluster":         "Cluster information",
@@ -430,33 +463,170 @@ var collectorDescriptions = map[string]string{
 	"vsan.perf":       "vSAN performance statistics (requires the vSAN performance service)",
 }
 
-// collectorListHTML 从 collector 清单生成首页的可用 collector 列表。
+// collectorCosts 标注哪些 collector 会显著拉长一次抓取，或有额外前置条件。
 //
-// 此前这段 HTML 是手写的硬编码列表，是清单的第四处副本
-// （另外三处：各 collector 的 init() 注册、Collect 的 slice、
-// parseCollectors 里的 "all"）。新增 collector 时极易漏改文档，
-// 导致首页宣称的可用项与实际不符。
-func collectorListHTML() string {
-	var b strings.Builder
+// 这一栏存在的理由是它决定了勾选的后果，而默认开关状态并不足以表达：
+// esxcli 两个 collector 逐主机串行发 SOAP 调用，在几百台主机的环境里会把
+// 一次抓取从几秒拖到几分钟；vsan 与 vsan.perf 在没有启用 vSAN（或没有开启
+// 性能服务）的集群上只会白跑一轮往返。运维在页面上勾选之前就该看到这些，
+// 而不是抓取超时之后再去翻源码里的注释。
+//
+// 文字与 vmware/collectors/registry.go 的注释同源。没有条目表示没有特别的
+// 开销提示，页面会退回展示默认开关状态。
+var collectorCosts = map[string]string{
+	"esxcli.host.nic": "per-host serial",
+	"esxcli.storage":  "per-host serial",
+	"vsan":            "needs vSAN",
+	"vsan.perf":       "needs perf service",
+}
 
-	for _, def := range vmwareCollectors.Definitions() {
-		state := "disabled"
-		if def.DefaultEnabled {
-			state = "enabled"
-		}
+// collectorDocs 把 collector 清单转成页面需要的形状。
+//
+// 此前这个函数叫 collectorListHTML，直接拼一段 <li> 字符串。改成返回结构体
+// 是因为现在有两个页面要用同一份数据、而且形式不同：概览页要一个只读列表，
+// 调试页要一组复选框（还需要 DefaultEnabled 来决定预勾选）。让模板决定标签
+// 长什么样，Go 这边只负责数据。
+//
+// 关键点不变：清单来自 vmwareCollectors.Definitions()，不是页面自己维护的
+// 第二份副本。新增 collector 时页面自动跟上，由
+// TestIndexPageListsEveryCollector 兜底。
+func collectorDocs() []ui.Collector {
+	defs := vmwareCollectors.Definitions()
+	docs := make([]ui.Collector, 0, len(defs))
 
-		description := collectorDescriptions[def.Name]
-		if description != "" {
-			description = " - " + description
-		}
-
-		fmt.Fprintf(&b, "\n\t\t\t\t<li><code>%s</code>%s (default: %s)</li>",
-			html.EscapeString(def.Name), html.EscapeString(description), state)
+	for _, def := range defs {
+		docs = append(docs, ui.Collector{
+			Name:           def.Name,
+			Description:    collectorDescriptions[def.Name],
+			DefaultEnabled: def.DefaultEnabled,
+			Cost:           collectorCosts[def.Name],
+		})
 	}
 
-	b.WriteString("\n\t\t\t")
+	return docs
+}
 
-	return b.String()
+// pageData 组装两个页面共用的模板数据。
+func pageData() ui.Data {
+	// version.Info() 在没有 ldflags 的构建里返回带空字段的字符串，页面上
+	// 显示成一串括号很难看。这种情况直接标 dev —— 本地 go build 出来的
+	// 二进制正是这个状态。
+	v := version.Version
+	if v == "" {
+		v = "dev"
+	}
+
+	return ui.Data{
+		ExporterName:          exporterName,
+		Version:               v,
+		Collectors:            collectorDocs(),
+		DebugConsole:          *debugConsole,
+		MetricsTargetDisabled: *disableExporterTarget,
+	}
+}
+
+// registerUI 把落地页、调试页与静态资源注册到 mux 上。
+//
+// 抽成函数而不是留在 main() 里，是为了让这三条路由可测。留在 main() 里时
+// 它们注册在 http.DefaultServeMux 上，而 DefaultServeMux 是全局单例、
+// 同一路径重复注册会 panic —— 测试无从构造一个干净的 mux 去断言
+// 「-web.debug-console=false 时 /debug 返回 404」这类行为。
+//
+// enableDebugConsole 作为参数传入而不是在函数体里读 *debugConsole，同样是
+// 为了可测：flag 的值是进程级的，测试要覆盖开与关两种情况就必须能分别传。
+//
+// 返回 error 而不是像原先那样在读不到嵌入资源时直接 os.Exit(1)：那一行
+// 会把测试进程一起干掉。调用方（main）仍然按不可恢复处理。
+func registerUI(mux *http.ServeMux, logger *slog.Logger, enableDebugConsole bool) error {
+	// 落地页。
+	//
+	// 改动前这里是一段拼在 main() 里的 HTML 字符串常量，既没有 <!DOCTYPE>
+	// 也没有 <html>/<body> 的开标签（只有闭标签）—— 浏览器靠容错解析显示。
+	// 现在页面来自 web 包的模板，资源由 go:embed 编进二进制，部署方式不变。
+	//
+	// 每次请求重新渲染而不是启动时渲染一次并缓存：模板数据里的
+	// -disable.exporter.target 是 SIGHUP 可重载的 flag，缓存会让页面在重载
+	// 之后继续显示旧状态。渲染成本是几微秒的字符串拼接，落地页又不在抓取
+	// 路径上，没有必要为此引入一处会过期的缓存。
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// "/" 在 ServeMux 里是通配前缀，不加这一判断的话 /typo 与
+		// /favicon.ico 都会拿到一整张落地页加 200。exporter-toolkit 自己的
+		// LandingPageHandler 同样显式做这个判断。
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+
+			return
+		}
+
+		page, err := ui.RenderIndex(pageData())
+		if err != nil {
+			logger.Error("could not render the index page", "error", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+		if _, err := w.Write(page); err != nil {
+			logger.Error("failed to write index response", "error", err)
+		}
+	})
+
+	// /debug 用精确路径注册。/debug/pprof/ 是 Prometheus 生态约定的 profiling
+	// 前缀（exporter-toolkit 的落地页默认就链向它），这个 exporter 目前没有
+	// 引入 net/http/pprof，但不该把整个 /debug/ 子树占掉。
+	if enableDebugConsole {
+		mux.HandleFunc("/debug", func(w http.ResponseWriter, _ *http.Request) {
+			page, err := ui.RenderDebug(pageData())
+			if err != nil {
+				logger.Error("could not render the debug page", "error", err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+
+				return
+			}
+
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+			if _, err := w.Write(page); err != nil {
+				logger.Error("failed to write debug response", "error", err)
+			}
+		})
+	}
+
+	// 静态资源。两个页面都引用 app.css；app.js 只有调试页需要，但无条件
+	// 提供 —— 它不含任何配置或凭证，藏起来只会在 -web.debug-console=false
+	// 时留下一个 404 的引用。
+	for _, asset := range []struct {
+		path, contentType string
+	}{
+		{"app.css", "text/css; charset=utf-8"},
+		{"app.js", "text/javascript; charset=utf-8"},
+	} {
+		body, err := ui.Asset(asset.path)
+		if err != nil {
+			// go:embed 的内容在编译期确定，读不到说明二进制自身有问题，
+			// 不是运行期可恢复的状况。
+			return fmt.Errorf("read embedded asset %s: %w", asset.path, err)
+		}
+
+		contentType := asset.contentType
+		assetPath := asset.path
+
+		mux.HandleFunc("/"+assetPath, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", contentType)
+			// 资源随二进制走，同一个版本的内容永远一样；但版本升级后必须
+			// 立刻换新，所以用 no-cache 让浏览器每次带条件请求，而不是
+			// max-age 那种在升级后还会命中旧副本的做法。
+			w.Header().Set("Cache-Control", "no-cache")
+
+			if _, err := w.Write(body); err != nil {
+				logger.Error("failed to write an asset response", "asset", assetPath, "error", err)
+			}
+		})
+	}
+
+	return nil
 }
 
 // handleReloadSignals 监听 SIGHUP 并重新加载配置，直到 ctx 被取消。
@@ -603,132 +773,10 @@ func main() {
 	http.HandleFunc("/probe", func(w http.ResponseWriter, r *http.Request) {
 		probeHandler(w, r, logger)
 	})
-	http.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		if _, err := w.Write([]byte(`
-			<head><title>` + exporterName + `</title></head>
-			<body>
-			<h1>` + exporterName + `</h1>
-			<h2>Endpoints</h2>
-			<ul>
-				<li><a href="/metrics">Metrics</a> - Default mode with global credentials</li>
-				<li><a href="/probe">Probe</a> - Multi-target mode with per-request credentials</li>
-			</ul>
-			
-			<h2>Usage</h2>
-			
-			<h3>1. Default Mode (Single vCenter)</h3>
-			<p>Start the exporter with flags:</p>
-			<pre>
-./vmware-exporter \
-  -vmware.vcenter=vcenter.example.com \
-  -vmware.username=admin@vsphere.local \
-  -vmware.password=secret \
-  -vmware.insecureTLS=true
-			</pre>
-			<p>Then scrape: <code>http://localhost:9169/metrics</code></p>
-
-			<h4>Timing flags</h4>
-			<ul>
-				<li><b>-vmware.timeout</b> (default: 60) - overall timeout in seconds for a single
-					scrape, covering login, property retrieval and performance sampling.
-					Raise this for large inventories.</li>
-				<li><b>-vmware.interval</b> (default: 20) - PerfManager sampling window in seconds.
-					Does not affect the scrape timeout.</li>
-				<li><b>-vmware.granularity</b> (default: 20) - sampling frequency in seconds.
-					Must be greater than 0 and not larger than the interval.</li>
-			</ul>
-			
-			<h3>2. Probe Mode (Multiple vCenters)</h3>
-			
-			<h4>Basic Parameters:</h4>
-			<ul>
-				<li><b>target</b> (required): vCenter server address</li>
-				<li><b>username</b> (required): vCenter username</li>
-				<li><b>password</b> (required): vCenter password</li>
-				<li><b>schema</b> (optional): http or https (default: https)</li>
-				<li><b>insecure</b> (optional): true to skip TLS verification</li>
-			</ul>
-			
-			<h4>Collector Control Parameters:</h4>
-			<ul>
-				<li><b>collect[]</b>: Enable specific collectors (can be repeated)</li>
-				<li><b>nocollect[]</b>: Disable specific collectors (can be repeated)</li>
-			</ul>
-			
-			<h4>Available Collectors:</h4>
-			<ul>` + collectorListHTML() + `</ul>
-			
-			<h4>Examples:</h4>
-			<pre>
-# Default collectors only
-/probe?target=vcenter.example.com&username=admin&password=secret&insecure=true
-
-# Only VM and host metrics
-/probe?target=vcenter.example.com&username=admin&password=secret&insecure=true&collect[]=vm&collect[]=host
-
-# All collectors
-/probe?target=vcenter.example.com&username=admin&password=secret&insecure=true&collect[]=all
-
-# All except ESXi CLI collectors
-/probe?target=vcenter.example.com&username=admin&password=secret&insecure=true&collect[]=all&nocollect[]=esxcli.host.nic&nocollect[]=esxcli.storage
-
-# Enable ESXi CLI collectors
-/probe?target=vcenter.example.com&username=admin&password=secret&insecure=true&collect[]=esxcli.host.nic&collect[]=esxcli.storage
-			</pre>
-			
-			<h3>Prometheus Configuration</h3>
-			<h4>Different collectors for different vCenters:</h4>
-			<pre>
-scrape_configs:
-  # Production vCenter - all collectors
-  - job_name: 'vmware-prod'
-    scrape_interval: 60s
-    metrics_path: /probe
-    file_sd_configs:
-      - files: ['/etc/prometheus/targets/vmware_prod.yml']
-    params:
-      schema: ['https']
-      insecure: ['true']
-      collect[]: ['all']  # Enable all collectors
-    relabel_configs:
-      - source_labels: [__meta_username]
-        target_label: __param_username
-      - source_labels: [__meta_password]
-        target_label: __param_password
-      - source_labels: [__address__]
-        target_label: __param_target
-      - source_labels: [__param_target]
-        target_label: instance
-      - target_label: __address__
-        replacement: localhost:9169
-
-  # Dev vCenter - basic collectors only (faster)
-  - job_name: 'vmware-dev'
-    scrape_interval: 120s
-    metrics_path: /probe
-    file_sd_configs:
-      - files: ['/etc/prometheus/targets/vmware_dev.yml']
-    params:
-      schema: ['https']
-      insecure: ['true']
-      collect[]: ['datacenter', 'host', 'vm']  # Only basic collectors
-    relabel_configs:
-      - source_labels: [__meta_username]
-        target_label: __param_username
-      - source_labels: [__meta_password]
-        target_label: __param_password
-      - source_labels: [__address__]
-        target_label: __param_target
-      - source_labels: [__param_target]
-        target_label: instance
-      - target_label: __address__
-        replacement: localhost:9169
-			</pre>
-			</body>
-			</html>`)); err != nil {
-			logger.Error("failed to write index response", "error", err)
-		}
-	})
+	if err := registerUI(http.DefaultServeMux, logger, *debugConsole); err != nil {
+		logger.Error("could not register the web UI", "error", err)
+		os.Exit(1)
+	}
 
 	logger.Info("Starting "+exporterName, "listening_on", *listenAddress)
 

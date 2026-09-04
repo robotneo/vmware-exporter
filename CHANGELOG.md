@@ -9,6 +9,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Added
 
+- **A landing page that is actually HTML, and an interactive debug console at
+  `/debug`.** The page served at `/` used to be a string literal concatenated
+  inside `main()` with no `<!DOCTYPE>` and no opening `<html>`/`<body>` tags —
+  only the closing ones — so browsers rendered it through error recovery. Both
+  pages now come from templates in the new `web` package, embedded with
+  `go:embed`; the deployment story is unchanged (still a single static binary,
+  still `go build .`).
+
+  `/debug` lets you enter a target and credentials, tick the collectors you
+  want, and see the raw exposition output along with the scrape duration and
+  per-collector success — useful for confirming credentials and permissions
+  before touching `prometheus.yml`. The collector list on both pages is
+  generated from the collector registry, so it cannot drift from what the
+  binary supports, and it now shows the cost of each collector
+  (`per-host serial` for esxcli, `needs vSAN` / `needs perf service` for vSAN)
+  rather than only its default state.
+
+  The console is enabled by default and can be removed entirely with
+  `-web.debug-console=false`, which makes `/debug` return 404 and also drops
+  the link from the landing page. Turning it off is worth considering on any
+  listener reachable beyond a workstation: the form lets anyone who can load
+  the page make the exporter connect to an arbitrary address with arbitrary
+  credentials.
+
+- **`/probe` now accepts its parameters in a POST form body**, in addition to
+  the query string it has always accepted. The debug console uses this so that
+  passwords stay out of the browser address bar, out of browser history, and
+  out of the access logs of any reverse proxy that logs query strings. GET with
+  a query string keeps working exactly as before — there is a regression test
+  guarding it specifically, because the obvious implementation
+  (`if r.Method == http.MethodPost { r.ParseForm() }`) silently breaks every
+  existing GET request: `r.Form` is empty for GET unless `ParseForm` is called
+  unconditionally, so every `/probe?target=...` would have started returning
+  `400 target parameter is required`.
+
+  A malformed parameter (a bad percent-escape, say) still does not fail the
+  request. `ParseForm` returns an error where `r.URL.Query()` silently dropped
+  the offending key; the error is logged and the parameters that did parse are
+  used, keeping the previous behaviour for existing callers.
+
+  > Note that the exporter's own `basic_auth_users` (via `-web.config.file`)
+  > and passing vCenter credentials through `/probe`'s basic auth are mutually
+  > exclusive — both read the same `Authorization` header, and exporter-toolkit
+  > does not strip it after validating. Use parameters for the vCenter
+  > credentials if you protect the listener this way.
+
 - **`systemctl reload` now applies configuration changes without restarting.**
   The exporter registers a SIGHUP handler that re-reads `-file` and the
   environment variables and writes the values back into the flags the request

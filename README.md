@@ -21,6 +21,9 @@ Exporter scrapes the target configured at startup when the `/metrics` path is us
 | **Multiple vCenters** | `/probe?target=...` | Per-request params or Basic Auth | Several vCenters with different credentials |
 | **Standalone ESXi** | either | Same as above | Hosts without a vCenter, or direct-to-host collection |
 
+`/debug` is not a scrape mode — it is an interactive page for trying a target out
+before adding it to `prometheus.yml`. See [The debug console](#the-debug-console).
+
 **Target type is detected automatically** by reading `ServiceContent.About.ApiType`
 (`VirtualCenter` / `HostAgent`) right after login. No extra flag, no separate
 endpoint, no dedicated `scrape_config` — point the exporter at an ESXi host and
@@ -105,6 +108,7 @@ The options available are:
 | -log.format | Can be either json or logfmt (default: logfmt) |
 | -log.level | One of debug,info,warn or error (default: debug) - Don't expect much..|
 | -web.config.file | Path to a web configuration file enabling TLS and/or HTTP basic auth on the exporter's own listener - see [Securing the exporter](#securing-the-exporter) |
+| -web.debug-console | Serves the interactive debug console on `/debug` (default: **true**). Pass `=false` to remove the route entirely - see [The debug console](#the-debug-console) |
 | -collector.max-concurrency | Maximum number of collectors running in parallel, and the fan-out width used inside the esxcli collectors (default: 8). Use 0 to leave the collector layer unlimited; the per-host fan-out keeps a built-in floor. Replaces `-prom.maxRequests`, which was accepted but never had any effect |
 | -disable.exporter.metrics | Disables the exporter's own `go_*` and `process_*` metrics (default: **true**, so they are absent unless you pass `=false`) |
 | -disable.exporter.target | Disables exporter default target - /metrics will only return exporter data - use /probe. `/metrics` then serves client_golang's default registry, which carries the Go and process collectors regardless of the flag above |
@@ -255,6 +259,38 @@ login failure with no explanation. `scripts/check_config.py` checks the names
 used in `docker-compose.yml` against the flags the binary actually registers, so
 a typo fails in CI rather than in production.
 
+## The debug console
+
+`/debug` serves an interactive page for testing a target before wiring it into
+Prometheus. Fill in the address and credentials, tick the collectors you want,
+hit **Run** and you get the raw exposition text back, plus the scrape duration
+and which collectors succeeded. It is the fastest way to answer "are the
+credentials right and does this account have the permissions the vSAN collector
+needs" without editing `prometheus.yml` and waiting for a scrape interval.
+
+The page submits to `/probe` over **POST**, with the parameters in the request
+body rather than the query string. That is deliberate: a password in a query
+string ends up in the browser's address bar and history, and in the access log of
+every reverse proxy that logs query strings. In a request body it does not.
+
+`Copy /probe URL` builds the equivalent GET URL for your `prometheus.yml`, with
+the password replaced by a `<password>` placeholder — the URL is meant to be
+pasted into a config file or a ticket, so it must not carry the real secret.
+
+**The console is enabled by default. Consider turning it off** with
+`-web.debug-console=false` on any listener that is reachable beyond your own
+workstation. The form lets anyone who can load the page make the exporter open a
+connection to an arbitrary address with arbitrary credentials — on an
+unauthenticated port that is a credential probe with someone else's source IP.
+With the flag off the route does not exist at all and returns 404; `/metrics`,
+`/probe` and the landing page are unaffected.
+
+The landing page at `/` lists every registered collector with its default state
+and, where relevant, its cost (`per-host serial` for the esxcli collectors,
+`needs vSAN` / `needs perf service` for the vSAN ones). That list is generated
+from the collector registry, so it cannot drift from what the binary actually
+supports.
+
 ## Securing the exporter
 
 Two separate things are worth protecting, and they are easy to confuse:
@@ -265,10 +301,20 @@ Two separate things are worth protecting, and they are easy to confuse:
    `-web.config.file`, and **unprotected by default**.
 
 The second one matters more than it looks. The `/probe` endpoint accepts vCenter
-credentials as URL query parameters or via HTTP basic auth, so on a plain HTTP
-listener those credentials travel unencrypted, and the query-parameter form also
-lands in the access logs of any reverse proxy in between and in Prometheus's own
-logs. Prefer basic auth over `?password=`, and enable TLS.
+credentials as URL query parameters, in a POST form body, or via HTTP basic auth,
+so on a plain HTTP listener those credentials travel unencrypted, and the
+query-parameter form also lands in the access logs of any reverse proxy in
+between and in Prometheus's own logs. Prefer basic auth or a POST body over
+`?password=`, and enable TLS.
+
+> **`basic_auth_users` and `/probe` basic auth cannot both be used.** The
+> exporter's own basic auth reads the same `Authorization` header that `/probe`
+> reads vCenter credentials from, and it does not strip the header after
+> validating it — whichever one is checked first wins, and the vCenter
+> credentials never arrive. If you protect the listener with
+> `basic_auth_users`, pass the vCenter credentials as parameters instead
+> (query string for Prometheus, POST body for the debug console), and rely on
+> TLS to keep them confidential.
 
 Point `-web.config.file` at a file in
 [exporter-toolkit format](https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md):

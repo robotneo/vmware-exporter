@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -26,6 +27,7 @@ import (
 	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	vmware "github.com/prezhdarov/vmware-exporter/vmware/api"
 	vmwareCollectors "github.com/prezhdarov/vmware-exporter/vmware/collectors"
+	ui "github.com/prezhdarov/vmware-exporter/web"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/exporter-toolkit/web"
 	"github.com/vmware/govmomi/simulator"
@@ -564,49 +566,100 @@ func TestCollectorSetDescribeExposesScrapeMetrics(t *testing.T) {
 	}
 }
 
-// TestCollectorDefinitionsMatchRegisteredFlags 保证 collector 清单与命令行
-// 开关一一对应。清单是 /probe 的来源，命令行开关是 /metrics 的来源；
-// 两者不同步就会让同一个 collector 在两个端点上表现不一致。
-// TestCollectorListHTMLCoversEveryCollector 保证首页文档不会与 collector
-// 清单脱同步。这段 HTML 此前是手写的硬编码列表，新增 collector 时容易漏改。
-func TestCollectorListHTMLCoversEveryCollector(t *testing.T) {
-	out := collectorListHTML()
-
-	for _, def := range vmwareCollectors.Definitions() {
-		if !strings.Contains(out, "<code>"+def.Name+"</code>") {
-			t.Fatalf("collector %q is missing from the index page listing:\n%s", def.Name, out)
-		}
-
-		// 默认状态也要正确反映，否则文档会误导使用者。
-		wantState := "disabled"
-		if def.DefaultEnabled {
-			wantState = "enabled"
-		}
-
-		marker := "<code>" + def.Name + "</code>"
-		idx := strings.Index(out, marker)
-		rest := out[idx:]
-
-		end := strings.Index(rest, "</li>")
-		if end < 0 {
-			t.Fatalf("malformed list item for collector %q:\n%s", def.Name, rest)
-		}
-
-		item := rest[:end]
-
-		if !strings.Contains(item, "default: "+wantState) {
-			t.Fatalf("collector %q is documented as %q, want %q; item=%q", def.Name, item, wantState, item)
-		}
+// TestIndexPageListsEveryCollector 保证页面文档不会与 collector 清单脱同步。
+//
+// 这段列表此前是手写的硬编码 HTML，新增 collector 时容易漏改。断言对象是
+// 渲染后的完整页面而不是中间函数的返回值：模板本身也可能漏掉循环、或者把
+// 标签写错，只测数据结构测不出来。
+func TestIndexPageListsEveryCollector(t *testing.T) {
+	page, err := ui.RenderIndex(pageData())
+	if err != nil {
+		t.Fatalf("could not render the index page: %v", err)
 	}
 
-	// 每个 collector 都应有一句人类可读的说明。
+	out := string(page)
+
 	for _, def := range vmwareCollectors.Definitions() {
+		marker := `<div class="coll-name">` + def.Name + "</div>"
+		if !strings.Contains(out, marker) {
+			t.Fatalf("collector %q is missing from the index page listing", def.Name)
+		}
+
+		// 每个 collector 都应有一句人类可读的说明。
 		if collectorDescriptions[def.Name] == "" {
-			t.Fatalf("collector %q has no entry in collectorDescriptions; the index page would show it without any explanation", def.Name)
+			t.Fatalf("collector %q has no entry in collectorDescriptions; the page would show it without any explanation", def.Name)
+		}
+
+		if !strings.Contains(out, collectorDescriptions[def.Name]) {
+			t.Fatalf("collector %q description is missing from the index page", def.Name)
+		}
+
+		// 默认状态也要正确反映，否则文档会误导使用者。带 Cost 标注的
+		// collector 展示的是开销提示而不是默认态 —— 那几个全部默认禁用，
+		// 而「为什么默认关」的答案正是开销本身。
+		if collectorCosts[def.Name] != "" {
+			if def.DefaultEnabled {
+				t.Fatalf("collector %q carries a cost note but is enabled by default; the page would not show its default state", def.Name)
+			}
+
+			if !strings.Contains(out, collectorCosts[def.Name]) {
+				t.Fatalf("collector %q cost note %q is missing from the index page", def.Name, collectorCosts[def.Name])
+			}
+
+			continue
+		}
+
+		wantTag := `<span class="tag off">default off</span>`
+		if def.DefaultEnabled {
+			wantTag = `<span class="tag on">default on</span>`
+		}
+
+		if !strings.Contains(out, wantTag) {
+			t.Fatalf("collector %q is not documented with %q", def.Name, wantTag)
 		}
 	}
 }
 
+// TestPagesRenderCompleteHTML 守住一个具体的历史缺陷：改动前的落地页没有
+// <!DOCTYPE>、没有 <html> 与 <body> 的开标签（只有闭标签），全靠浏览器容错
+// 才显示得出来。模板化之后这类结构缺失同样可能悄悄发生，尤其是在拆分或
+// 追加片段的时候。
+func TestPagesRenderCompleteHTML(t *testing.T) {
+	pages := map[string]func(ui.Data) ([]byte, error){
+		"index": ui.RenderIndex,
+		"debug": ui.RenderDebug,
+	}
+
+	for name, render := range pages {
+		t.Run(name, func(t *testing.T) {
+			page, err := render(pageData())
+			if err != nil {
+				t.Fatalf("could not render: %v", err)
+			}
+
+			out := string(page)
+
+			for _, want := range []string{
+				"<!DOCTYPE html>", "<html", "</html>", "<body>", "</body>",
+				`<link rel="stylesheet" href="app.css">`,
+			} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("rendered page is missing %q", want)
+				}
+			}
+
+			// 未替换的模板动作说明数据结构与模板脱节了。html/template 对
+			// 未定义字段会直接报错，但拼错的 range 变量可能留下字面量。
+			if strings.Contains(out, "{{") {
+				t.Fatalf("rendered page still contains a template action")
+			}
+		})
+	}
+}
+
+// TestCollectorDefinitionsMatchRegisteredFlags 保证 collector 清单与命令行
+// 开关一一对应。清单是 /probe 的来源，命令行开关是 /metrics 的来源；
+// 两者不同步就会让同一个 collector 在两个端点上表现不一致。
 func TestCollectorDefinitionsMatchRegisteredFlags(t *testing.T) {
 	for _, name := range vmwareCollectors.Names() {
 		flagName := "collector." + name
@@ -1117,4 +1170,262 @@ func writeSelfSignedCert(t *testing.T, dir string) (string, string) {
 	}
 
 	return certPath, keyPath
+}
+
+// TestProbeHandlerAcceptsPostForm 覆盖调试页走的那条路径：参数在 POST 的
+// 表单体里，不在 URL 上。
+//
+// 这条路径存在的理由是凭证。作为查询参数发出去的密码会进浏览器地址栏、
+// 进浏览器历史，并且会被任何记录查询串的反向代理写进 access log；放在请求体
+// 里则不会。Basic Auth 本来是另一个选择，但 exporter 自身的 basic auth
+// （-web.config.file 的 basic_auth_users）用的是同一个 Authorization 头，
+// 配了之后 vCenter 凭证就传不进来了。
+func TestProbeHandlerAcceptsPostForm(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	form := url.Values{
+		"target":   {"127.0.0.1:1"},
+		"username": {"user"},
+		"password": {"pass"},
+		"schema":   {"http"},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/probe", strings.NewReader(form.Encode()))
+	// 这个头是必须的。缺了它 ParseForm 会静默忽略整个请求体，参数一个都
+	// 拿不到 —— 实测行为，所以前端也必须显式设置它。
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	rec := httptest.NewRecorder()
+
+	probeHandler(rec, req, logger)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	// 与 Basic Auth 那个测试同样的信号：up=0 证明登录被尝试过，也就证明
+	// target 与凭证都从表单体里解析出来了。任何一个缺失都会在登录之前 400。
+	if !strings.Contains(rec.Body.String(), "vmware_up 0") {
+		t.Fatalf("response has no `vmware_up 0`, so login was never attempted; "+
+			"the form body was not parsed. body=%q", rec.Body.String())
+	}
+}
+
+// TestProbeHandlerAcceptsPostFormCollectors 确认 collect[] 这种重复键在表单
+// 体里也能正确解析成多个值。
+//
+// 单独一条测试是因为重复键与普通键的解析路径不同：url.Values 是
+// map[string][]string，取错了会只拿到第一个值，于是 collect[]=vm&collect[]=host
+// 会退化成「只跑 vm」。这种错误不会报错，只会让指标少一半。
+func TestProbeHandlerAcceptsPostFormCollectors(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	form := url.Values{
+		"target":    {"127.0.0.1:1"},
+		"username":  {"user"},
+		"password":  {"pass"},
+		"schema":    {"http"},
+		"collect[]": {"vm", "host"},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/probe", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	rec := httptest.NewRecorder()
+
+	probeHandler(rec, req, logger)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+
+	// collect[] 显式给出意味着「只跑这些」。被选中的两个必须有 success
+	// 指标，没被选中的必须一个都没有 —— 后者才是能抓到「只取到第一个值」
+	// 那类 bug 的断言。
+	for _, want := range []string{
+		`vmware_scrape_collector_success{collector="vm"`,
+		`vmware_scrape_collector_success{collector="host"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("response is missing %q; the repeated collect[] values were not all parsed. body=%q", want, body)
+		}
+	}
+
+	if strings.Contains(body, `vmware_scrape_collector_success{collector="datastore"`) {
+		t.Fatalf("datastore ran even though collect[] listed only vm and host; body=%q", body)
+	}
+}
+
+// TestProbeHandlerStillAcceptsGetQuery 是一道回归护栏，不是新功能的测试。
+//
+// 加表单支持最自然的写法是 if r.Method == http.MethodPost { r.ParseForm() }，
+// 那样写会静默废掉整个 GET 路径：实测确认，只在 POST 分支调用 ParseForm 时，
+// GET 请求的 r.Form 是一个空 map，于是 target 取不到、每个 /probe?... 都
+// 变成 400。Prometheus 那一侧会全部停摆，而单测如果只覆盖新增的 POST 路径
+// 就完全看不见。
+func TestProbeHandlerStillAcceptsGetQuery(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	req := httptest.NewRequest(http.MethodGet,
+		"/probe?target=127.0.0.1:1&username=user&password=pass&schema=http&collect[]=vm", nil)
+	rec := httptest.NewRecorder()
+
+	probeHandler(rec, req, logger)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+
+	if !strings.Contains(body, "vmware_up 0") {
+		t.Fatalf("response has no `vmware_up 0`, so the query string was not parsed; body=%q", body)
+	}
+
+	if !strings.Contains(body, `vmware_scrape_collector_success{collector="vm"`) {
+		t.Fatalf("collect[]=vm from the query string was not honoured; body=%q", body)
+	}
+}
+
+// TestProbeHandlerToleratesMalformedParams 固定畸形参数的处置方式。
+//
+// r.URL.Query() 遇到坏的百分号转义时静默丢弃那一个键，其余键照常返回；
+// r.ParseForm() 对同样的输入返回 error。换成 ParseForm 之后如果把这个 error
+// 当作请求失败来处理，「某一个参数写错了」就会从「那个参数为空」升级成
+// 「整个请求 400」—— 对既有的 GET 调用方是行为变更。所以 error 只记日志。
+func TestProbeHandlerToleratesMalformedParams(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// %zz 不是合法的转义序列。target 之后的参数仍然必须被解析出来。
+	req := httptest.NewRequest(http.MethodGet,
+		"/probe?bad=%zz&target=127.0.0.1:1&username=user&password=pass&schema=http", nil)
+	rec := httptest.NewRecorder()
+
+	probeHandler(rec, req, logger)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; a malformed parameter must not fail the whole request. body=%q",
+			rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	if !strings.Contains(rec.Body.String(), "vmware_up 0") {
+		t.Fatalf("response has no `vmware_up 0`; the well-formed parameters were discarded along with the bad one. body=%q",
+			rec.Body.String())
+	}
+}
+
+// TestDebugConsoleDisabledReturns404 锁住 -web.debug-console=false 的实际效果。
+//
+// 这个 flag 的存在理由是暴露面：调试页会把一个「输入任意 target 与凭证、
+// 由 exporter 代为发起连接」的表单挂在一个通常不做认证的端口上。在共享
+// 网段里这等于给了任何能访问该端口的人一个凭证探测器，所以必须能关掉。
+//
+// 断言 404 而不是断言「页面里没有表单」：关掉的语义是路由根本不存在，
+// 而不是渲染一张空页面。差别在于前者不会给扫描器留下「这里有个被禁用的
+// 调试端点」的痕迹。
+//
+// 顺带断言 / 与 /app.css 仍然可用 —— 这个 flag 只该影响 /debug 一条路由。
+func TestDebugConsoleDisabledReturns404(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	for _, tc := range []struct {
+		name     string
+		enabled  bool
+		wantCode int
+	}{
+		{name: "enabled", enabled: true, wantCode: http.StatusOK},
+		{name: "disabled", enabled: false, wantCode: http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// 每个子测试自己的 mux。用 http.DefaultServeMux 的话第二次
+			// 注册同一路径会 panic，而且两个子测试会互相污染。
+			mux := http.NewServeMux()
+
+			if err := registerUI(mux, logger, tc.enabled); err != nil {
+				t.Fatalf("registerUI: %v", err)
+			}
+
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/debug", nil))
+
+			if rec.Code != tc.wantCode {
+				t.Fatalf("GET /debug with debug console enabled=%v: status = %d, want %d",
+					tc.enabled, rec.Code, tc.wantCode)
+			}
+
+			// 关掉调试页不应该顺手关掉落地页或它引用的样式表。
+			for _, path := range []string{"/", "/app.css"} {
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+
+				if rec.Code != http.StatusOK {
+					t.Fatalf("GET %s with debug console enabled=%v: status = %d, want %d; "+
+						"the -web.debug-console flag must only affect /debug",
+						path, tc.enabled, rec.Code, http.StatusOK)
+				}
+			}
+		})
+	}
+}
+
+// TestStaticAssetsServed 覆盖两个静态资源的注册与响应头。
+//
+// Content-Type 是断言的重点，不是顺带检查的细节：浏览器对样式表和脚本做
+// MIME 类型检查，text/plain 的 app.css 会被直接忽略（页面变成没有样式的
+// 裸 HTML），text/plain 的 app.js 在启用了 X-Content-Type-Options: nosniff
+// 的部署里会被拒绝执行 —— 两种情况在服务端看都是 200，只有浏览器控制台
+// 里才有报错，单测不覆盖就只能靠人工打开页面才能发现。
+//
+// 同时断言响应体非空且内容对得上：go:embed 的模式写错（比如漏了某个文件）
+// 在编译期就会失败，但 registerUI 的路径拼接写错（"/"+path 少了斜杠之类）
+// 只会表现为 404，而路由注册顺序变化也可能让 "/" 的通配前缀吃掉它们。
+func TestStaticAssetsServed(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	mux := http.NewServeMux()
+	if err := registerUI(mux, logger, true); err != nil {
+		t.Fatalf("registerUI: %v", err)
+	}
+
+	for _, tc := range []struct {
+		path        string
+		contentType string
+		// 一段只可能出现在正确文件里的内容，用来确认路由没有串到别的资源上。
+		wantBody string
+	}{
+		{path: "/app.css", contentType: "text/css; charset=utf-8", wantBody: "--bg"},
+		{path: "/app.js", contentType: "text/javascript; charset=utf-8", wantBody: "/probe"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET %s: status = %d, want %d", tc.path, rec.Code, http.StatusOK)
+			}
+
+			if got := rec.Header().Get("Content-Type"); got != tc.contentType {
+				t.Fatalf("GET %s: Content-Type = %q, want %q; a wrong MIME type makes the "+
+					"browser silently ignore the asset while the server still reports 200",
+					tc.path, got, tc.contentType)
+			}
+
+			// 升级之后浏览器必须立刻拿到新版资源。max-age 那类缓存会让
+			// 旧副本在升级后继续命中，页面与二进制版本对不上。
+			if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
+				t.Fatalf("GET %s: Cache-Control = %q, want %q", tc.path, got, "no-cache")
+			}
+
+			body := rec.Body.String()
+
+			if body == "" {
+				t.Fatalf("GET %s: empty body", tc.path)
+			}
+
+			if !strings.Contains(body, tc.wantBody) {
+				t.Fatalf("GET %s: body does not contain %q, so the route is not serving "+
+					"the expected embedded file", tc.path, tc.wantBody)
+			}
+		})
+	}
 }
