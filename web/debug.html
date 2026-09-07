@@ -1,69 +1,78 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Debug console &middot; {{ .ExporterName }}</title>
+<title>调试控制台 &middot; {{ .ExporterName }}</title>
 <link rel="stylesheet" href="app.css">
+<script src="i18n.js"></script>
 </head>
 <body>
 
 <div class="topbar">
   <div class="topbar-inner">
     <div class="brand">
-      <div class="brand-mark"><span></span></div>
-      {{ .ExporterName }}
+      <div class="brand-mark">
+        <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true">
+          <rect class="vm-bar" x="2"  y="6"  width="3.4" height="12" rx="1.2"/>
+          <rect class="vm-bar" x="7.3" y="3"  width="3.4" height="18" rx="1.2"/>
+          <rect class="vm-bar" x="12.6" y="6"  width="3.4" height="12" rx="1.2"/>
+          <rect class="vm-bar" x="17.9" y="9"  width="3.4" height="6"  rx="1.2"/>
+        </svg>
+      </div>
+      <span class="brand-name">{{ .ExporterName }}</span>
     </div>
     <div class="badge">{{ .Version }}</div>
     <nav class="nav">
-      <a href="/">Overview</a>
+      <a href="/" data-i18n="topbar.overview">概览</a>
       <a href="/metrics">/metrics</a>
       <a href="/debug" class="on">/debug</a>
       <a href="/config">/config</a>
+      <button type="button" class="lang-btn" onclick="i18n.setLang(i18n.getLang() === 'zh' ? 'en' : 'zh')">EN</button>
     </nav>
   </div>
 </div>
 
 <div class="wrap">
   <div class="page-head">
-    <h1>Debug console</h1>
-    <p>Run a single scrape against any reachable target and read back exactly what Prometheus would receive. Credentials are posted as a form body, so they stay out of the URL, the browser history and any access log that records query strings.</p>
+    <h1 data-i18n="debug.title">调试控制台</h1>
+    <p data-i18n="debug.desc">对任意可达目标执行一次抓取，精确返回 Prometheus 会收到的内容。凭证通过表单体提交，不会出现在 URL、浏览器历史记录或记录查询字符串的访问日志中。</p>
   </div>
 
   <div class="grid">
     <div class="card">
       <div class="card-head">
-        <h2>Target</h2>
-        <span class="hint">vCenter or ESXi</span>
+        <h2 data-i18n="debug.target">目标</h2>
+        <span class="hint" data-i18n="debug.target_hint">vCenter 或 ESXi</span>
       </div>
       <div class="card-body">
         <div class="field">
-          <label class="lbl" for="target">Address<span class="req">*</span></label>
+          <label class="lbl" for="target"><span data-i18n="debug.address">地址</span><span class="req">*</span></label>
           <input type="text" id="target" placeholder="vcenter.example.com" autocomplete="off" spellcheck="false">
-          <div class="help">A vCenter Server or a standalone ESXi host. The type is detected at login.</div>
+          <div class="help" data-i18n="debug.address_help">vCenter Server 或独立 ESXi 主机，登录时自动检测类型。</div>
         </div>
         <div class="field">
-          <label class="lbl" for="username">Username<span class="req">*</span></label>
+          <label class="lbl" for="username"><span data-i18n="debug.username">用户名</span><span class="req">*</span></label>
           <input type="text" id="username" placeholder="readonly@vsphere.local" autocomplete="off" spellcheck="false">
         </div>
         <div class="field">
-          <label class="lbl" for="password">Password<span class="req">*</span></label>
+          <label class="lbl" for="password"><span data-i18n="debug.password">密码</span><span class="req">*</span></label>
           <input type="password" id="password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" autocomplete="off">
         </div>
         <div class="row2">
           <div class="field">
-            <label class="lbl" for="schema">Scheme</label>
+            <label class="lbl" for="schema" data-i18n="debug.scheme">协议</label>
             <select id="schema">
               <option value="https">https</option>
               <option value="http">http</option>
             </select>
           </div>
           <div class="field">
-            <label class="lbl">TLS</label>
+            <label class="lbl" data-i18n="debug.tls">TLS</label>
             <label class="switch">
               <input type="checkbox" id="insecure">
               <span class="track"></span>
-              <span class="txt">Skip verify<em>insecure</em></span>
+              <span class="txt"><span data-i18n="debug.tls_txt">跳过验证</span><em data-i18n="debug.tls_em">不安全</em></span>
             </label>
           </div>
         </div>
@@ -73,14 +82,14 @@
     <div>
       <div class="card" style="margin-bottom:20px">
         <div class="card-head">
-          <h2>Collectors</h2>
-          <span class="hint"><span id="selCount">0</span> of {{ len .Collectors }} selected</span>
+          <h2 data-i18n="debug.collectors">采集器</h2>
+          <span class="hint" id="collHint" data-total="{{ len .Collectors }}">已选 <span id="selCount">0</span> / {{ len .Collectors }} 个</span>
         </div>
         <div class="card-body">
           <div class="coll-toolbar">
-            <button type="button" class="chip" data-act="all">Select all</button>
-            <button type="button" class="chip" data-act="default">Defaults</button>
-            <button type="button" class="chip" data-act="none">Clear</button>
+            <button type="button" class="chip" data-act="all" data-i18n="debug.sel_all">全选</button>
+            <button type="button" class="chip" data-act="default" data-i18n="debug.sel_default">默认</button>
+            <button type="button" class="chip" data-act="none" data-i18n="debug.sel_clear">清空</button>
           </div>
           <div class="coll-list" id="collList">
             {{ range .Collectors }}
@@ -99,48 +108,48 @@
           <div class="actions">
             <button type="button" class="btn primary" id="run">
               <span class="spinner"></span>
-              <span id="runTxt">Run scrape</span>
+              <span id="runTxt" data-i18n="debug.run">执行抓取</span>
             </button>
-            <button type="button" class="btn" id="genUrl">Copy probe URL</button>
+            <button type="button" class="btn" id="genUrl" data-i18n="debug.copy_url">复制探针 URL</button>
           </div>
         </div>
       </div>
 
       <div class="card">
         <div class="card-head">
-          <h2>Result</h2>
-          <span class="hint" id="resHint">Not run yet</span>
+          <h2 data-i18n="debug.result">结果</h2>
+          <span class="hint" id="resHint" data-i18n="debug.not_run">尚未运行</span>
         </div>
 
         <div class="stats" id="stats" hidden>
           <div class="stat">
-            <div class="k">HTTP status</div>
+            <div class="k" data-i18n="debug.stat_http">HTTP 状态</div>
             <div class="v" id="sCode">&mdash;</div>
           </div>
           <div class="stat">
-            <div class="k">Elapsed</div>
+            <div class="k" data-i18n="debug.stat_elapsed">耗时</div>
             <div class="v" id="sTime">&mdash;</div>
           </div>
           <div class="stat">
-            <div class="k">Time series</div>
+            <div class="k" data-i18n="debug.stat_series">时间序列</div>
             <div class="v" id="sSeries">0</div>
           </div>
           <div class="stat">
-            <div class="k">vmware_up</div>
+            <div class="k" data-i18n="debug.stat_up">vmware_up</div>
             <div class="v" id="sUp">&mdash;</div>
           </div>
         </div>
 
         <div class="empty" id="empty">
           <div class="ico"><i></i></div>
-          <p>Fill in a target on the left, then run a scrape to see the metrics it returns.</p>
+          <p data-i18n="debug.empty">在左侧填写目标，然后执行抓取以查看返回的指标。</p>
         </div>
 
         <div class="result" id="result" hidden>
           <div class="result-bar">
             <span id="resNote"></span>
             <span class="filter">
-              <input type="text" id="filter" placeholder="filter lines&hellip;" autocomplete="off" spellcheck="false">
+              <input type="text" id="filter" data-i18n-placeholder="debug.filter_placeholder" placeholder="过滤行…" autocomplete="off" spellcheck="false">
               <span id="filterCount"></span>
             </span>
           </div>

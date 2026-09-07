@@ -701,15 +701,20 @@ func registerUI(mux *http.ServeMux, logger *slog.Logger, enableDebugConsole bool
 		})
 	}
 
-	// 静态资源。三个页面都引用 app.css；app.js 只有调试页需要、config.js
-	// 只有配置页需要，但都无条件提供 —— 它们不含任何配置或凭证，藏起来
-	// 只会在 -web.debug-console=false 时留下一个 404 的引用。
+	// 静态资源。三个页面都引用 app.css 与 i18n.js；app.js 只有调试页需要、
+	// config.js 只有配置页需要，但都无条件提供 —— 它们不含任何配置或凭证，
+	// 藏起来只会在 -web.debug-console=false 时留下一个 404 的引用。
+	//
+	// i18n.js 必须无条件提供且不能延后加载：三个页面的 HTML 里写的是中文
+	// 字面量（默认语言），切到英文完全依赖这个脚本。取不到它的话页面不会
+	// 报错，只是那个 EN 按钮点了没反应 —— 这种「静默降级」比 404 更难查。
 	for _, asset := range []struct {
 		path, contentType string
 	}{
 		{"app.css", "text/css; charset=utf-8"},
 		{"app.js", "text/javascript; charset=utf-8"},
 		{"config.js", "text/javascript; charset=utf-8"},
+		{"i18n.js", "text/javascript; charset=utf-8"},
 	} {
 		body, err := ui.Asset(asset.path)
 		if err != nil {

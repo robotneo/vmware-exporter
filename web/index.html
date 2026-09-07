@@ -1,77 +1,86 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ .ExporterName }}</title>
 <link rel="stylesheet" href="app.css">
+<script src="i18n.js"></script>
 </head>
 <body>
 
 <div class="topbar">
   <div class="topbar-inner">
     <div class="brand">
-      <div class="brand-mark"><span></span></div>
-      {{ .ExporterName }}
+      <div class="brand-mark">
+        <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true">
+          <rect class="vm-bar" x="2"  y="6"  width="3.4" height="12" rx="1.2"/>
+          <rect class="vm-bar" x="7.3" y="3"  width="3.4" height="18" rx="1.2"/>
+          <rect class="vm-bar" x="12.6" y="6"  width="3.4" height="12" rx="1.2"/>
+          <rect class="vm-bar" x="17.9" y="9"  width="3.4" height="6"  rx="1.2"/>
+        </svg>
+      </div>
+      <span class="brand-name">{{ .ExporterName }}</span>
     </div>
     <div class="badge">{{ .Version }}</div>
     <nav class="nav">
-      <a href="/" class="on">Overview</a>
+      <a href="/" class="on" data-i18n="topbar.overview">概览</a>
       <a href="/metrics">/metrics</a>
       {{ if .DebugConsole }}<a href="/debug">/debug</a>
       <a href="/config">/config</a>{{ end }}
+      <button type="button" class="lang-btn" onclick="i18n.setLang(i18n.getLang() === 'zh' ? 'en' : 'zh')">EN</button>
     </nav>
   </div>
 </div>
 
 <div class="wrap">
   <div class="page-head">
-    <h1>Endpoints</h1>
-    <p>This exporter collects metrics from VMware vCenter Server and from standalone ESXi hosts. The target type is detected at login, so the same endpoint serves both.</p>
+    <h1 data-i18n="index.heading">接口端点</h1>
+    <p data-i18n="index.desc">该导出器从 VMware vCenter Server 和独立 ESXi 主机收集指标。登录时自动检测目标类型，同一端点即可服务两种场景。</p>
   </div>
 
   <div class="ep-grid">
     <a class="ep" href="/metrics">
       <div class="ep-top">
         <span class="ep-path">/metrics</span>
-        <span class="ep-kind">single target</span>
+        <span class="ep-kind" data-i18n="ep.metrics.kind">单目标</span>
       </div>
-      <h3>One vCenter, or one ESXi host</h3>
-      <p>{{ if .MetricsTargetDisabled }}Currently serving only the exporter's own metrics: <code>-disable.exporter.target</code> is set, so no vCenter is contacted.{{ else }}Credentials come from the global <code>-vmware.*</code> flags. Point Prometheus straight at it.{{ end }}</p>
+      <h3 data-i18n="ep.metrics.title">单台 vCenter 或 ESXi 主机</h3>
+      <p data-i18n-html="{{ if .MetricsTargetDisabled }}ep.metrics.desc_disabled{{ else }}ep.metrics.desc_enabled{{ end }}">{{ if .MetricsTargetDisabled }}当前仅提供导出器自身指标：已设置 <code>-disable.exporter.target</code>，因此不会连接 vCenter。{{ else }}凭证来自全局 <code>-vmware.*</code> 参数。直接让 Prometheus 抓取即可。{{ end }}</p>
     </a>
 
     <a class="ep" href="/probe?target=vcenter.example.com">
       <div class="ep-top">
         <span class="ep-path">/probe</span>
-        <span class="ep-kind">many targets</span>
+        <span class="ep-kind" data-i18n="ep.probe.kind">多目标</span>
       </div>
-      <h3>Many vCenters, one exporter</h3>
-      <p>Target and credentials are supplied per request, so a single exporter can serve an estate of vCenters with different collectors enabled for each.</p>
+      <h3 data-i18n="ep.probe.title">多台 vCenter，一台导出器</h3>
+      <p data-i18n="ep.probe.desc">目标和凭证每次请求单独提供，一台导出器即可服务多个 vCenter，并可分别启用不同的采集器。</p>
     </a>
 
     {{ if .DebugConsole }}
     <a class="ep" href="/debug">
       <div class="ep-top">
         <span class="ep-path">/debug</span>
-        <span class="ep-kind">interactive</span>
+        <span class="ep-kind" data-i18n="ep.debug.kind">交互式</span>
       </div>
-      <h3>Try a scrape from the browser</h3>
-      <p>Fill in a target, pick collectors, and read back the metrics a scrape would return. Useful for checking credentials and permissions before wiring up Prometheus.</p>
+      <h3 data-i18n="ep.debug.title">在浏览器中试抓取</h3>
+      <p data-i18n="ep.debug.desc">填写目标地址、选择采集器，预览返回的指标。在配置 Prometheus 之前验证凭证和权限，非常方便。</p>
     </a>
 
     <a class="ep" href="/config">
       <div class="ep-top">
         <span class="ep-path">/config</span>
-        <span class="ep-kind">generator</span>
+        <span class="ep-kind" data-i18n="ep.config.kind">生成器</span>
       </div>
-      <h3>Build the Prometheus configuration</h3>
-      <p>Turn a list of vCenters into a <code>scrape_configs</code> job and its file service discovery targets, for either endpoint. Nothing is sent to the exporter: the files are built in the browser.</p>
+      <h3 data-i18n="ep.config.title">生成 Prometheus 配置</h3>
+      <p data-i18n-html="ep.config.desc">将 vCenter 列表转换为 <code>scrape_configs</code> 任务及文件服务发现目标文件，支持两种端点模式。所有处理均在浏览器中完成，凭证不会发送至服务端。</p>
     </a>
     {{ end }}
   </div>
 
   <div class="section">
-    <h2>Collectors</h2>
+    <h2 data-i18n="section.collectors">采集器</h2>
     <div class="card">
       <div class="coll-list">
         {{ range .Collectors }}
@@ -90,63 +99,63 @@
   </div>
 
   <div class="section">
-    <h2>Reference</h2>
+    <h2 data-i18n="section.reference">参考文档</h2>
 
     <details class="doc">
-      <summary>Single target mode</summary>
+      <summary data-i18n="ref.single.summary">单目标模式</summary>
       <div class="doc-body">
-        <p>Start the exporter with the target and its credentials, then let Prometheus scrape <code>/metrics</code>:</p>
+        <p data-i18n-html="ref.single.p1">启动导出器时指定目标及凭证，然后让 Prometheus 抓取 <code>/metrics</code>：</p>
         <pre><code>./vmware-exporter \
   -vmware.vcenter=vcenter.example.com \
   -vmware.username=admin@vsphere.local \
   -vmware.password=secret \
   -vmware.insecureTLS=true</code></pre>
-        <p>The same flags work against a standalone ESXi host. There is no separate mode to select: the exporter reads <code>ServiceContent.About.ApiType</code> at login and adapts, because a lone host has no real datacenter or cluster objects to walk.</p>
-        <div class="note"><strong>Passwords on the command line are visible</strong> to anyone who can run <code>ps</code> or read <code>/proc</code>. Prefer <code>-envflag.enable</code> with an environment file.</div>
+        <p data-i18n-html="ref.single.p2">同样的参数也适用于独立 ESXi 主机。无需选择模式：导出器在登录时读取 <code>ServiceContent.About.ApiType</code> 自动适配，因为独立主机没有实际的数据中心或集群对象可遍历。</p>
+        <div class="note" data-i18n-html="ref.single.note"><strong>命令行上的密码是可见的</strong>，任何能运行 <code>ps</code> 或读取 <code>/proc</code> 的人都能看到。建议使用 <code>-envflag.enable</code> 配合环境变量文件。</div>
       </div>
     </details>
 
     <details class="doc">
-      <summary>Timing flags</summary>
+      <summary data-i18n="ref.timing.summary">时间参数</summary>
       <div class="doc-body">
         <table>
-          <tr><th>Flag</th><th>Default</th><th>Effect</th></tr>
-          <tr><td><code>-vmware.timeout</code></td><td>60</td><td>Overall budget in seconds for one scrape, covering login, property retrieval and performance sampling. Raise it for large inventories.</td></tr>
-          <tr><td><code>-vmware.interval</code></td><td>20</td><td>PerfManager sampling window in seconds. Independent of the scrape timeout.</td></tr>
-          <tr><td><code>-vmware.granularity</code></td><td>20</td><td>Sampling frequency in seconds. Must be greater than 0 and no larger than the interval.</td></tr>
+          <tr><th data-i18n="ref.timing.th_flag">参数</th><th data-i18n="ref.timing.th_default">默认值</th><th data-i18n="ref.timing.th_effect">作用</th></tr>
+          <tr><td><code>-vmware.timeout</code></td><td>60</td><td data-i18n="ref.timing.timeout">一次抓取的总超时（秒），涵盖登录、属性检索和性能采样。清单较大时可适当调高。</td></tr>
+          <tr><td><code>-vmware.interval</code></td><td>20</td><td data-i18n="ref.timing.interval">PerfManager 采样窗口（秒），与抓取超时相互独立。</td></tr>
+          <tr><td><code>-vmware.granularity</code></td><td>20</td><td data-i18n="ref.timing.granularity">采样频率（秒），必须大于 0 且不超过 interval。</td></tr>
         </table>
       </div>
     </details>
 
     <details class="doc">
-      <summary>Multi target mode</summary>
+      <summary data-i18n="ref.multi.summary">多目标模式</summary>
       <div class="doc-body">
-        <p>Required parameters: <code>target</code>, <code>username</code>, <code>password</code>. Optional: <code>schema</code> (defaults to https), <code>insecure=true</code> to skip TLS verification.</p>
-        <p>Credentials may also arrive as HTTP Basic Auth instead of URL parameters.</p>
-        <div class="note"><strong>Basic Auth collides with <code>-web.config.file</code>.</strong> When the exporter's own listener has <code>basic_auth_users</code> configured, it consumes the <code>Authorization</code> header itself, so vCenter credentials cannot travel that way. Use URL parameters, or the debug console, which posts them as a form body.</div>
-        <p>Collectors are selected with repeatable <code>collect[]</code> and <code>nocollect[]</code> parameters:</p>
-        <pre><code># default collectors only
+        <p data-i18n-html="ref.multi.required">必填参数：<code>target</code>、<code>username</code>、<code>password</code>。可选：<code>schema</code>（默认 https）、<code>insecure=true</code>（跳过 TLS 验证）。</p>
+        <p data-i18n="ref.multi.credentials">凭证也可以通过 HTTP Basic Auth 传递，而非 URL 参数。</p>
+        <div class="note" data-i18n-html="ref.multi.basic_auth"><strong>Basic Auth 与 <code>-web.config.file</code> 冲突。</strong>当导出器自身监听器配置了 <code>basic_auth_users</code> 时，<code>Authorization</code> 头被其自身占用，vCenter 凭证无法通过此方式传递。请使用 URL 参数，或调试控制台（通过表单体提交）。</div>
+        <p data-i18n-html="ref.multi.collectors">采集器通过可重复的 <code>collect[]</code> 和 <code>nocollect[]</code> 参数选择：</p>
+        <pre><code># 仅默认采集器
 /probe?target=vcenter.example.com&username=admin&password=secret&insecure=true
 
-# only VM and host metrics
+# 仅虚拟机和主机指标
 /probe?target=...&collect[]=vm&collect[]=host
 
-# everything
+# 全部采集器
 /probe?target=...&collect[]=all
 
-# everything except the esxcli collectors
+# 全部，但排除 esxcli 采集器
 /probe?target=...&collect[]=all&nocollect[]=esxcli.host.nic&nocollect[]=esxcli.storage</code></pre>
-        <p>A misspelled collector name is rejected with HTTP 400 and the list of valid names, rather than silently producing an empty metric set.</p>
+        <p data-i18n="ref.multi.misspelled">拼写错误的采集器名称将被拒绝并返回 HTTP 400 及有效名称列表，不会静默产生空指标集。</p>
       </div>
     </details>
 
     <details class="doc">
-      <summary>Prometheus configuration</summary>
+      <summary data-i18n="ref.prom.summary">Prometheus 配置</summary>
       <div class="doc-body">
-        {{ if .DebugConsole }}<p>The <a href="/config">configuration generator</a> builds these files from a list of vCenters, including the target file. The example below is what it produces for two jobs with different collectors.</p>{{ end }}
-        <p>Different collectors for different vCenters, with credentials carried in the service discovery file rather than the scrape config:</p>
+        {{ if .DebugConsole }}<p data-i18n-html="ref.prom.generator"><a href="/config">配置生成器</a>可根据 vCenter 列表构建上述文件（含目标文件）。以下示例展示的是两个任务使用不同采集器时的输出。</p>{{ end }}
+        <p data-i18n="ref.prom.intro">不同 vCenter 使用不同采集器，凭证通过服务发现文件而非 scrape config 携带：</p>
         <pre><code>scrape_configs:
-  # Production vCenter - all collectors
+  # 生产 vCenter —— 全部采集器
   - job_name: 'vmware-prod'
     scrape_interval: 60s
     metrics_path: /probe
@@ -168,7 +177,7 @@
       - target_label: __address__
         replacement: localhost:9169
 
-  # Dev vCenter - basic collectors only, scraped less often
+  # 开发 vCenter —— 仅基础采集器，抓取频率更低
   - job_name: 'vmware-dev'
     scrape_interval: 120s
     metrics_path: /probe
@@ -195,8 +204,8 @@
 
   <div class="foot">
     <span>{{ .Version }}</span>
-    <a href="https://github.com/prezhdarov/vmware-exporter">Source</a>
-    <span>Metric reference ships in docs/METRICS.md</span>
+    <a href="https://github.com/prezhdarov/vmware-exporter" data-i18n="foot.source">源码</a>
+    <span data-i18n="foot.metrics_ref">指标参考文档见 docs/METRICS.md</span>
   </div>
 </div>
 

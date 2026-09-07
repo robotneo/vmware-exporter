@@ -15,6 +15,8 @@
   --warn-soft: #fdf3e2;
   --err: #b02a2a;
   --err-soft: #fdeeee;
+  --vmw: #3c6a82;
+  --vmw-soft: #e8f0f4;
   --radius: 10px;
   --radius-lg: 14px;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
@@ -39,6 +41,8 @@
     --warn-soft: #2a2113;
     --err: #f08585;
     --err-soft: #2d1a1a;
+    --vmw: #7fb3cc;
+    --vmw-soft: #1d2a33;
   }
 }
 
@@ -81,21 +85,54 @@ a:hover { text-decoration: underline; }
   letter-spacing: -0.01em;
 }
 
+/* 品牌标识。
+ *
+ * 换成 VMware 视觉语言：原先是一个纯色圆角方块加白色小方框，与 VMware 无关。
+ * 现在用 VMware 经典的多列条形图案（vSphere / VMware 标志里的竖条元素），
+ * 配 VMware 品牌色。SVG 内联在 HTML 里而不是引外部文件，理由同 embed：
+ * 管理网段没有外网出口，任何外链图标都是一个加载不出来的破图。 */
 .brand-mark {
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   border-radius: 7px;
-  background: var(--accent);
+  background: linear-gradient(135deg, #607078 0%, #3c4a52 100%);
   display: grid;
   place-items: center;
   flex: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .18);
 }
 
-.brand-mark span {
-  width: 10px;
-  height: 10px;
-  border: 2px solid #fff;
-  border-radius: 2px;
+.brand-mark svg { display: block; }
+
+/* VMware 竖条：亮色主题下用白色，暗色主题继承同一套（底色本身就深）。 */
+.brand-mark .vm-bar { fill: #ffffff; }
+
+/* 品牌文字。VMware 的字标是小写无衬线，这里跟随该风格，
+ * 但仍用系统字体栈——嵌入字体会让二进制凭空胖几百 KB。 */
+.brand-name { font-weight: 600; letter-spacing: -0.015em; }
+.brand-name .vm { color: var(--vmw); }
+
+/* 语言切换按钮。
+ *
+ * 放在导航右侧、版本徽章之后：它是页面级设置而不是一个导航目标，
+ * 混在 /metrics、/debug 之间会让人以为点了会跳走。 */
+.lang-btn {
+  font: 500 12px var(--sans);
+  color: var(--text-2);
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  padding: 5px 11px;
+  cursor: pointer;
+  margin-left: 8px;
+  flex: none;
+  transition: border-color .12s, color .12s, background .12s;
+}
+
+.lang-btn:hover {
+  border-color: var(--vmw);
+  color: var(--vmw);
+  background: var(--vmw-soft);
 }
 
 .badge {

@@ -1407,6 +1407,7 @@ func TestStaticAssetsServed(t *testing.T) {
 		{path: "/app.css", contentType: "text/css; charset=utf-8", wantBody: "--bg"},
 		{path: "/app.js", contentType: "text/javascript; charset=utf-8", wantBody: "/probe"},
 		{path: "/config.js", contentType: "text/javascript; charset=utf-8", wantBody: "file_sd"},
+		{path: "/i18n.js", contentType: "text/javascript; charset=utf-8", wantBody: "setLang"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			rec := httptest.NewRecorder()
