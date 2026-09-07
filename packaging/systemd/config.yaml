@@ -1,0 +1,111 @@
+# vmware-exporter 配置文件
+#
+# 格式约束（来自 internal/config/config.go）：
+#   - 扁平的 `flag-name: value`，键名就是命令行 flag 去掉前导 `-`
+#   - 不能嵌套。写成 `vmware:` 下面缩进 `vcenter:` 会解析失败
+#   - 未知的键直接启动失败：config file X sets unknown flag "Y"
+#   - 值全部按字符串解析后再转换，类型不对会报
+#     cannot set flag X to "Y" from Z
+#   - 重复的键在 yaml 层就会报 mapping key "X" already defined
+#   - 密码里含 `#` 必须加引号，否则会被当成行内注释截断
+#
+# 优先级：命令行 > 本文件 > 环境变量
+#
+# 改完执行 `sudo systemctl reload vmware-exporter` 即可生效，不用重启。
+# 但下面三项是例外，改了必须 restart：
+#   http.address / web.config.file / log.format
+#
+# 权限必须是 0644。不要改成 0600 —— DynamicUser 分配的临时 uid 读不了
+# root:root 0600 的文件，服务会起不来。
+
+
+# ── 必填 ────────────────────────────────────────────────────────────────
+
+# vCenter 或独立 ESXi 主机的地址，host:port 格式。
+# 注意这里填的不是 vCenter Management Console（5480 端口）。
+vmware.vcenter: vcenter.example.com
+
+vmware.username: readonly@vsphere.local
+
+# 含 # 或 : 的密码要用引号包起来
+vmware.password: "CHANGE_ME"
+
+# 内置默认是 debug，太吵。生产建议 info。
+log.level: info
+
+
+# ── 网络 ────────────────────────────────────────────────────────────────
+
+# 监听地址。改这一项需要 restart，reload 不生效。
+http.address: ":9169"
+
+# 自签证书填 true。生产环境如果 vCenter 换了受信任证书，改回 false。
+vmware.insecureTLS: true
+
+# https 或 http
+vmware.schema: https
+
+
+# ── 超时与采样 ──────────────────────────────────────────────────────────
+
+# 单次抓取的总超时（秒），涵盖登录、属性拉取、性能采样。
+# 必须小于 Prometheus 的 scrape_timeout，否则 Prometheus 会先放弃。
+vmware.timeout: 60
+
+# PerfManager 采样窗口（秒），与 timeout 相互独立。
+vmware.interval: 20
+
+# 采样频率（秒）。必须 > 0 且 <= interval。
+vmware.granularity: 20
+
+# vSAN 性能查询的时间窗口（秒）。vSAN 统计本身是 5 分钟粒度，
+# 填小于 300 不会拿到更多数据点。
+vmware.vsan.interval: 300
+
+
+# ── 采集器开关 ──────────────────────────────────────────────────────────
+#
+# 默认开：cluster / datacenter / datastore / host / resourcepool / vm
+# 默认关：esxcli.host.nic / esxcli.storage / vsan / vsan.perf
+
+collector.cluster: true
+collector.datacenter: true
+collector.datastore: true
+collector.host: true
+collector.resourcepool: true
+collector.vm: true
+
+# 下面这些默认关闭。esxcli 系列会逐台主机遍历库存，大集群上很慢，
+# 开之前先确认 vmware.timeout 给够了。
+collector.esxcli.host.nic: false
+collector.esxcli.storage: false
+collector.vsan: false
+collector.vsan.perf: false
+
+# 跳过 vSAN 性能实体类型协商，直接查内置白名单。
+# VsanPerfGetSupportedEntityTypes 并不会报告所有可查询的实体类型，
+# 缺指标时可以打开这个。
+collector.vsan.perf.skip-verify: false
+
+# 并行运行的采集器数量上限，同时也是 esxcli 采集器内部的扇出宽度。
+# 填 0 表示不限制。
+collector.max-concurrency: 8
+
+
+# ── 其他 ────────────────────────────────────────────────────────────────
+
+# 关闭 /debug 交互式调试台。如果 exporter 的 HTTP 端口对不受信任的用户
+# 可达，请设为 false。
+web.debug-console: true
+
+# 同时输出重命名前的旧指标名。只有当你的仪表盘或告警规则还在引用旧名字
+# 时才需要打开。
+metrics.legacy: false
+
+# logfmt 或 json。改这一项需要 restart。
+log.format: logfmt
+
+# 启用 TLS / HTTP basic auth 的配置文件路径。留空表示不启用。
+# 格式见 https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md
+# 改这一项需要 restart。
+# web.config.file: /etc/vmware-exporter/web-config.yaml
