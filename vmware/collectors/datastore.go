@@ -53,6 +53,11 @@ func (c *datastoreCollector) Update(ctx context.Context, ch chan<- prometheus.Me
 
 	descs := descsFor(s.Namespace).datastore
 
+	// -metrics.legacy 在循环外快照一次，理由见 emitLegacyNames：
+	// 循环里裸读既是与 SIGHUP 重载的数据竞争，也会让一次抓取的前后半段
+	// 用上不同的值。
+	legacy := emitLegacyNames()
+
 	for _, datastore := range datastores {
 
 		datastoreRefs = append(datastoreRefs, datastore.Self)
@@ -79,7 +84,7 @@ func (c *datastoreCollector) Update(ctx context.Context, ch chan<- prometheus.Me
 			prometheus.GaugeValue, boolToFloat64(datastore.Summary.Accessible),
 			dsmo, dsName, s.Target)
 
-		if !*legacyMetrics {
+		if !legacy {
 			continue
 		}
 

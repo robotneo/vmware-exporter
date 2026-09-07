@@ -78,6 +78,11 @@ func emitPerformanceMetrics(
 		return
 	}
 
+	// -metrics.legacy 在循环外快照一次。内层循环每个计数器值都要判它，
+	// 在那里读既是数据竞争（SIGHUP 重载会写这个 flag），也会让同一个
+	// /metrics 响应里一部分指标带旧名、一部分不带 —— 见 emitLegacyNames。
+	legacy := emitLegacyNames()
+
 	for _, metric := range metrics {
 		for _, value := range metric.Value {
 			instanced := value.Instance != ""
@@ -166,7 +171,7 @@ func emitPerformanceMetrics(
 				labelValues...,
 			)
 
-			if !*legacyMetrics {
+			if !legacy {
 				continue
 			}
 

@@ -21,6 +21,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/prometheus/common/promslog"
 	"gopkg.in/yaml.v3"
@@ -50,6 +51,47 @@ var (
 	cliSet      map[string]bool
 	parseCalled bool
 )
+
+// mu 串行化「重载写 flag」与「抓取读 flag」。
+//
+// 为什么必须有它：Reload 通过 flag.FlagSet.Set 改值，而 flag 包的 setter
+// 是**裸写**，没有任何同步原语 —— 标准库 flag.go 里 intValue.Set 的最后一行
+// 就是 `*i = intValue(v)`。与此同时，本 exporter 的配置刻意设计成在请求
+// 路径上解引用（这正是「改 flag 值就能热重载」成立的原因），于是 SIGHUP
+// 协程写、HTTP 抓取协程读，构成教科书式的数据竞争。
+//
+// 竞争的后果不是「读到旧值」那么温和 —— Go 内存模型对无同步的并发读写不作
+// 任何保证，撕裂读在理论上是允许的，而实践中更常见的是编译器把循环里的
+// 解引用提到循环外，让新值永远不生效。
+//
+// 选 RWMutex 而不是把每个 flag 换成 atomic：flag 的类型由标准库定下，
+// 换不了；而读侧本来就是「每轮抓取快照一次」的粗粒度，RLock 的开销可以忽略。
+//
+// 用法契约：
+//   - 写侧只有 Reload 的提交阶段，它自己持写锁，调用方无需关心。
+//   - 读侧调用 RLock/RUnlock，或直接用 Snapshot 辅助函数。**必须一次性
+//     读完本轮需要的全部 flag**，分多次 RLock 会读到重载前后混合的配置。
+var mu sync.RWMutex
+
+// RLock/RUnlock 供读侧在快照 flag 值时使用。
+//
+// 导出这两个而不是「给每个 flag 配一个 getter」，是因为 flag 变量分散在
+// 各个包里（vmware/api 有 8 个、根包有若干），getter 方案要求每加一个
+// flag 就记得同步加一个 getter —— 漏了不会有任何编译错误或测试失败，
+// 只会让那个 flag 悄悄回到无保护状态。
+func RLock()   { mu.RLock() }
+func RUnlock() { mu.RUnlock() }
+
+// Snapshot 在读锁保护下执行 fn，fn 里应当把需要的 flag 值拷进局部变量。
+//
+// 比裸用 RLock/RUnlock 安全的地方在于它保证配对，且把「一次性读完」这个
+// 要求变成了代码结构上的约束而不是注释里的叮嘱。
+func Snapshot(fn func()) {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	fn()
+}
 
 // reloadExempt 列出重载时不可生效的 flag。
 //
@@ -241,6 +283,19 @@ func reload(fs *flag.FlagSet, path string, envEnabled bool,
 	}
 
 	var plan []change
+
+	// 从这里开始持写锁，直到提交（或回滚）结束。
+	//
+	// 锁必须覆盖计划阶段而不只是提交循环：计划阶段用 target.Value.String()
+	// 读真实 flag 的当前值，那些值同时是回滚要用的原始值。不在锁内读的话，
+	// 一次并发抓取正在读同一批 flag，读写照样撞上；更糟的是 from 可能记到
+	// 一个中间态，回滚会把配置写成一份从未存在过的组合。
+	//
+	// shadowOf 与 applyFileAndEnv 在锁外是有意的：它们只碰影子 FlagSet，
+	// 而读文件与解析环境变量可能耗时（文件在网络盘上时尤甚），把它们圈进
+	// 写锁会让每轮抓取在重载期间白等。
+	mu.Lock()
+	defer mu.Unlock()
 
 	shadow.VisitAll(func(f *flag.Flag) {
 		target := fs.Lookup(f.Name)

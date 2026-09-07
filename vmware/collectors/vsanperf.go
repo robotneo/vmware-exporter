@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/prezhdarov/vmware-exporter/internal/collector"
+	"github.com/prezhdarov/vmware-exporter/internal/config"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vsan"
@@ -104,6 +106,30 @@ var vsanPerfSkipVerify = flag.Bool("collector.vsan.perf.skip-verify", false,
 
 var vsanPerfCollectorFlag = flag.Bool(fmt.Sprintf("collector.%s", vsanPerfFlagName), collector.DefaultDisabled, fmt.Sprintf("Enable the %s collector (default: %v)", vsanPerfFlagName, collector.DefaultDisabled))
 
+// vsanPerfSettings 是本 collector 一轮抓取用到的两个 flag 的快照。
+//
+// 与 emitLegacyNames 同理：SIGHUP 重载通过 flag.Set 裸写这两个变量，抓取
+// 协程同时在读。两个一起快照而不是各配一个 getter，是因为它们在同一轮
+// 抓取里被用于同一个决定（查哪些实体、查多长的窗口）—— 分开读会让一次
+// 落在中间的重载把这两个参数配成一份从未存在过的组合。
+type vsanPerfSettings struct {
+	interval   int
+	skipVerify bool
+}
+
+func currentVsanPerfSettings() vsanPerfSettings {
+	var s vsanPerfSettings
+
+	config.Snapshot(func() {
+		s = vsanPerfSettings{
+			interval:   *vsanPerfInterval,
+			skipVerify: *vsanPerfSkipVerify,
+		}
+	})
+
+	return s
+}
+
 func init() {
 	collector.RegisterFlag(vsanPerfFlagName, vsanPerfCollectorFlag)
 }
@@ -169,8 +195,12 @@ func (c *vsanPerfCollector) Update(ctx context.Context, ch chan<- prometheus.Met
 		return fmt.Errorf("creating vsan client: %w", err)
 	}
 
+	// 两个 vsan.perf flag 在集群循环外快照一次。放循环里等于让同一轮抓取
+	// 的不同集群用上不同的窗口长度或不同的协商策略 —— 见 vsanPerfSettings。
+	cfg := currentVsanPerfSettings()
+
 	for _, cluster := range clusters {
-		if err := c.collectCluster(ctx, ch, s, client, cluster); err != nil {
+		if err := c.collectCluster(ctx, ch, s, client, cluster, cfg); err != nil {
 			c.logger.Warn("vsan performance collection failed for cluster",
 				"cluster", cluster.Name, "cmo", cluster.Self.Value, "err", err)
 		}
@@ -186,8 +216,9 @@ func (c *vsanPerfCollector) collectCluster(
 	s *collector.Scrape,
 	client vsanRoundTripper,
 	cluster mo.ClusterComputeResource,
+	cfg vsanPerfSettings,
 ) error {
-	entities, err := c.resolveEntityTypes(ctx, client, cluster)
+	entities, err := c.resolveEntityTypes(ctx, client, cluster, cfg.skipVerify)
 	if err != nil {
 		return err
 	}
@@ -208,7 +239,7 @@ func (c *vsanPerfCollector) collectCluster(
 	// 时间窗口以当前时刻为终点回看。startTime/endTime 是 *time.Time
 	// （非 omitempty），必须都给值。
 	end := time.Now().UTC()
-	start := end.Add(-time.Duration(*vsanPerfInterval) * time.Second)
+	start := end.Add(-time.Duration(cfg.interval) * time.Second)
 
 	specs := make([]vsantypes.VsanPerfQuerySpec, 0, len(entities))
 	for _, entity := range entities {
@@ -268,8 +299,9 @@ func (c *vsanPerfCollector) resolveEntityTypes(
 	ctx context.Context,
 	client vsanRoundTripper,
 	cluster mo.ClusterComputeResource,
+	skipVerify bool,
 ) ([]string, error) {
-	if *vsanPerfSkipVerify {
+	if skipVerify {
 		// 逃生门：不问 vCenter，直接用白名单。见 flag 定义处的说明 ——
 		// 这个 API 不申报全部可查实体类型，取交集会漏。
 		c.logger.Debug("skipping vsan performance entity type negotiation",

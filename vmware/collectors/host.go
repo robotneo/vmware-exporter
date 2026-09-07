@@ -66,6 +66,9 @@ func (c *hostCollector) Update(ctx context.Context, ch chan<- prometheus.Metric,
 
 	}
 
+	// -metrics.legacy 在循环外快照一次，理由见 emitLegacyNames。
+	legacy := emitLegacyNames()
+
 	for _, host := range hosts {
 
 		if host.Runtime.PowerState == "poweredOn" && host.Runtime.ConnectionState == "connected" && !host.Runtime.InMaintenanceMode {
@@ -111,7 +114,7 @@ func (c *hostCollector) Update(ctx context.Context, ch chan<- prometheus.Metric,
 				prometheus.GaugeValue, float64(hw.MemorySize),
 				moid, name, target)
 
-			if !*legacyMetrics {
+			if !legacy {
 				continue
 			}
 

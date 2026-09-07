@@ -65,6 +65,13 @@ func (c *vmCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s
 
 	}
 
+	// -metrics.legacy 在循环外快照一次，理由见 emitLegacyNames：
+	// 循环里裸读既是与 SIGHUP 重载的数据竞争，也会让一次抓取的前后半段
+	// 用上不同的值 —— 这里尤其明显，两处读点分别在 VM 层与 datastore
+	// 内层循环，一次落在中间的重载能让同一台 VM 的内存旧名有、
+	// 存储旧名没有。
+	legacy := emitLegacyNames()
+
 	for _, vm := range vms {
 
 		if vm.Runtime.PowerState == "poweredOn" {
@@ -90,7 +97,7 @@ func (c *vmCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s
 				prometheus.GaugeValue, float64(vm.Summary.Config.MemorySizeMB)*1048576,
 				moid, name, hostMoid, target)
 
-			if *legacyMetrics {
+			if legacy {
 				ch <- prometheus.MustNewConstMetric(descs.memCapacity,
 					prometheus.GaugeValue, float64(vm.Summary.Config.MemorySizeMB),
 					moid, name, hostMoid, target)
@@ -103,7 +110,7 @@ func (c *vmCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s
 					moid, name, target, datastore.Datastore.Value)
 
 				// 旧名保留原值（本来就是字节，换算是 ×1）。
-				if *legacyMetrics {
+				if legacy {
 					ch <- prometheus.MustNewConstMetric(descs.dsCapacityUsed,
 						prometheus.GaugeValue, float64(datastore.Committed),
 						moid, name, target, datastore.Datastore.Value)

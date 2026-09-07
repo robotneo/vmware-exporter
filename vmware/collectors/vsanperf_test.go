@@ -81,8 +81,11 @@ func collectVsanPerfCluster(t *testing.T, stub *vsanPerfStub) (
 	// 缓冲够大即可，理由同 collectVsanCluster：不能 close(ch)。
 	ch := make(chan prometheus.Metric, 500)
 
+	// 走 currentVsanPerfSettings 而不是硬编码一份 vsanPerfSettings：
+	// setSkipVerify 是通过改 flag 生效的，测试必须读同一个来源，
+	// 否则「skip-verify 打开时不协商实体类型」那组用例会绕过被测逻辑。
 	err := c.collectCluster(context.Background(), ch, s, stub,
-		testVsanCluster("domain-c7", "vsan-cluster"))
+		testVsanCluster("domain-c7", "vsan-cluster"), currentVsanPerfSettings())
 
 	series := map[string][]map[string]string{}
 	values := map[string][]float64{}
