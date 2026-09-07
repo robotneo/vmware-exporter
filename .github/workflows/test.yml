@@ -83,6 +83,41 @@ jobs:
         # distinguishable from a logic failure in the job summary.
         run: go test -race ./...
 
+  vuln:
+    name: Vulnerability scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # govulncheck does reachability analysis, not a dependency-version diff:
+      # it fails only when a vulnerable *symbol* is actually callable from this
+      # code. That is what makes it usable as a blocking check -- a plain
+      # "is any dependency listed in the database" gate would be red almost
+      # permanently and get ignored within a week.
+      #
+      # Concretely, this repository requires golang.org/x/crypto, which carries
+      # a permanent GO-2026-5932 advisory for the unmaintained openpgp package
+      # (Fixed in: N/A). Nothing here imports openpgp, so source mode reports
+      # zero and the job passes. A `-mode=binary` scan of the release artifact
+      # *does* flag it, because `-s -w` strips the symbol table and govulncheck
+      # degrades to module-level reporting. Do not switch this step to binary
+      # mode expecting the same answer.
+      #
+      # Standard-library advisories are covered too: the toolchain version comes
+      # from go.mod via setup-go, so a Go patch release that fixes a reachable
+      # stdlib bug turns this job red until go.mod is bumped.
+      - name: Run govulncheck
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
