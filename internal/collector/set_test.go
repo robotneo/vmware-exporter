@@ -228,7 +228,7 @@ func TestPanickingCollectorDoesNotKillTheProcess(t *testing.T) {
 		Creator: func(logger *slog.Logger) (Collector, error) {
 			return &stubCollector{onUpdate: func(ctx context.Context, s *Scrape) error {
 				var m map[string]string
-				m["boom"] = "now"
+				m["boom"] = "now" //nolint:staticcheck // SA5000 intentional: a nil-map write is the runtime panic this test must recover from.
 				return nil
 			}}, nil
 		},

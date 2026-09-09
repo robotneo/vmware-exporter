@@ -210,6 +210,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `system/vmware-exporter.service`.** The unit file uses `src: system/...` +
   `dst: .` to flatten the directory structure in the archive.
 
+- **The CI Lint job is green again.** golangci-lint v2.x reported three
+  staticcheck findings, all in `_test.go`, that had left the job red across
+  releases: two `QF1001` De Morgan's-law suggestions in
+  `internal/config/config_test.go` (the positive condition is now named in a
+  `consistent` bool, behaviour unchanged) and one `SA5000` "assignment to nil
+  map" in `internal/collector/set_test.go`. The nil-map write is the *point* of
+  `TestPanickingCollectorDoesNotKillTheProcess` — it must raise a runtime panic
+  to exercise the collector recover path — so it carries a scoped
+  `//nolint:staticcheck // SA5000 intentional` rather than being rewritten. The
+  test still passes with `-count=1`, confirming the panic and the recover both
+  still happen.
+
 ### 🔐 Security — rotate your vCenter credentials
 
 **This repository shipped working vCenter passwords in plain text. They are in
