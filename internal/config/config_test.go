@@ -519,7 +519,8 @@ func TestReloadIsRaceFreeAgainstSnapshotReaders(t *testing.T) {
 	// 断言读到的是两份配置之一，而不是混合值。这一条在没有竞争检测的
 	// 普通 go test 下也有意义：它锁住「Snapshot 一次读完」这个契约 ——
 	// interval=30 配 vcenter=even 就说明快照跨越了一次重载。
-	if !(sink == 20 && sinkS == "even") && !(sink == 30 && sinkS == "odd") {
+	consistent := (sink == 20 && sinkS == "even") || (sink == 30 && sinkS == "odd")
+	if !consistent {
 		t.Errorf("snapshot read a mix of two configurations: interval=%d vcenter=%q", sink, sinkS)
 	}
 }
@@ -625,7 +626,8 @@ func TestConcurrentReloadsAreRaceFree(t *testing.T) {
 		vcenter = fs.Lookup("vmware.vcenter").Value.String()
 	})
 
-	if !(interval == "20" && vcenter == "even") && !(interval == "30" && vcenter == "odd") {
+	consistent := (interval == "20" && vcenter == "even") || (interval == "30" && vcenter == "odd")
+	if !consistent {
 		t.Errorf("concurrent reloads left a mixed configuration: interval=%s vcenter=%s", interval, vcenter)
 	}
 }
