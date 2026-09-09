@@ -182,6 +182,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `VMWARE_vmware_username` and `VMWARE_vmware_password` to be present, so
   emptying the file does not bypass the other checks.
 
+- **The scripted one-shot deployment bundle under `packaging/systemd/` is now
+  held together by CI.** `check_packaging()` verifies that every key in
+  `config.yaml` — including commented example lines an operator will uncomment —
+  is a flag the binary actually registers, that the mapping stays flat as
+  `config.go` requires, that the unit's `-file=` path and binary match the
+  destinations `install.sh` installs to, that the unit carries `ExecReload`
+  only while the binary handles SIGHUP, and that every file
+  `scripts/build-systemd-pkg.sh` tars up exists. Before this, the bundle was
+  validated by nothing, so a renamed flag could ship a config that aborts with
+  "config sets unknown flag" at install time while every build stayed green.
+  Reverse-verified by injecting an unknown key, a unit/install path mismatch,
+  and a missing build input — each reported with its specific message.
+
 - **`README.md` and `README-zh.md` updated.** Both now document the environment-
   variable-based `vmware.conf`, the `restart`-not-`reload` requirement, and a
   `DynamicUser` fallback for systemd < 232. The old `ARGS=` form is removed from

@@ -179,7 +179,10 @@ jobs:
       # docs/METRICS-zh.md have drifted apart in either direction -- a metric
       # added without a doc entry, or an entry left behind after a rename. Both
       # translations are checked, so a rename cannot be applied to one and
-      # forgotten in the other.
+      # forgotten in the other. It also holds the packaging/systemd/ one-shot
+      # bundle together: config.yaml keys must be registered flags, the unit's
+      # -file and binary paths must match install.sh's destinations, and every
+      # file the systemd build script tars up must exist.
       - name: Check shipped configuration
         run: python scripts/check_config.py
 
