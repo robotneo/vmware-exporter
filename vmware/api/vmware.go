@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/prezhdarov/vmware-exporter/internal/collector"
+	"github.com/prezhdarov/vmware-exporter/internal/config"
 
 	"github.com/vmware/govmomi/performance"
 	"github.com/vmware/govmomi/session/cache"
@@ -37,28 +38,81 @@ const logoutTimeout = 10 * time.Second
 // ValidateFlags 在启动阶段校验 vmware.* 参数组合，避免把非法值带进运行期
 // 引发除零 panic 或永远拿不到采样数据。必须在 flag 解析之后、HTTP 服务
 // 启动之前调用。
+//
+// 也在 SIGHUP 重载之后被调用，那时 HTTP 服务已经在跑，所以它同样要走快照
+// 而不是裸读 flag —— 否则这个「用来防止坏配置进入运行期」的函数自己就是
+// 一处数据竞争。
 func ValidateFlags() error {
-	if *vmGranularity <= 0 {
-		return fmt.Errorf("-vmware.granularity must be greater than 0, got %d", *vmGranularity)
+	cfg := currentSettings()
+
+	if cfg.granularity <= 0 {
+		return fmt.Errorf("-vmware.granularity must be greater than 0, got %d", cfg.granularity)
 	}
 
-	if *vmwInterval <= 0 {
-		return fmt.Errorf("-vmware.interval must be greater than 0, got %d", *vmwInterval)
+	if cfg.interval <= 0 {
+		return fmt.Errorf("-vmware.interval must be greater than 0, got %d", cfg.interval)
 	}
 
-	if *vmwInterval < *vmGranularity {
-		return fmt.Errorf("-vmware.interval (%d) must be greater than or equal to -vmware.granularity (%d), otherwise no sample would ever be collected", *vmwInterval, *vmGranularity)
+	if cfg.interval < cfg.granularity {
+		return fmt.Errorf("-vmware.interval (%d) must be greater than or equal to -vmware.granularity (%d), otherwise no sample would ever be collected", cfg.interval, cfg.granularity)
 	}
 
-	if *vmwTimeout <= 0 {
-		return fmt.Errorf("-vmware.timeout must be greater than 0, got %d", *vmwTimeout)
+	if cfg.timeout <= 0 {
+		return fmt.Errorf("-vmware.timeout must be greater than 0, got %d", cfg.timeout)
 	}
 
-	if *vmwSchema != "http" && *vmwSchema != "https" {
-		return fmt.Errorf(`-vmware.schema must be either "http" or "https", got %q`, *vmwSchema)
+	if cfg.schema != "http" && cfg.schema != "https" {
+		return fmt.Errorf(`-vmware.schema must be either "http" or "https", got %q`, cfg.schema)
 	}
 
 	return nil
+}
+
+// settings 是一轮抓取用到的全部 vmware.* 配置的快照。
+//
+// 存在的理由是数据竞争：SIGHUP 重载通过 flag.FlagSet.Set 改这些 flag，
+// 而 flag 包的 setter 是裸写（标准库 flag.go 里 intValue.Set 的最后一行
+// 就是 `*i = intValue(v)`，没有任何同步原语）。这些 flag 又全部在请求
+// 路径上解引用 —— 那正是「改 flag 值即可热重载」成立的前提。于是重载
+// 协程写、抓取协程读，构成数据竞争。
+//
+// 快照一次而不是每处加锁，还顺带修掉一个正确性问题：以前 Login 里
+// 分三处解引用（timeout 在 L162、interval/granularity 在 L212 与 L226），
+// 一次恰好落在中间的重载会让同一轮抓取用上两份配置的混合值 —— 例如
+// interval 取新值、granularity 取旧值，算出的 samples 是任何一份配置里
+// 都不存在的数。
+type settings struct {
+	user        string
+	passwd      string
+	vcenter     string
+	schema      string
+	insecureTLS bool
+	interval    int
+	granularity int
+	timeout     int
+}
+
+// currentSettings 在读锁保护下一次性拷出全部 vmware.* flag。
+//
+// 一次性读完是契约的一部分：分多次 RLock 会读到重载前后混合的配置，
+// 那正是这个函数要消除的问题。
+func currentSettings() settings {
+	var s settings
+
+	config.Snapshot(func() {
+		s = settings{
+			user:        *vmwUser,
+			passwd:      *vmwPasswd,
+			vcenter:     *vCenter,
+			schema:      *vmwSchema,
+			insecureTLS: *vmwTLS,
+			interval:    *vmwInterval,
+			granularity: *vmGranularity,
+			timeout:     *vmwTimeout,
+		}
+	})
+
+	return s
 }
 
 type VMware struct {
@@ -103,11 +157,13 @@ func Load(logger *slog.Logger) {
 func (vm *VMware) Login(ctx context.Context, target string) (*collector.Scrape, func(), error) {
 	noop := func() {}
 
+	cfg := currentSettings()
+
 	if target == "" {
-		target = *vCenter
+		target = cfg.vcenter
 	}
 
-	if *vmwUser == "" || *vmwPasswd == "" {
+	if cfg.user == "" || cfg.passwd == "" {
 		return nil, noop, fmt.Errorf("default credentials not configured. Please set -vmware.username and -vmware.password flags")
 	}
 
@@ -115,19 +171,29 @@ func (vm *VMware) Login(ctx context.Context, target string) (*collector.Scrape, 
 		return nil, noop, fmt.Errorf("target not specified and -vmware.vcenter flag not set")
 	}
 
-	return vm.LoginWithCredentials(ctx, Credentials{
-		Username: *vmwUser,
-		Password: *vmwPasswd,
+	return vm.loginWithCredentials(ctx, Credentials{
+		Username: cfg.user,
+		Password: cfg.passwd,
 		Target:   target,
-		Schema:   *vmwSchema,
-		Insecure: *vmwTLS,
-	}, slog.Default())
+		Schema:   cfg.schema,
+		Insecure: cfg.insecureTLS,
+	}, slog.Default(), cfg)
 }
 
 // LoginWithCredentials 用显式凭证登录，服务 /probe 的多 target 模式。
 //
 // 返回的 cleanup 永不为 nil，调用方可以无条件 defer 而不必判空。
 func (vm *VMware) LoginWithCredentials(ctx context.Context, creds Credentials, logger *slog.Logger) (*collector.Scrape, func(), error) {
+	return vm.loginWithCredentials(ctx, creds, logger, currentSettings())
+}
+
+// loginWithCredentials 是上面两个入口的共同实现，cfg 由调用方快照后传入。
+//
+// 把快照放在调用方而不是这里，是为了让 Login 那条路径只快照一次：
+// 它需要先用 cfg 里的凭证与 vcenter 构造 Credentials，再进到这里用
+// cfg 里的 timeout 与采样参数。两次快照之间发生重载就会混用两份配置。
+func (vm *VMware) loginWithCredentials(ctx context.Context, creds Credentials,
+	logger *slog.Logger, cfg settings) (*collector.Scrape, func(), error) {
 	noop := func() {}
 
 	if creds.Target == "" {
@@ -139,7 +205,7 @@ func (vm *VMware) LoginWithCredentials(ctx context.Context, creds Credentials, l
 	}
 
 	if creds.Schema == "" {
-		creds.Schema = *vmwSchema
+		creds.Schema = cfg.schema
 	}
 
 	if logger == nil {
@@ -159,7 +225,7 @@ func (vm *VMware) LoginWithCredentials(ctx context.Context, creds Credentials, l
 	// 旧实现是 context.WithTimeout(context.Background(), ...)，请求侧的取消
 	// 完全传不进来。更早的版本还从采样频率推导超时（interval-2 秒，默认只有
 	// 18s），大规模环境下属性检索还没跑完就被掐断。
-	scrapeCtx, cancel := context.WithTimeout(ctx, time.Duration(*vmwTimeout)*time.Second)
+	scrapeCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.timeout)*time.Second)
 
 	session := &cache.Session{
 		URL:         urlx,
@@ -209,7 +275,7 @@ func (vm *VMware) LoginWithCredentials(ctx context.Context, creds Credentials, l
 
 	// granularity 已在启动时由 ValidateFlags 保证 > 0，这里不会除零。
 	// 同时保证至少取 1 个采样点，避免 interval 略小于 granularity 时算出 0。
-	samples := *vmwInterval / *vmGranularity
+	samples := cfg.interval / cfg.granularity
 	if samples < 1 {
 		samples = 1
 	}
@@ -223,7 +289,7 @@ func (vm *VMware) LoginWithCredentials(ctx context.Context, creds Credentials, l
 		// 目标类型探测必须在登录成功之后 —— ServiceContent 是登录的产物。
 		// 结果供全部下游 collector 选择行为分支。
 		TargetType: detectTargetType(client, logger),
-		Interval:   int32(*vmwInterval),
+		Interval:   int32(cfg.interval),
 		Samples:    int32(samples),
 	}
 

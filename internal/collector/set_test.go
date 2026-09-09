@@ -202,6 +202,99 @@ func TestCollectInjectsNamespaceAndConcurrency(t *testing.T) {
 	}
 }
 
+// TestPanickingCollectorDoesNotKillTheProcess 锁住 safeUpdate 的 recover。
+//
+// collector 跑在 errgroup 起的**子协程**里。Go 的 panic 不跨协程传播，所以
+// promhttp 装在 serve 协程上的 recover 对它完全无效 —— 子协程一 panic，
+// 整个 exporter 进程就没了，**所有** target 一起失联，而不只是出事的那个。
+//
+// 这个测试本身也是它自己的反向验证：把 safeUpdate 换回 c.Update(...)，
+// 测试进程会直接崩掉（不是 FAIL，是整个包的测试异常中断）。
+//
+// 三条断言分别防三种「修一半」：
+//   - 进程存活 + 其余 collector 照常产出 → 防「recover 了但把整轮抓取也丢了」
+//   - 出事的那个 success=0 → 防「recover 了但报成功」，那比崩溃更糟：
+//     数据缺失且监控显示一切正常
+//   - errors_total 计数 → 防「只写日志不记指标」，告警读不到
+func TestPanickingCollectorDoesNotKillTheProcess(t *testing.T) {
+	login := &stubLogin{scrape: &Scrape{Target: "vcenter.example.com", TargetType: TargetTypeVCenter}}
+
+	// 一个必 panic、两个正常。用 nil map 写入来 panic 而不是 panic("boom")：
+	// 真实世界里 collector 是被 nil 解引用/越界打挂的，runtime error 走的
+	// 是同一条 recover 路径，但顺带确认我们没有只处理显式 panic 值。
+	defs, _ := stubDefinitions(2, nil)
+	defs = append(defs, Definition{
+		Name: "exploding",
+		Creator: func(logger *slog.Logger) (Collector, error) {
+			return &stubCollector{onUpdate: func(ctx context.Context, s *Scrape) error {
+				var m map[string]string
+				m["boom"] = "now"
+				return nil
+			}}, nil
+		},
+		DefaultEnabled: DefaultEnabled,
+	})
+
+	errs := NewScrapeErrors()
+
+	cs, err := NewCollectorSet(context.Background(), defs, Options{
+		Namespace: "vmware",
+		Target:    "vcenter.example.com",
+		Login:     login,
+		Errors:    errs,
+	})
+	if err != nil {
+		t.Fatalf("NewCollectorSet failed: %s", err)
+	}
+
+	body := gatherText(t, cs)
+
+	// 1. 抓取整体成功，正常的 collector 不受牵连。
+	if !strings.Contains(body, "vmware_up 1") {
+		t.Errorf("vmware_up 1 missing: one panicking collector should not fail the whole scrape;\n%s", body)
+	}
+	for _, name := range []string{"c0", "c1"} {
+		want := `vmware_scrape_collector_success{collector="` + name + `"} 1`
+		if !strings.Contains(body, want) {
+			t.Errorf("%s missing: healthy collectors must still report success;\n%s", want, body)
+		}
+	}
+
+	// 2. 出事的那个必须报失败，不能被静默吞掉。
+	if want := `vmware_scrape_collector_success{collector="exploding"} 0`; !strings.Contains(body, want) {
+		t.Errorf("%s missing: a panic was recovered but reported as success;\n%s", want, body)
+	}
+
+	// 3. errors_total 要计数，否则告警侧看不到。
+	if want := `vmware_scrape_errors_total{collector="exploding"} 1`; !strings.Contains(body, want) {
+		t.Errorf("%s missing: the panic was not counted as a scrape error;\n%s", want, body)
+	}
+}
+
+// TestPanicErrorCarriesStack 断言 recover 出来的 error 带调用栈。
+//
+// 只记 recover() 的返回值，日志里就只有一句 "runtime error: invalid memory
+// address or nil pointer dereference" —— 不含文件名行号，等于告诉运维
+// 「你的某个 collector 挂了，自己找」。
+func TestPanicErrorCarriesStack(t *testing.T) {
+	c := &stubCollector{onUpdate: func(ctx context.Context, s *Scrape) error {
+		panic("kaboom")
+	}}
+
+	err := safeUpdate(context.Background(), c, make(chan prometheus.Metric, 1), &Scrape{})
+	if err == nil {
+		t.Fatal("safeUpdate returned nil for a panicking collector")
+	}
+	if !strings.Contains(err.Error(), "kaboom") {
+		t.Errorf("panic value lost: %v", err)
+	}
+	// 栈里必然出现本测试函数名；只断言 "goroutine" 之类的通用词会被
+	// 一个随便拼个字符串的实现骗过。
+	if !strings.Contains(err.Error(), "TestPanicErrorCarriesStack") {
+		t.Errorf("error does not carry a stack trace, leaving no way to locate the fault:\n%v", err)
+	}
+}
+
 // TestMaxConcurrencyRespected 断言同时运行的 collector 数不超过上限。
 //
 // 这是框架第四个缺陷的验收：-prom.maxRequests 是死参数（exporter.go:20 存进

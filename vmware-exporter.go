@@ -85,6 +85,57 @@ var (
 		"Serve the interactive debug console on /debug. Disable it for deployments where the exporter's HTTP interface is reachable by untrusted users.")
 )
 
+// exporterSettings 是一次请求用到的根包 flag 快照。
+//
+// 为什么需要快照而不是就地解引用：SIGHUP 重载通过 flag.FlagSet.Set 改写
+// 这些 flag 指针，而 flag 包的 setter 是**裸写** —— 标准库 flag.go 里
+// intValue.Set 的最后一行就是 `*i = intValue(v)`，没有任何同步原语。
+// 与此同时这些 flag 全部在 HTTP 请求路径上被读（这正是「改 flag 值即可
+// 热重载」成立的前提）。于是重载协程写、抓取协程读，构成数据竞争。
+//
+// 一次读完整组而不是逐处加锁，是为了让一次请求看到的是配置的**一致切片**。
+// 分两次读的话，一次恰好落在中间的重载能让同一个 /metrics 请求既走
+// 「target 未禁用」的分支，又用上重载后的并发上限 —— 那是两份配置的混合，
+// 复现和排查都无从下手。
+//
+// 注意 -http.address / -web.config.file / -log.format 不在此列：它们在
+// config.reloadExempt 里，重载永远不会写它们，读它们没有竞争。
+type exporterSettings struct {
+	maxConcurrency  int
+	targetDisabled  bool
+	metricsDisabled bool
+	debugConsole    bool
+}
+
+func currentExporterSettings() exporterSettings {
+	var s exporterSettings
+
+	config.Snapshot(func() {
+		s = exporterSettings{
+			maxConcurrency:  *maxConcurrency,
+			targetDisabled:  *disableExporterTarget,
+			metricsDisabled: *disableExporterMetrics,
+			debugConsole:    *debugConsole,
+		}
+	})
+
+	return s
+}
+
+// currentMaxConcurrency 是只需要并发上限一个值时的窄口径快照。
+//
+// 单独留一个而不是让调用方去取整组，是因为 probeHandler 只用得上这一个：
+// 它的 target、凭证与 collector 选择全部来自请求参数，不读 flag。
+func currentMaxConcurrency() int {
+	var v int
+
+	config.Snapshot(func() {
+		v = *maxConcurrency
+	})
+
+	return v
+}
+
 // scrapeErrors 是 vmware_scrape_errors_total 的进程级累加状态。
 //
 // 必须在 handler 之外、进程生命周期内只有一份：CollectorSet 每请求构造一个
@@ -294,9 +345,14 @@ func serveScrape(w http.ResponseWriter, r *http.Request, cs *collector.Collector
 // metricsHandler 服务 /metrics：单 vCenter 模式，凭证来自全局 flag。
 func metricsHandler(logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// 三个 flag 一次快照。分开读会让一次恰好落在中间的 SIGHUP 重载
+		// 把同一个请求切成两半：前半用旧的 target 开关，后半用新的并发
+		// 上限。详见 exporterSettings 的注释。
+		cfg := currentExporterSettings()
+
 		// -disable.exporter.target 时只输出 exporter 自身的指标，
 		// 不去连 vCenter。
-		if *disableExporterTarget {
+		if cfg.targetDisabled {
 			promhttp.Handler().ServeHTTP(w, r)
 			return
 		}
@@ -310,7 +366,7 @@ func metricsHandler(logger *slog.Logger) http.HandlerFunc {
 			Login:          vmware.NewAPI(),
 			Logger:         logger,
 			Enabled:        collector.Registered(),
-			MaxConcurrency: *maxConcurrency,
+			MaxConcurrency: cfg.maxConcurrency,
 			Errors:         scrapeErrors,
 		})
 		if err != nil {
@@ -319,7 +375,7 @@ func metricsHandler(logger *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		serveScrape(w, r, cs, !*disableExporterMetrics, logger)
+		serveScrape(w, r, cs, !cfg.metricsDisabled, logger)
 	}
 }
 
@@ -409,7 +465,7 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 		},
 		Logger:         logger,
 		Enabled:        enabledCollectors,
-		MaxConcurrency: *maxConcurrency,
+		MaxConcurrency: currentMaxConcurrency(),
 		Errors:         scrapeErrors,
 	})
 	if err != nil {
@@ -524,6 +580,13 @@ func defaultScrapeAddr(listen string) string {
 }
 
 // pageData 组装三个页面共用的模板数据。
+//
+// 每次请求都会调用（落地页刻意不缓存，见 registerUI），所以它也在重载的
+// 读侧上：-disable.exporter.target 与 -web.debug-console 都是可热改的
+// flag。走 currentExporterSettings 一次性快照，理由同 metricsHandler。
+//
+// -http.address 例外：它在 config.reloadExempt 里，重载不会写它，
+// 而且它在这里只是拿来渲染一段示例配置。
 func pageData() ui.Data {
 	// version.Info() 在没有 ldflags 的构建里返回带空字段的字符串，页面上
 	// 显示成一串括号很难看。这种情况直接标 dev —— 本地 go build 出来的
@@ -533,12 +596,14 @@ func pageData() ui.Data {
 		v = "dev"
 	}
 
+	cfg := currentExporterSettings()
+
 	return ui.Data{
 		ExporterName:          exporterName,
 		Version:               v,
 		Collectors:            collectorDocs(),
-		DebugConsole:          *debugConsole,
-		MetricsTargetDisabled: *disableExporterTarget,
+		DebugConsole:          cfg.debugConsole,
+		MetricsTargetDisabled: cfg.targetDisabled,
 		DefaultListenAddr:     defaultScrapeAddr(*listenAddress),
 	}
 }
@@ -636,15 +701,20 @@ func registerUI(mux *http.ServeMux, logger *slog.Logger, enableDebugConsole bool
 		})
 	}
 
-	// 静态资源。三个页面都引用 app.css；app.js 只有调试页需要、config.js
-	// 只有配置页需要，但都无条件提供 —— 它们不含任何配置或凭证，藏起来
-	// 只会在 -web.debug-console=false 时留下一个 404 的引用。
+	// 静态资源。三个页面都引用 app.css 与 i18n.js；app.js 只有调试页需要、
+	// config.js 只有配置页需要，但都无条件提供 —— 它们不含任何配置或凭证，
+	// 藏起来只会在 -web.debug-console=false 时留下一个 404 的引用。
+	//
+	// i18n.js 必须无条件提供且不能延后加载：三个页面的 HTML 里写的是中文
+	// 字面量（默认语言），切到英文完全依赖这个脚本。取不到它的话页面不会
+	// 报错，只是那个 EN 按钮点了没反应 —— 这种「静默降级」比 404 更难查。
 	for _, asset := range []struct {
 		path, contentType string
 	}{
 		{"app.css", "text/css; charset=utf-8"},
 		{"app.js", "text/javascript; charset=utf-8"},
 		{"config.js", "text/javascript; charset=utf-8"},
+		{"i18n.js", "text/javascript; charset=utf-8"},
 	} {
 		body, err := ui.Asset(asset.path)
 		if err != nil {
@@ -722,7 +792,15 @@ func reloadConfig(logger *slog.Logger, promslogLevel *promslog.Level) {
 	// -log.level 的值此时已经被 Reload 写回 flag，但 logger 内部的 LevelVar
 	// 还是旧的，要显式同步过去。放在 ValidateFlags 之前：级别本身非法会被
 	// Set 拒绝，那属于配置错误，应该和其他重载失败一样处理。
-	if err := promslogLevel.Set(*logLevel); err != nil {
+	//
+	// 走快照而不是裸读 *logLevel：Reload 的写锁在返回时就释放了，这里已经
+	// 在锁外。目前只有一个信号协程调 reloadConfig，但 Reload 是导出函数、
+	// 没有任何东西保证这一点 —— 两次并发重载时这个读会撞上另一次的写。
+	var level string
+
+	config.Snapshot(func() { level = *logLevel })
+
+	if err := promslogLevel.Set(level); err != nil {
 		configLastReloadSuccess.Set(0)
 		logger.Error("configuration reload failed, keeping the previous configuration", "error", err)
 
@@ -752,7 +830,7 @@ func reloadConfig(logger *slog.Logger, promslogLevel *promslog.Level) {
 	configLastReloadSuccess.Set(1)
 	configLastReloadTime.SetToCurrentTime()
 
-	logger.Info("configuration reload succeeded", "log_level", *logLevel)
+	logger.Info("configuration reload succeeded", "log_level", level)
 }
 
 func main() {
@@ -790,18 +868,6 @@ func main() {
 
 	logger.Debug("exporter target setting", "disabled", *disableExporterTarget)
 
-	// SIGHUP -> 重新读 -file 与环境变量。必须在 ListenAndServe 之前启动：
-	// 那个调用会阻塞到进程退出，之后的代码不会被执行。
-	//
-	// ctx 的 cancel 在 main 返回时触发，让 goroutine 退出并解除信号注册。
-	// 单进程的 exporter 里这在实践上无关紧要（进程紧接着就结束了），但把
-	// goroutine 的生命周期与 main 绑起来是纪律问题 —— 泄漏的 signal.Notify
-	// 在测试里会互相干扰。
-	reloadCtx, stopReload := context.WithCancel(context.Background())
-	defer stopReload()
-
-	go handleReloadSignals(reloadCtx, logger, promslogConfig.Level)
-
 	vmware.Load(logger)
 	vmwareCollectors.Load(logger)
 
@@ -820,6 +886,28 @@ func main() {
 		logger.Error("could not register the web UI", "error", err)
 		os.Exit(1)
 	}
+
+	// SIGHUP -> 重新读 -file 与环境变量。
+	//
+	// 位置有两个硬约束，它被夹在中间：
+	//
+	//  1. 必须在 ListenAndServe **之前** —— 那个调用会阻塞到进程退出，
+	//     之后的代码不会被执行。
+	//  2. 必须在上面那批启动期 flag 读取**之后**。这一条是本次修复补上的：
+	//     启动路径上的 *disableExporterTarget 与 *debugConsole 是裸读，
+	//     没有走 config.Snapshot（刻意如此 —— 它们只在启动时读一次，
+	//     为此加锁是噪音）。但只要重载协程已经在跑，一个恰好在这个窗口
+	//     到达的 SIGHUP 就能与它们撞上。窗口只有几微秒，正因为窄，
+	//     真出问题时也永远复现不出来。把启动顺序调开是零成本的消除方式。
+	//
+	// ctx 的 cancel 在 main 返回时触发，让 goroutine 退出并解除信号注册。
+	// 单进程的 exporter 里这在实践上无关紧要（进程紧接着就结束了），但把
+	// goroutine 的生命周期与 main 绑起来是纪律问题 —— 泄漏的 signal.Notify
+	// 在测试里会互相干扰。
+	reloadCtx, stopReload := context.WithCancel(context.Background())
+	defer stopReload()
+
+	go handleReloadSignals(reloadCtx, logger, promslogConfig.Level)
 
 	logger.Info("Starting "+exporterName, "listening_on", *listenAddress)
 

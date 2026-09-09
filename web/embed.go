@@ -22,7 +22,7 @@ import (
 // 注意 embed 的路径是包目录的相对路径，且不受 .gitignore 影响但受
 // .dockerignore 影响 —— 已确认 .dockerignore 未排除 web/，镜像构建拿得到。
 //
-//go:embed index.html debug.html config.html app.css app.js config.js
+//go:embed index.html debug.html config.html app.css app.js config.js i18n.js
 var assets embed.FS
 
 // Collector 描述一个采集器在页面上的呈现方式。

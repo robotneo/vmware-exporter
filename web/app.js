@@ -18,8 +18,18 @@ const list = $("collList");
 const boxes = () => Array.from(list.querySelectorAll("input[type=checkbox]"));
 const selected = () => boxes().filter((b) => b.checked).map((b) => b.value);
 
+// updateCount 刷新「已选 N / M 个」提示。
+//
+// 整条提示由 i18n 渲染而不是只替换数字：中英文的语序不同（「已选 3 / 10 个」
+// 对 "3 of 10 selected"），把数字塞进一个固定的 span 里再拼死语序，切到另一
+// 种语言就会读不通。
 function updateCount() {
-  $("selCount").textContent = selected().length;
+  const hint = $("collHint");
+
+  hint.textContent = i18n.__fmt("debug.sel_count", {
+    n: selected().length,
+    total: boxes().length,
+  });
 }
 
 list.addEventListener("change", updateCount);
@@ -96,7 +106,7 @@ async function run() {
 
   btn.disabled = true;
   btn.classList.add("busy");
-  $("runTxt").textContent = "Running";
+  $("runTxt").textContent = i18n.__("debug.running");
   $("empty").hidden = true;
 
   const started = performance.now();
@@ -129,7 +139,7 @@ async function run() {
 
   btn.disabled = false;
   btn.classList.remove("busy");
-  $("runTxt").textContent = "Run scrape";
+  $("runTxt").textContent = i18n.__("debug.run");
   $("stats").hidden = false;
   $("result").hidden = false;
 
@@ -138,10 +148,11 @@ async function run() {
     setStat("sTime", elapsed + " ms");
     setStat("sSeries", "0");
     setStat("sUp", "\u2014");
-    $("resHint").textContent = "Request failed";
-    $("resNote").textContent = "The request never completed: " + failed;
+    $("resHint").textContent = i18n.__("debug.req_failed");
+    $("resNote").textContent = i18n.__("debug.req_note") + failed;
     lastBody = "";
     $("out").textContent = "";
+
     return;
   }
 
@@ -159,13 +170,13 @@ async function run() {
   setStat("sUp", up ? up[1] : "\u2014", up && up[1] === "1" ? "ok" : up ? "err" : "");
 
   if (status === 200) {
-    $("resHint").textContent = series.length + " time series";
+    $("resHint").textContent = series.length + i18n.__("debug.series_fmt");
     $("resNote").textContent =
-      series.length + " series across " + lines.length + " lines";
+      series.length +
+      i18n.__fmt("debug.series_note", { n: lines.length });
   } else {
     $("resHint").textContent = "HTTP " + status;
-    $("resNote").textContent =
-      "The exporter rejected the request; its response is shown below.";
+    $("resNote").textContent = i18n.__("debug.rejected");
   }
 
   lastBody = body;
@@ -187,7 +198,7 @@ async function copyProbeURL() {
 
   try {
     await navigator.clipboard.writeText(url);
-    btn.textContent = "Copied";
+    btn.textContent = i18n.__("debug.copied");
   } catch {
     // 非 HTTPS 下 clipboard API 不可用，退回到让用户自己复制。
     window.prompt("Copy this URL", url);
@@ -223,3 +234,12 @@ function filterLines() {
 $("run").addEventListener("click", run);
 $("genUrl").addEventListener("click", copyProbeURL);
 $("filter").addEventListener("input", filterLines);
+
+// 语言切换时更新动态文本（采集器计数、按钮、结果提示等）。
+document.addEventListener("langchange", () => {
+  updateCount();
+  $("runTxt").textContent = i18n.__("debug.run");
+  $("genUrl").textContent = i18n.__("debug.copy_url");
+  $("resHint").textContent = i18n.__("debug.not_run");
+  $("filter").placeholder = i18n.__("debug.filter_placeholder");
+});

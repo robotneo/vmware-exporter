@@ -76,9 +76,13 @@ els.redact = makeEl("redact", "", true);
 
 // 只读的展示位。config.js 会往这些里写文字，测试不关心内容，但不能是
 // undefined，否则赋值会抛。
+//
+// tHint / collHint 是 i18n 化之后新增的：计数提示改成整条由翻译渲染
+// （中英文语序不同，"共 3 台 vCenter" 对 "3 vCenters"，数字塞不进固定
+// span），原来的 tCount / selCount 两个内层 span 已不再被 config.js 写入。
 [
-  "selCount",
-  "tCount",
+  "tHint",
+  "collHint",
   "outHint",
   "outPath",
   "out",
@@ -132,7 +136,13 @@ Object.keys(settings).forEach((id) => {
   }
 });
 
+// langchange 事件的监听器登记表。config.js 会注册一个回调用于切换语言时
+// 重跑 syncMode；CLI 模式下没人切语言，所以只要「能注册、不报错」即可。
+const listeners = {};
+
 const document = {
+  // i18n.js 会读写 documentElement.lang。
+  documentElement: { lang: "" },
   getElementById(id) {
     // 返回 undefined 会让 config.js 在读属性时抛一个难懂的 TypeError。
     // 显式报错，把「驱动里少造了一个控件」与「生成逻辑有 bug」区分开。
@@ -148,6 +158,12 @@ const document = {
   createElement() {
     return makeEl("created");
   },
+  addEventListener(name, fn) {
+    (listeners[name] = listeners[name] || []).push(fn);
+  },
+  dispatchEvent(ev) {
+    (listeners[ev.type] || []).forEach((fn) => fn(ev));
+  },
 };
 
 const sandbox = {
@@ -160,12 +176,38 @@ const sandbox = {
   Number: Number,
   console: console,
   module: { exports: {} },
+  // i18n.js 的依赖。语言不落盘 —— CLI 每次都从默认（中文）起步，
+  // 这样生成结果是确定的，不受任何本地状态影响。
+  localStorage: {
+    getItem() {
+      return null;
+    },
+    setItem() {},
+  },
+  CustomEvent: function (type, opts) {
+    this.type = type;
+    this.detail = opts && opts.detail;
+  },
 };
+
 
 const src = fs.readFileSync(
   path.join(__dirname, "..", "web", "config.js"),
   "utf8",
 );
+
+// config.js 里的说明文字走 i18n.__()，所以必须先把真实的 i18n.js 跑起来
+// —— 而不是塞一个「原样返回 key」的假实现。用真货有两个好处：
+//   1. 生成出来的注释/提示跟浏览器里看到的完全一致；
+//   2. 万一哪个 key 拼错了，这里会直接暴露成 key 字面量，测试能抓到，
+//      不会等到用户在页面上看见一串 config.xxx_help 才发现。
+const i18nSrc = fs.readFileSync(
+  path.join(__dirname, "..", "web", "i18n.js"),
+  "utf8",
+);
+
+vm.createContext(sandbox);
+vm.runInContext(i18nSrc, sandbox, { filename: "i18n.js" });
 
 // 把生成函数暴露出来。config.js 自身没有导出语句 —— 它是给浏览器直接
 // <script> 引的，加 export 会让浏览器报错。
@@ -173,7 +215,6 @@ const exposed =
   src +
   "\nmodule.exports = { buildTargetFile, buildScrapeConfig, buildFlags };\n";
 
-vm.createContext(sandbox);
 vm.runInContext(exposed, sandbox, { filename: "config.js" });
 
 const api = sandbox.module.exports;

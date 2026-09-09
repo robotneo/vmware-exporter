@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sort"
 	"time"
 
@@ -329,7 +330,7 @@ func (cs *CollectorSet) Collect(ch chan<- prometheus.Metric) {
 		g.Go(func() error {
 			collectorBegin := time.Now()
 
-			err := c.Update(cs.ctx, ch, s)
+			err := safeUpdate(cs.ctx, c, ch, s)
 
 			duration := time.Since(collectorBegin)
 
@@ -363,6 +364,31 @@ func (cs *CollectorSet) Collect(ch chan<- prometheus.Metric) {
 	// 它与新增的无标签 scrape_duration_seconds 的差别是不含 login/logout。
 	ch <- prometheus.MustNewConstMetric(cs.metrics.collectorSeconds, prometheus.GaugeValue,
 		time.Since(begin).Seconds(), "all_collectors")
+}
+
+// safeUpdate 调用 c.Update，并把 panic 转成一条普通 error。
+//
+// 为什么必须在这里拦：collector 跑在 errgroup 起的**子协程**里，而
+// promhttp 的 recover（HandlerOpts.HTTPErrorOnError 那一套）装在 serve
+// 协程上。Go 的 panic 不跨协程传播 —— 子协程里的 panic 不会被父协程的
+// recover 捕获，它直接终止整个进程。
+//
+// 后果的量级值得写下来：一台 ESXi 让某个 collector panic，挂掉的不是这次
+// 抓取、也不是这个 target，而是 exporter 进程本身，于是**所有** target 一起
+// 失联。相比之下，把它降级成这一个 collector 的 success=0 是显然更好的行为，
+// 其余 collector 的数据照常产出。
+//
+// 保留调用栈：panic 的信息几乎全在栈里，只记 recover() 的返回值会让排查
+// 无从下手 —— 那通常只是一句 "runtime error: invalid memory address"，
+// 不含出事的文件行号。
+func safeUpdate(ctx context.Context, c Collector, ch chan<- prometheus.Metric, s *Scrape) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("collector panicked: %v\n%s", r, debug.Stack())
+		}
+	}()
+
+	return c.Update(ctx, ch, s)
 }
 
 // emitErrors 导出本 target 下的累计错误数。

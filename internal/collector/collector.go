@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"sort"
 
+	"github.com/prezhdarov/vmware-exporter/internal/config"
+
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -66,11 +68,22 @@ func RegisterFlag(name string, enabled *bool) {
 }
 
 // Registered 返回所有已注册开关的当前状态。
+//
+// 走 config.Snapshot 而不是裸读：这些 *bool 是 flag 指针，SIGHUP 重载会
+// 通过 flag.Set 改写它们，而 flag 包的 setter 没有任何同步原语。每轮抓取
+// 都会调这个函数，于是它是重载路径最主要的读侧对手。
+//
+// 整个循环放进同一个 Snapshot，是为了让返回的 map 是某一时刻配置的**一致
+// 切片**。逐个加锁的话，一次恰好落在中间的重载会让同一轮抓取里
+// esxcli.host.nic 用新配置、esxcli.storage 用旧配置。
 func Registered() map[string]bool {
 	out := make(map[string]bool, len(registered))
-	for name, enabled := range registered {
-		out[name] = *enabled
-	}
+
+	config.Snapshot(func() {
+		for name, enabled := range registered {
+			out[name] = *enabled
+		}
+	})
 
 	return out
 }

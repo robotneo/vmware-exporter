@@ -1,0 +1,99 @@
+[Unit]
+Description=VMware vSphere Exporter (Prometheus)
+Documentation=https://github.com/robotneo/vmware-exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# 配置全部来自 /etc/vmware-exporter/config.yaml。
+#
+# 不把凭证写在 ExecStart 上：命令行会进 /proc/<pid>/cmdline，主机上任何
+# 用户都能用 ps 看到密码。
+#
+# 优先级：命令行 > -file > 环境变量（见 internal/config/config.go）。
+#
+# 注意 config.yaml 必须是 0644，不能是 0600。EnvironmentFile 由 systemd
+# 以 root 读取，所以那种方式可以 0600；而 -file 是 exporter 进程自己读，
+# 此时 DynamicUser=yes 已经生效，用的是临时 uid，读 0600 root:root 会得到
+# "cannot read config file: permission denied" 然后启动失败。
+ExecStart=/usr/bin/vmware-exporter -file=/etc/vmware-exporter/config.yaml
+
+# SIGHUP 原地重载配置。
+#
+# exporter 装了 SIGHUP handler，会重新读取 -file 并把值写回请求路径读的那些
+# flag。每次抓取都会重读采集器开关，每次登录都会重读 vmware.* 凭证，所以下
+# 一轮抓取就会用上新配置 —— 不用重启，指标不断点。
+#
+# 重载失败会保留旧配置，并把 vmware_exporter_config_last_reload_successful
+# 置 0 —— 请对这个指标告警，因为 `systemctl reload` 仍然退出 0（信号确实送
+# 到了）。
+#
+# 这三个改了必须重启，不能靠 reload：
+#   -http.address      监听端口已经绑定
+#   -web.config.file   TLS 与 basic auth 在 listen 时加载
+#   -log.format        日志 handler 类型在构造时固定
+# 改这些会在日志里出 warning，而不是静默生效。
+ExecReload=/bin/kill -HUP $MAINPID
+
+# SIGTERM 是 Go 的默认清理退出信号，exporter 收到会正常退出。不需要写
+# ExecStop —— systemd 自己会把 KillSignal 发给主进程，手写 ExecStop 只是
+# 多一个出错的机会。
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+Restart=on-failure
+RestartSec=5
+
+# ── 安全加固 ────────────────────────────────────────────────────────────
+#
+# DynamicUser 在启动时分配一个临时的非特权 uid/gid，停止时释放，不用维护
+# 长期账号。需要 systemd 232+（2016 年）。更老的版本请删掉这行，改用真实
+# 账号：
+#
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin vmware-exporter
+#
+# 然后在这里加 User=vmware-exporter 和 Group=vmware-exporter。
+DynamicUser=yes
+
+# exporter 只需要一个出站 TCP 连接和一个监听 socket，从不写盘，所以整个
+# 文件系统可以只读。
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+
+# 只读：exporter 只会读配置。配合 ProtectSystem=strict，误写会直接失败
+# 报错，而不是悄悄留下状态。
+ReadOnlyPaths=/etc/vmware-exporter
+
+# 65536 够一个监听 socket 加几百个并发 SOAP 连接。原来的 1048576 是抄来的，
+# 和 LimitCORE=infinity 一起意味着一次崩溃能 dump 出好几个 GB 的 core。
+LimitNOFILE=65536
+
+# 日志进 journal。StandardOutput=syslog 从 systemd 246 起已废弃，而且
+# syslog= 本来也是路由到 journal 的。
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vmware-exporter
+
+[Install]
+WantedBy=multi-user.target

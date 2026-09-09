@@ -4,6 +4,8 @@ import (
 	"flag"
 	"strings"
 
+	"github.com/prezhdarov/vmware-exporter/internal/config"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vmware/govmomi/vim25/types"
 )
@@ -20,6 +22,27 @@ import (
 var legacyMetrics = flag.Bool("metrics.legacy", false,
 	"Also emit the pre-rename metric names alongside the normalised ones (default: false). "+
 		"Enable this if you have dashboards or alerting rules referencing the old names.")
+
+// emitLegacyNames 在读锁保护下取 -metrics.legacy 的当前值。
+//
+// 为什么不能裸读 *legacyMetrics：SIGHUP 重载通过 flag.FlagSet.Set 改写这个
+// 指针指向的 bool，而 flag 包的 setter 没有任何同步原语（标准库 flag.go 里
+// boolValue.Set 的最后一行就是 `*b = boolValue(v)`）。抓取协程同时在读它，
+// 构成数据竞争。
+//
+// 调用点必须在**循环之外**：emitPerformanceMetrics 的读取位置在最内层
+// 循环里，每个计数器值一次。放在那里既会让 RLock 的次数上到几十万量级，
+// 也会让同一轮抓取的前半段用旧值、后半段用新值 —— 一次落在中间的重载
+// 会让同一个 /metrics 响应里一部分指标带旧名、一部分不带。
+func emitLegacyNames() bool {
+	var v bool
+
+	config.Snapshot(func() {
+		v = *legacyMetrics
+	})
+
+	return v
+}
 
 // 本文件把 vCenter 的性能计数器名翻译成符合 Prometheus 规范的指标名，并给出
 // 单位换算系数与指标类型。

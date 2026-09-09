@@ -549,24 +549,24 @@ function syncMode() {
   const single = mode() === "metrics";
 
   $("styleField").hidden = single;
-  $("targetsCard").querySelector(".card-head .hint").textContent = "vCenters";
+  $("targetsCard").querySelector(".card-head .hint").textContent = i18n.__("config.targets_hint");
 
   $("modeHelp").textContent = single
-    ? "Prometheus scrapes each exporter directly. One exporter process per vCenter, each on its own port, with credentials in its start-up flags."
-    : "Prometheus scrapes this exporter once per vCenter, passing the target and its credentials as request parameters.";
+    ? i18n.__("config.mode_help_metrics")
+    : i18n.__("config.mode_help_probe");
 
   $("styleHelp").textContent =
     style() === "relabel"
-      ? "The target file holds vCenter addresses only. Cleaner file, one place to change the exporter address."
-      : "Every entry carries its own parameters. Lets vCenters differ within one job, but repeats the exporter address.";
+      ? i18n.__("config.style_help_relabel")
+      : i18n.__("config.style_help_inline");
 
   $("exporterField").querySelector(".help").textContent = single
-    ? "The listen address of the first exporter. The rest count up from its port, one process per vCenter."
-    : "Where Prometheus reaches this exporter. Every target is scraped through it.";
+    ? i18n.__("config.exporter_help_metrics")
+    : i18n.__("config.exporter_help_probe");
 
   $("collHelp").textContent = single
-    ? "In single target mode collectors are start-up flags; the generated command line only lists the ones that differ from the defaults."
-    : "Selected collectors become collect[] parameters. Selecting all of them emits collect[]=all.";
+    ? i18n.__("config.coll_help_metrics")
+    : i18n.__("config.coll_help_probe");
 
   render();
 }
@@ -575,8 +575,16 @@ function syncMode() {
 function syncCounts() {
   const targets = parseTargets();
 
-  $("tCount").textContent = targets.length;
-  $("selCount").textContent = selected().length;
+  // 计数提示整条由 i18n 渲染：中英文语序不同（「共 3 台 vCenter」对
+  // "3 vCenters"），把数字塞进固定 span 再拼死语序，切语言就读不通。
+  $("tHint").textContent = i18n.__fmt("config.targets_count", {
+    n: targets.length,
+  });
+
+  $("collHint").textContent = i18n.__fmt("config.collectors_hint", {
+    n: selected().length,
+    total: boxes().length,
+  });
 
   const missing = targets.filter((t) => t.username === "").length;
 
@@ -588,14 +596,13 @@ function syncCounts() {
     $("credNote").innerHTML =
       "<strong>" +
       missing +
-      " target(s) have no username.</strong> " +
+      "</strong>" +
       (mode() === "metrics"
-        ? "Fill in the job-wide username, or add credentials on those lines: the generated command lines fall back to a placeholder that will not log in."
-        : "Fill in the job-wide username, or add credentials on those lines: /probe rejects a request without them with HTTP 400.");
+        ? i18n.__("config.cred_note_metrics")
+        : i18n.__("config.cred_note_probe"));
   } else if (targets.length === 0) {
     $("credNote").hidden = false;
-    $("credNote").innerHTML =
-      "<strong>No targets yet.</strong> The output below shows the shape of the files; add addresses to fill them in.";
+    $("credNote").innerHTML = i18n.__("config.cred_note_none");
   } else {
     $("credNote").hidden = true;
   }
@@ -625,7 +632,7 @@ function syncTimeout() {
 
   if (!Number.isNaN(interval) && !Number.isNaN(timeout) && timeout > interval) {
     notes.push(
-      "<strong>scrape_timeout exceeds scrape_interval.</strong> Prometheus refuses to load a configuration like this.",
+      "<strong>" + i18n.__("timeout.warn_exceed") + "</strong>",
     );
   }
 
@@ -633,7 +640,8 @@ function syncTimeout() {
     notes.push(
       "<strong>" +
         heavy.join(", ") +
-        "</strong> walk the inventory host by host and regularly need more than a minute. Consider a longer interval and timeout, or a separate job for them.",
+        "</strong>" +
+        i18n.__("timeout.warn_heavy"),
     );
   }
 
@@ -653,7 +661,7 @@ function render() {
 
   const lines = text.split("\n").filter((l) => l !== "" && !l.trim().startsWith("#"));
 
-  $("outHint").textContent = lines.length + " significant lines";
+  $("outHint").textContent = lines.length + i18n.__("config.out_hint");
 }
 
 // 输入变化一律重新生成。全量重算而不是增量更新：整份输出也就几十行，重算的
@@ -720,7 +728,7 @@ $("copyBtn").addEventListener("click", async () => {
 
   try {
     await navigator.clipboard.writeText(build());
-    btn.textContent = "Copied";
+    btn.textContent = i18n.__("config.copied");
   } catch {
     // 非 HTTPS 下 clipboard API 不可用，退回到让用户自己复制。
     window.prompt("Copy this text", build());
@@ -745,6 +753,20 @@ $("dlBtn").addEventListener("click", () => {
   a.click();
 
   URL.revokeObjectURL(url);
+});
+
+// 语言切换时重跑 syncMode。
+//
+// 为什么不只调 render()：modeHelp / styleHelp / exporterField 的说明文字与
+// collHelp 都是 syncMode 写进 DOM 的，render() 不碰它们。只调 render 的话
+// 切语言后这四处会停在旧语言上，而它们恰好是页面上最长的几段说明。
+//
+// i18n.translatePage() 已经处理了带 data-i18n 的静态元素，这里补的是纯 JS
+// 驱动的那部分。
+document.addEventListener("langchange", () => {
+  // 下拉框的 <option> 带 data-i18n，translatePage 已经改过文本，
+  // 但 selectedIndex 不受影响，所以不需要在这里恢复选中项。
+  syncMode();
 });
 
 syncMode();

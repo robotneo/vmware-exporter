@@ -81,6 +81,16 @@ documentation check:
    parser fails loudly if it can no longer resolve one of them, rather than
    quietly checking a shrinking subset.
 
+9. **The scripted systemd bundle drifting from the binary or itself.**
+   packaging/systemd/ is a second deployment story (a config.yaml loaded with
+   -file, a unit, and install.sh, assembled by scripts/build-systemd-pkg.sh)
+   that used to be validated by nothing. The config's keys are checked against
+   the registered flags (including commented example lines an operator will
+   uncomment), the mapping must stay flat as config.go requires, the unit's
+   ExecStart binary and -file path are checked against install.sh's actual
+   install destinations, ExecReload is held to the same SIGHUP-source contract
+   as the other unit, and every file the build script tars up must exist.
+
 Exit code is 0 when clean, 1 when any check fails, 2 on a missing dependency.
 """
 
@@ -639,6 +649,201 @@ def check_unit(failures: list[str], flags: set[str]) -> None:
                 )
 
 
+# ── packaging/systemd (the scripted one-shot deployment bundle) ──────────────
+#
+# This bundle is a second, parallel deployment story: config.yaml + a unit that
+# loads it with -file + install.sh/uninstall.sh, assembled by
+# scripts/build-systemd-pkg.sh. Unlike vmware.conf + system/vmware-exporter.service,
+# none of it used to be validated here -- so the shipped config could name a flag
+# the binary no longer registers and every build stayed green until an operator
+# hit "config sets unknown flag" at install time. The checks below hold the four
+# files to one another and to the binary:
+#
+#   config.yaml key  -> a registered flag, and a flat mapping as config.go demands
+#   unit ExecStart   -> /usr/bin/vmware-exporter -file=<install.sh CONF_DST>
+#   install.sh paths -> the binary and config paths the unit actually references
+#   build script     -> every file it copies into the tarball exists
+PKG_DIR_REL = os.path.join("packaging", "systemd")
+PKG_CONF_REL = os.path.join(PKG_DIR_REL, "config.yaml")
+PKG_UNIT_REL = os.path.join(PKG_DIR_REL, "vmware-exporter.service")
+PKG_INSTALL_REL = os.path.join(PKG_DIR_REL, "install.sh")
+PKG_BUILD_REL = os.path.join("scripts", "build-systemd-pkg.sh")
+
+
+def _pkg_conf_keys(text: str) -> list[str]:
+    """Config keys in packaging/systemd/config.yaml, active and commented.
+
+    Commented example lines (e.g. ``# web.config.file: ...``) are included: they
+    are the first thing an operator uncomments, so an unknown flag there is just
+    as broken. Prose containing a colon must NOT be read as a key. YAML requires
+    whitespace (or end-of-line) after the ``key:`` colon, which prose does not
+    have -- that single rule separates ``web.config.file: /x`` (real) from
+    ``root:root 0600`` (prose) and ``https://...`` (a URL).
+    """
+    keys = []
+    key_re = re.compile(r"^[#\s]*([a-z0-9][a-z0-9._-]*):(?:\s+.*)?\s*$")
+    for line in text.splitlines():
+        m = key_re.match(line)
+        if m:
+            keys.append(m.group(1))
+    return keys
+
+
+def check_packaging(failures: list[str], flags: set[str]) -> None:
+    """Hold the scripted systemd deployment bundle together and against the binary."""
+    pkg_dir = os.path.join(REPO, PKG_DIR_REL)
+    if not os.path.isdir(pkg_dir):
+        # The bundle is optional in a checkout; only validate it when present.
+        return
+
+    # ── 1. config.yaml: flat mapping, every key a real flag ──────────────────
+    conf_path = os.path.join(REPO, PKG_CONF_REL)
+    if os.path.exists(conf_path):
+        raw = open(conf_path, encoding="utf-8").read()
+
+        # The structural rule config.go enforces: one flat level of scalar keys.
+        # A nested mapping/sequence loads fine in YAML but the loader rejects it,
+        # so fail here where the offending line is in front of the author.
+        parsed = yaml.safe_load(raw)
+        if not isinstance(parsed, dict):
+            failures.append(
+                f"{PKG_CONF_REL}: top level must be a flat mapping of "
+                "flag: value, not a nested structure (config.go cannot parse it)"
+            )
+        else:
+            for key, value in parsed.items():
+                if isinstance(value, (dict, list)):
+                    failures.append(
+                        f"{PKG_CONF_REL}: key {key!r} maps to a nested value; "
+                        "the config format is flat -- write flag-name: value with "
+                        "no indentation"
+                    )
+
+        for key in _pkg_conf_keys(raw):
+            if key not in flags:
+                failures.append(
+                    f"{PKG_CONF_REL}: key {key!r} is not a registered flag; "
+                    "the loader aborts with 'config sets unknown flag'. If the "
+                    "flag was renamed or removed, update this shipped template."
+                )
+
+    # ── 2. the unit: ExecStart binary + -file, ExecReload only if handled ────
+    unit_path = os.path.join(REPO, PKG_UNIT_REL)
+    unit_conf_path = None
+    if os.path.exists(unit_path):
+        text = open(unit_path, encoding="utf-8").read()
+        live = [
+            ln.strip() for ln in text.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        ]
+
+        exec_start = [ln for ln in live if ln.startswith("ExecStart=")]
+        if not exec_start:
+            failures.append(f"{PKG_UNIT_REL}: no ExecStart")
+        for ln in exec_start:
+            low = ln.lower()
+            if "password" in low or "username" in low:
+                failures.append(
+                    f"{PKG_UNIT_REL}: credentials on ExecStart: {ln!r}\n"
+                    "    Anything here lands in /proc/<pid>/cmdline. This bundle "
+                    "passes credentials through -file (config.yaml), not the cmdline."
+                )
+            # ln is "ExecStart=/usr/bin/vmware-exporter -file=..."; argv[0] is the
+            # binary, argv[1:] are the flags.
+            argv = ln.split()
+            tokens = argv[1:]
+            if not tokens or not tokens[0].startswith("-file="):
+                failures.append(
+                    f"{PKG_UNIT_REL}: ExecStart must load the config with "
+                    f"-file=</path/config.yaml>, got: {ln!r}"
+                )
+            else:
+                unit_conf_path = tokens[0].split("=", 1)[1]
+
+            # Validate every flag named on the line against the binary.
+            for token in tokens:
+                if not token.startswith("-"):
+                    continue
+                name = token.lstrip("-").split("=", 1)[0]
+                if name not in flags:
+                    failures.append(
+                        f"{PKG_UNIT_REL}: flag {name!r} is not registered by the "
+                        "exporter"
+                    )
+
+        # Same bidirectional reload contract as system/vmware-exporter.service:
+        # advertise ExecReload only while the binary actually handles SIGHUP.
+        main_src = os.path.join(REPO, "vmware-exporter.go")
+        handler_present = False
+        if os.path.exists(main_src):
+            src = open(main_src, encoding="utf-8").read()
+            handler_present = "signal.Notify" in src and "syscall.SIGHUP" in src
+        reload_lines = [ln for ln in live if ln.startswith("ExecReload=")]
+        if handler_present and not reload_lines:
+            failures.append(
+                f"{PKG_UNIT_REL}: no ExecReload, but vmware-exporter.go handles "
+                "SIGHUP; without it operators restart and drop metrics. "
+                "Expected: ExecReload=/bin/kill -HUP $MAINPID"
+            )
+        for ln in reload_lines:
+            if "-HUP" not in ln and "SIGHUP" not in ln:
+                failures.append(
+                    f"{PKG_UNIT_REL}: {ln!r} -- the exporter only handles SIGHUP"
+                )
+
+    # ── 3. install.sh paths must match the unit's binary and -file target ────
+    install_path = os.path.join(REPO, PKG_INSTALL_REL)
+    if os.path.exists(install_path) and unit_conf_path is not None:
+        inst = open(install_path, encoding="utf-8").read()
+
+        def sh_var(name: str) -> str | None:
+            m = re.search(rf'^{name}=(?:"([^"]*)"|\'([^\']*)\'|(\S+))',
+                          inst, re.MULTILINE)
+            if not m:
+                return None
+            return next(g for g in m.groups() if g is not None)
+
+        bin_name = sh_var("BIN_NAME")
+        conf_dir = sh_var("CONF_DIR")
+        conf_name = sh_var("CONF_DST")
+        if bin_name and conf_dir:
+            # Strip the ${DESTDIR} staging prefix: install paths are absolute on
+            # the target host, and the unit references the same absolute paths.
+            real_conf_dir = conf_dir.replace("${DESTDIR}", "")
+            expected_conf = f"{real_conf_dir}/config.yaml"
+            if unit_conf_path != expected_conf:
+                failures.append(
+                    f"{PKG_UNIT_REL}: ExecStart loads {unit_conf_path!r}, but "
+                    f"{PKG_INSTALL_REL} installs the config to {expected_conf!r}. "
+                    "The service would start against a config that is not there."
+                )
+            expected_bin = f"/usr/bin/{bin_name}"
+            if exec_start:
+                actual_bin = exec_start[0].split()[0].split("=", 1)[1]
+                if actual_bin != expected_bin:
+                    failures.append(
+                        f"{PKG_UNIT_REL}: ExecStart runs {actual_bin!r}, but "
+                        f"{PKG_INSTALL_REL} installs the binary as "
+                        f"{expected_bin!r} (BIN_NAME={bin_name!r})."
+                    )
+        elif conf_name is None:
+            failures.append(
+                f"{PKG_INSTALL_REL}: could not locate CONF_DIR/CONF_DST; the "
+                "deployed config path can no longer be checked against the unit"
+            )
+
+    # ── 4. the build script must copy only files that actually ship ──────────
+    build_path = os.path.join(REPO, PKG_BUILD_REL)
+    if os.path.exists(build_path):
+        build = open(build_path, encoding="utf-8").read()
+        for m in re.finditer(r'\$\{PKG_DIR\}/([A-Za-z0-9._-]+)', build):
+            shipped = os.path.join(pkg_dir, m.group(1))
+            if not os.path.exists(shipped):
+                failures.append(
+                    f"{PKG_BUILD_REL}: copies {PKG_DIR_REL}/{m.group(1)} into the "
+                    "tarball, but that file does not exist -- the build would fail"
+                )
+
 
 DOC_REL = os.path.join("docs", "METRICS.md")
 DOC_REL_ZH = os.path.join("docs", "METRICS-zh.md")
@@ -1015,6 +1220,7 @@ def main() -> int:
     check_compose(failures, flags)
     check_conf(failures, flags)
     check_unit(failures, flags)
+    check_packaging(failures, flags)
     check_readme_flags(failures, flags, source)
     check_dependabot(failures)
     check_dashboards(failures)

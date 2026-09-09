@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // newFlagSet 构造一个与生产 flag 集形状相似的独立 FlagSet。
@@ -443,5 +445,187 @@ func TestSetLoggerRejectsInvalidValues(t *testing.T) {
 	badFormat := "xml"
 	if _, err := SetLogger(&badFormat, &debug); err == nil {
 		t.Error("SetLogger accepted -log.format=xml, want an error")
+	}
+}
+
+// TestReloadIsRaceFreeAgainstSnapshotReaders 是这一组同步原语的**唯一**验收
+// 标准：在 -race 下让重载与读侧同时跑，检测器不得报出 data race。
+//
+// 为什么必须用 race detector 而不是断言某个值：数据竞争的可观测后果是不确定
+// 的。撕裂读、编译器把解引用提到循环外、读到中间态 —— 这些都可能一次也不
+// 发生，一个断言值的测试会稳定地假绿。只有 detector 能在**发生了无同步的
+// 并发读写**这个事实层面报错，而不是等它恰好造成可见的错误结果。
+//
+// 反向验证：把 reload 里的 mu.Lock() 或 Snapshot 里的 mu.RLock() 注释掉，
+// 这个测试在 -race 下必报 WARNING: DATA RACE。已实测。
+//
+// 用 t.Setenv 之外的方式驱动重载：这里直接调可测内核 reload()，避免碰
+// 全局 flag.CommandLine。但 Snapshot 用的是包级 mu，与生产路径是同一把锁，
+// 所以这个测试覆盖的正是生产的同步关系。
+func TestReloadIsRaceFreeAgainstSnapshotReaders(t *testing.T) {
+	path := writeConfig(t, "vmware.interval: 20\n")
+
+	fs, vals, interval := newReloadFlagSet(t)
+
+	base := snapshot(fs)
+	cli := explicitlySet(fs)
+
+	// 读侧模拟抓取协程：每轮在 Snapshot 里一次性读完本轮需要的 flag。
+	// 读进局部变量是必要的 —— 空的 Snapshot(func(){}) 不产生任何内存访问，
+	// detector 也就无从发现竞争，测试会假绿。
+	var (
+		stop  = make(chan struct{})
+		done  = make(chan struct{})
+		sink  int
+		sinkS string
+	)
+
+	go func() {
+		defer close(done)
+
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+
+			Snapshot(func() {
+				sink = *interval
+				sinkS = *vals["vmware.vcenter"]
+			})
+		}
+	}()
+
+	// 写侧模拟 SIGHUP：交替写两个值，逼出尽可能多的写事件。
+	for i := range 50 {
+		content := "vmware.interval: 20\nvmware.vcenter: even\n"
+		if i%2 == 1 {
+			content = "vmware.interval: 30\nvmware.vcenter: odd\n"
+		}
+
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("rewriting the config file failed: %s", err)
+		}
+
+		if _, err := reload(fs, path, false, base, cli); err != nil {
+			t.Fatalf("reload %d failed: %s", i, err)
+		}
+	}
+
+	close(stop)
+	<-done
+
+	// 断言读到的是两份配置之一，而不是混合值。这一条在没有竞争检测的
+	// 普通 go test 下也有意义：它锁住「Snapshot 一次读完」这个契约 ——
+	// interval=30 配 vcenter=even 就说明快照跨越了一次重载。
+	if !(sink == 20 && sinkS == "even") && !(sink == 30 && sinkS == "odd") {
+		t.Errorf("snapshot read a mix of two configurations: interval=%d vcenter=%q", sink, sinkS)
+	}
+}
+
+// TestSnapshotAllowsConcurrentReaders 断言 Snapshot 用的是读锁而不是互斥锁。
+//
+// 这条看起来像是在测 sync.RWMutex 的实现，但它守的是一个很容易踩的回归：
+// 把 mu 从 RWMutex 换成 Mutex（或把 Snapshot 里的 RLock 写成 Lock）编译
+// 通过、所有其他测试也通过 —— 代价是每轮抓取的所有 collector 在读配置时
+// 互相串行。这个 exporter 的整个并发设计就是为了避免这种串行。
+//
+// 实现方式是让两个读者必须重叠：第一个进 Snapshot 后等第二个也进来。
+// 用互斥锁的话第二个永远进不来，测试超时失败。
+func TestSnapshotAllowsConcurrentReaders(t *testing.T) {
+	first := make(chan struct{})
+	second := make(chan struct{})
+	overlapped := make(chan struct{})
+
+	go func() {
+		Snapshot(func() {
+			close(first)
+			<-second // 持读锁期间等第二个读者进来
+		})
+	}()
+
+	<-first
+
+	go func() {
+		Snapshot(func() {
+			close(overlapped)
+		})
+	}()
+
+	select {
+	case <-overlapped:
+		close(second)
+	case <-time.After(2 * time.Second):
+		close(second)
+		t.Fatal("a second reader could not enter Snapshot while the first held it; mu is not an RWMutex or Snapshot takes the write lock")
+	}
+}
+
+// TestConcurrentReloadsAreRaceFree 断言写锁覆盖的是「计划 + 提交」整段，
+// 而不只是提交循环。
+//
+// 为什么必须用两个并发的 reload 来测这条边界，而不是「一个 reload 对一个
+// 读者」：计划阶段做的是 target.Value.String()，那是**读**；读侧的
+// Snapshot 做的也是读。读-读不构成数据竞争，所以把写锁缩到只覆盖提交循环，
+// 单写者场景下 detector 什么都发现不了 —— 我最初写的那版测试就是这样假绿的。
+//
+// 真正会撞上的是两个并发重载：A 的计划阶段读 flag，B 的提交阶段写同一批
+// flag。锁只覆盖提交循环时，A 的读在锁外，与 B 的写构成竞争。
+//
+// 这个场景在生产里是可达的，不是为了测试硬造：Reload 是导出函数，
+// handleReloadSignals 的 SIGHUP 通道容量为 1，两个信号紧挨着到达时
+// 确实会串行调用；而 /config 页面若将来加上「重载」按钮，或有人写了
+// 别的调用方，就是真正的并发。锁必须自己扛住这件事，而不是依赖
+// 「目前只有一个调用者」这个会变的前提。
+//
+// 反向验证：把 reload 里的 mu.Lock() 从计划阶段前挪到提交循环前，
+// 这个测试在 -race 下必报 WARNING: DATA RACE。已实测。
+func TestConcurrentReloadsAreRaceFree(t *testing.T) {
+	pathA := writeConfig(t, "vmware.interval: 20\nvmware.vcenter: even\n")
+	pathB := writeConfig(t, "vmware.interval: 30\nvmware.vcenter: odd\n")
+
+	fs, _, _ := newReloadFlagSet(t)
+
+	base := snapshot(fs)
+	cli := explicitlySet(fs)
+
+	var wg sync.WaitGroup
+
+	// 两个协程交替把配置推向两个不同的值。它们都会走完整的
+	// 「计划（读真实 flag）+ 提交（写真实 flag）」两段。
+	for _, path := range []string{pathA, pathB} {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for range 40 {
+				if _, err := reload(fs, path, false, base, cli); err != nil {
+					t.Errorf("reload from %s failed: %s", path, err)
+
+					return
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// 收尾断言：最终配置必须是两份中完整的一份，不能是混合。
+	// 这一条在不带 -race 的普通 go test 下也有效，锁住的是「计划与提交
+	// 之间不会插进另一个写者」这个原子性。
+	var (
+		interval string
+		vcenter  string
+	)
+
+	Snapshot(func() {
+		interval = fs.Lookup("vmware.interval").Value.String()
+		vcenter = fs.Lookup("vmware.vcenter").Value.String()
+	})
+
+	if !(interval == "20" && vcenter == "even") && !(interval == "30" && vcenter == "odd") {
+		t.Errorf("concurrent reloads left a mixed configuration: interval=%s vcenter=%s", interval, vcenter)
 	}
 }
