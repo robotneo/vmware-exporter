@@ -403,41 +403,43 @@ docker run -d --name vmware-exporter -p 9169:9169 \
 
 ### systemd deployment
 
-The release tarball includes `vmware.conf` and `vmware-exporter.service` alongside
-the binary. Install them together:
+The release tarball ships the binary together with a `systemd/` directory that
+contains the unit, a `config.yaml` template, and `install.sh` / `uninstall.sh`
+helpers. Install with the helper (x86_64, systemd 232+):
 
 ```bash
-sudo install -m 0755 vmware-exporter /usr/bin/vmware-exporter
-sudo install -d -m 0755 /etc/vmware-exporter
-sudo install -m 0600 -o root -g root vmware.conf /etc/vmware-exporter/vmware.conf
-sudo install -m 0644 vmware-exporter.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now vmware-exporter
+tar xzf vmware-exporter-*-linux-amd64-systemd.tar.gz
+cd vmware-exporter-*-linux-amd64-systemd
+sudo ./install.sh
 ```
 
-Then edit `/etc/vmware-exporter/vmware.conf` with your vCenter credentials:
+`install.sh` places the binary at `/usr/bin/vmware-exporter`, the unit under
+`/etc/systemd/system/`, and a `config.yaml` template at
+`/etc/vmware-exporter/config.yaml`, then enables (but does not start) the
+service. Fill in your vCenter details:
 
-```ini
-VMWARE_vmware_vcenter=vcenter.example.com:443
-VMWARE_vmware_username=readonly@vsphere.local
-VMWARE_vmware_password=<VCENTER_PASSWORD>
-VMWARE_vmware_insecureTLS=true
+```yaml
+vmware.vcenter: vcenter.example.com:443
+vmware.username: readonly@vsphere.local
+vmware.password: "YOUR_PASSWORD"
+vmware.insecureTLS: true
 ```
 
-The unit uses `-envflag.enable -envflag.prefix=VMWARE_` so the password never
-appears in the process cmdline — systemd reads the `EnvironmentFile` as root
-before dropping privileges, and the exporter itself turns the environment
-variables into flag values.
+then start it:
 
-> **Do NOT use the old `ARGS="-vmware.password=..."` format.** That was expanded
-> onto `ExecStart` and put the password into `/proc/<pid>/cmdline`, visible to
-> any user on the host. The shipped `scripts/check_config.py` flags any
-> `ARGS=` line as a regression.
+```bash
+sudo systemctl start vmware-exporter
+```
 
-**Mind the case.** The variable name is the prefix followed by the flag name
-with dots replaced by underscores, and the flag name *keeps its original case*.
-`VMWARE_VMWARE_PASSWORD` is silently ignored — see [Environment variables:
-mind the case](#environment-variables-mind-the-case).
+Credentials are passed through the `-file` config rather than the command line,
+so the password never lands in `/proc/<pid>/cmdline`. The config is a flat
+`flag-name: value` mapping; full details, upgrades, uninstall and troubleshooting
+live in `packaging/systemd/DEPLOY-zh.md`.
+
+> **Note on permissions.** Unlike an `EnvironmentFile` (which systemd reads as
+> root), `-file` is opened by the exporter itself after `DynamicUser=yes` takes
+> effect, so `config.yaml` must be `0644 root:root`, not `0600`. `install.sh`
+> corrects this on every run.
 
 **`reload` applies configuration changes without dropping metrics.** The
 exporter handles SIGHUP by re-reading `-file` and the environment variables and

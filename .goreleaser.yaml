@@ -8,7 +8,7 @@ before:
     - go generate ./...
 
 builds:
-  - main: ./
+  - main: ./cmd/vmware-exporter
     binary: vmware-exporter
     env:
       - CGO_ENABLED=0
@@ -56,19 +56,23 @@ archives:
     files:
       - LICENSE*
       - README*
-      # Ship the deployment files with the binary.
+      # Ship the deployment files with the binary, under a systemd/ prefix so
+      # they stay separate from the binary and README at the archive root.
       #
-      # Both used to live only in the git tree, so the README's "copy
-      # vmware-exporter.service to /etc/systemd/system/" instruction had nothing
-      # to copy from for anybody who installed from a release tarball -- the
-      # documented path required cloning the repository at the right tag.
-      #
-      # src is needed because the unit sits in a subdirectory: the default would
-      # recreate `system/` inside the archive, and the README refers to the file
-      # by name.
-      - vmware.conf
-      - src: system/vmware-exporter.service
-        dst: .
+      # This is the single deployment story: config.yaml + a unit that loads
+      # it with -file + install/uninstall scripts. The old vmware.conf +
+      # system/vmware-exporter.service (EnvironmentFile model) was removed;
+      # do not reintroduce a second, diverging unit.
+      - src: packaging/systemd/vmware-exporter.service
+        dst: systemd
+      - src: packaging/systemd/config.yaml
+        dst: systemd
+      - src: packaging/systemd/install.sh
+        dst: systemd
+      - src: packaging/systemd/uninstall.sh
+        dst: systemd
+      - src: packaging/systemd/DEPLOY-zh.md
+        dst: systemd
 
 checksum:
   name_template: "{{ .ProjectName }}_checksums.txt"

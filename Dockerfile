@@ -59,7 +59,7 @@ RUN go mod download && \
       -X github.com/prometheus/common/version.Branch=${BRANCH} \
       -X github.com/prometheus/common/version.BuildDate=${BUILD_DATE} \
       -X github.com/prometheus/common/version.BuildUser=docker" \
-      -o vmware-exporter .
+      -o vmware-exporter ./cmd/vmware-exporter
 
 FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt

@@ -58,9 +58,9 @@ documentation check:
    killing the service. It now installs a SIGHUP handler that re-reads `-file`
    and the environment, so the unit *should* carry `ExecReload` -- omitting it
    forces a restart and drops metrics for that window. The check reads
-   vmware-exporter.go for `signal.Notify` + `syscall.SIGHUP` and requires the
-   unit to match, so removing the handler makes `ExecReload` a failure again
-   rather than silently restoring the original footgun.
+   the cmd/vmware-exporter package for `signal.Notify` + `syscall.SIGHUP` and
+   requires the unit to match, so removing the handler makes `ExecReload` a
+   failure again rather than silently restoring the original footgun.
 
 8. **Metrics missing from the metric references, or documented but gone.** Same
    bidirectional argument as the README flag check, and the same failure mode:
@@ -117,7 +117,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COMPOSE = os.path.join(REPO, "docker-compose.yml")
 SERVICE_NAME = "vmware-exporter"
 
-# The metric prefix, as set in vmware-exporter.go.
+# The metric prefix, as set in cmd/vmware-exporter/main.go.
 NAMESPACE = "vmware"
 
 # Values that were committed in plain text at some point. They stay in the git
@@ -196,7 +196,7 @@ def flags_from_binary() -> set[str] | None:
     try:
         binary = os.path.join(tempfile.mkdtemp(prefix="flagprobe-"), "exporter")
         build = subprocess.run(
-            ["go", "build", "-o", binary, "."],
+            ["go", "build", "-o", binary, "./cmd/vmware-exporter"],
             cwd=REPO,
             capture_output=True,
             text=True,
@@ -440,223 +440,14 @@ def check_compose(failures: list[str], flags: set[str]) -> None:
             )
 
 
-def check_conf(failures: list[str], flags: set[str]) -> None:
-    """vmware.conf holds VARIABLE=value lines for the unit's EnvironmentFile.
-
-    It used to hold a single `ARGS="-vmware.password=..."` line that the unit
-    expanded onto ExecStart, which put the password into the process cmdline --
-    readable by any user on the host via /proc/<pid>/cmdline or `ps`. That is the
-    same leak docker-compose.yml was fixed for, so this file now uses the
-    environment instead and the check moved with it.
-
-    An ARGS= line is therefore treated as a regression, not just a stale style:
-    it silently reintroduces the leak, and it does so while looking like a
-    working configuration.
-    """
-    path = os.path.join(REPO, "vmware.conf")
-    if not os.path.exists(path):
-        return
-    text = open(path, encoding="utf-8").read()
-
-    body = [
-        ln.strip() for ln in text.splitlines()
-        if ln.strip() and not ln.strip().startswith("#")
-    ]
-
-    for ln in body:
-        if ln.startswith("ARGS="):
-            failures.append(
-                "vmware.conf: ARGS= line found; the unit no longer expands it "
-                "onto ExecStart.\n"
-                "    Flags passed that way land in the process cmdline, where "
-                "any user can read the password out of /proc.\n"
-                "    Use VMWARE_<flag> variables instead -- see the header of "
-                "the file."
-            )
-
-    # The unit is useless without a target, so these three must be present.
-    # Without this, emptying the file would pass every other check here.
-    assignments = {}
-    for ln in body:
-        if ln.startswith("ARGS=") or "=" not in ln:
-            continue
-        name, value = ln.split("=", 1)
-        assignments[name.strip()] = value.strip()
-
-    required = (
-        "VMWARE_vmware_vcenter",
-        "VMWARE_vmware_username",
-        "VMWARE_vmware_password",
-    )
-    for name in required:
-        if name not in assignments:
-            failures.append(
-                f"vmware.conf: {name} is not set; the shipped example must stay "
-                "runnable after filling in the placeholders"
-            )
-
-    # Every variable, including the commented-out optional ones, must derive a
-    # real flag. This is the check that actually earns its keep: envflag keeps
-    # the flag's original case, so VMWARE_VMWARE_PASSWORD is accepted by the
-    # file, ignored by the exporter, and reported by nothing.
-    prefix = "VMWARE_"
-    names = set(assignments)
-    names |= set(re.findall(rf"^#\s*({re.escape(prefix)}\S+?)=", text, re.MULTILINE))
-
-    for name in sorted(names):
-        if not name.startswith(prefix):
-            failures.append(
-                f"vmware.conf: variable {name!r} does not start with {prefix!r}, "
-                "so -envflag.prefix=VMWARE_ would never look at it"
-            )
-            continue
-        derived = name[len(prefix):].replace("_", ".")
-        if derived not in flags:
-            failures.append(
-                f"vmware.conf: variable {name!r} derives flag {derived!r}, which "
-                "no flag registration matches.\n"
-                "    envflag keeps the flag's original case, so it would ignore "
-                "this variable without reporting anything."
-            )
-
-    # A placeholder must stay a placeholder.
-    for name in ("VMWARE_vmware_password", "VMWARE_vmware_username"):
-        value = assignments.get(name)
-        if value is None:
-            continue
-        if not (value.startswith("<") and value.endswith(">")):
-            failures.append(
-                f"vmware.conf: {name} carries a literal value ({value!r}); "
-                "it must stay a <PLACEHOLDER>"
-            )
-
-
-def check_unit(failures: list[str], flags: set[str]) -> None:
-    """Assert the shipped systemd unit exposes reload and never leaks credentials.
-
-    The reload rule here is INVERTED relative to an earlier version of this
-    script, and the inversion is the point.
-
-    Originally the exporter installed no signal handlers, so SIGHUP hit Go's
-    default disposition and terminated the process -- `ExecReload=/bin/kill -HUP
-    $MAINPID` made `systemctl reload` report success while killing the service.
-    This check therefore rejected any ExecReload line.
-
-    The binary now installs a SIGHUP handler (handleReloadSignals in
-    vmware-exporter.go) that re-reads -file and the environment. So the unit
-    SHOULD carry ExecReload, and the failure mode has flipped: a unit without it
-    forces operators into a restart, which drops metrics for the restart window.
-
-    Both halves are checked against the source, not assumed: if the handler is
-    ever removed, requiring ExecReload would reintroduce the original footgun.
-    That is why the signal.Notify grep below is a hard failure rather than a
-    comment.
-    """
-    path = os.path.join(REPO, "system", "vmware-exporter.service")
-    if not os.path.exists(path):
-        return
-    text = open(path, encoding="utf-8").read()
-
-    live = [
-        ln.strip() for ln in text.splitlines()
-        if ln.strip() and not ln.strip().startswith("#")
-    ]
-
-    # The unit may only advertise reload while the binary can actually handle it.
-    # Checking the source keeps the two from drifting apart in either direction.
-    main_src = os.path.join(REPO, "vmware-exporter.go")
-    handler_present = False
-    if os.path.exists(main_src):
-        src = open(main_src, encoding="utf-8").read()
-        handler_present = "signal.Notify" in src and "syscall.SIGHUP" in src
-
-    reload_lines = [ln for ln in live if ln.startswith("ExecReload=")]
-
-    if not handler_present:
-        # No handler: SIGHUP kills the process. ExecReload must not exist.
-        for ln in reload_lines:
-            failures.append(
-                f"system/vmware-exporter.service: {ln!r}\n"
-                "    vmware-exporter.go installs no SIGHUP handler (no "
-                "signal.Notify + syscall.SIGHUP), so SIGHUP terminates the "
-                "process. This directive would make `systemctl reload` stop the "
-                "service while reporting success."
-            )
-    elif not reload_lines:
-        failures.append(
-            "system/vmware-exporter.service: no ExecReload\n"
-            "    vmware-exporter.go handles SIGHUP and reloads -file plus the "
-            "environment in place, so reload works. Without this directive "
-            "`systemctl reload` fails and operators must restart, dropping "
-            "metrics for the restart window.\n"
-            "    Expected: ExecReload=/bin/kill -HUP $MAINPID"
-        )
-    else:
-        # The handler only listens for SIGHUP. Any other signal here either does
-        # nothing or kills the service, and the unit gives no hint which.
-        for ln in reload_lines:
-            if "-HUP" not in ln and "SIGHUP" not in ln:
-                failures.append(
-                    f"system/vmware-exporter.service: {ln!r}\n"
-                    "    The exporter only handles SIGHUP. Any other signal is "
-                    "either ignored or fatal.\n"
-                    "    Expected: ExecReload=/bin/kill -HUP $MAINPID"
-                )
-
-    exec_start = [ln for ln in live if ln.startswith("ExecStart=")]
-    if not exec_start:
-        failures.append("system/vmware-exporter.service: no ExecStart")
-        return
-
-    for ln in exec_start:
-        low = ln.lower()
-        # The credential leak this unit was changed to avoid. `$ARGS` counts:
-        # its expansion is what used to carry the password.
-        if "password" in low or "username" in low or "$args" in low:
-            failures.append(
-                f"system/vmware-exporter.service: credentials reachable from "
-                f"ExecStart: {ln!r}\n"
-                "    Anything here lands in /proc/<pid>/cmdline. Pass "
-                "credentials through EnvironmentFile with -envflag.enable."
-            )
-        if "-envflag.enable" not in ln:
-            failures.append(
-                "system/vmware-exporter.service: ExecStart lacks "
-                "-envflag.enable, so the EnvironmentFile entries would be "
-                "ignored entirely"
-            )
-
-        # The binary path must match what the READMEs tell people to install,
-        # or the service dies with status=203/EXEC and the docs still look right.
-        m = re.match(r"^ExecStart=(\S+)", ln)
-        if m and m.group(1) != "/usr/bin/vmware-exporter":
-            failures.append(
-                f"system/vmware-exporter.service: ExecStart runs {m.group(1)!r}, "
-                "but the READMEs install to /usr/bin/vmware-exporter.\n"
-                "    A mismatch fails at start with status=203/EXEC."
-            )
-
-    # Flags named on ExecStart must exist, same reasoning as everywhere else.
-    for ln in exec_start:
-        for token in ln.split()[1:]:
-            if not token.startswith("-"):
-                continue
-            name = token.lstrip("-").split("=", 1)[0]
-            if name not in flags:
-                failures.append(
-                    f"system/vmware-exporter.service: flag {name!r} is not "
-                    "registered by the exporter"
-                )
-
-
 # ── packaging/systemd (the scripted one-shot deployment bundle) ──────────────
 #
-# This bundle is a second, parallel deployment story: config.yaml + a unit that
-# loads it with -file + install.sh/uninstall.sh, assembled by
-# scripts/build-systemd-pkg.sh. Unlike vmware.conf + system/vmware-exporter.service,
-# none of it used to be validated here -- so the shipped config could name a flag
-# the binary no longer registers and every build stayed green until an operator
-# hit "config sets unknown flag" at install time. The checks below hold the four
+# This is the single deployment story: config.yaml + a unit that loads it
+# with -file + install.sh/uninstall.sh, assembled by scripts/build-systemd-pkg.sh.
+# (The older vmware.conf + system/vmware-exporter.service EnvironmentFile bundle
+# was removed.) The shipped config could name a flag the binary no longer
+# registers and every build would stay green until an operator hit
+# "config sets unknown flag" at install time. The checks below hold the four
 # files to one another and to the binary:
 #
 #   config.yaml key  -> a registered flag, and a flat mapping as config.go demands
@@ -771,19 +562,29 @@ def check_packaging(failures: list[str], flags: set[str]) -> None:
                         "exporter"
                     )
 
-        # Same bidirectional reload contract as system/vmware-exporter.service:
+        # Same bidirectional reload contract the old system/ unit used to have:
         # advertise ExecReload only while the binary actually handles SIGHUP.
-        main_src = os.path.join(REPO, "vmware-exporter.go")
+        #
+        # The handler lives in the main package under cmd/vmware-exporter after
+        # the standard-layout refactor (it used to be a single vmware-exporter.go
+        # at the repo root). Grep every .go file in that package so a further
+        # split of the source does not silently make this probe miss the handler.
+        main_dir = os.path.join(REPO, "cmd", "vmware-exporter")
         handler_present = False
-        if os.path.exists(main_src):
-            src = open(main_src, encoding="utf-8").read()
-            handler_present = "signal.Notify" in src and "syscall.SIGHUP" in src
+        if os.path.isdir(main_dir):
+            for entry in sorted(os.listdir(main_dir)):
+                if not entry.endswith(".go"):
+                    continue
+                src = open(os.path.join(main_dir, entry), encoding="utf-8").read()
+                if "signal.Notify" in src and "syscall.SIGHUP" in src:
+                    handler_present = True
+                    break
         reload_lines = [ln for ln in live if ln.startswith("ExecReload=")]
         if handler_present and not reload_lines:
             failures.append(
-                f"{PKG_UNIT_REL}: no ExecReload, but vmware-exporter.go handles "
-                "SIGHUP; without it operators restart and drop metrics. "
-                "Expected: ExecReload=/bin/kill -HUP $MAINPID"
+                f"{PKG_UNIT_REL}: no ExecReload, but the cmd/vmware-exporter "
+                "package handles SIGHUP; without it operators restart and drop "
+                "metrics. Expected: ExecReload=/bin/kill -HUP $MAINPID"
             )
         for ln in reload_lines:
             if "-HUP" not in ln and "SIGHUP" not in ln:
@@ -889,10 +690,19 @@ def go_metric_sources() -> dict[str, str]:
         if path.endswith("_test.go"):
             continue
         out[path] = open(path, encoding="utf-8").read()
-    for extra in ("vmware-exporter.go", os.path.join("internal", "collector", "set.go")):
-        path = os.path.join(REPO, extra)
-        if os.path.exists(path):
-            out[path] = open(path, encoding="utf-8").read()
+    # The main package moved to cmd/vmware-exporter and was split into several
+    # files (the config-reload Gauges live there alongside the handlers). Glob
+    # the whole package rather than naming one file so another split does not
+    # silently drop a metric source from this scan.
+    cmd_pattern = os.path.join(REPO, "cmd", "vmware-exporter", "*.go")
+    for path in sorted(glob.glob(cmd_pattern)):
+        if path.endswith("_test.go"):
+            continue
+        out[path] = open(path, encoding="utf-8").read()
+    extra = os.path.join("internal", "collector", "set.go")
+    path = os.path.join(REPO, extra)
+    if os.path.exists(path):
+        out[path] = open(path, encoding="utf-8").read()
     return out
 
 
@@ -1218,8 +1028,6 @@ def main() -> int:
     files = scanned_files()
     check_leaks(failures, files)
     check_compose(failures, flags)
-    check_conf(failures, flags)
-    check_unit(failures, flags)
     check_packaging(failures, flags)
     check_readme_flags(failures, flags, source)
     check_dependabot(failures)

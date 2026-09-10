@@ -7,50 +7,48 @@
 
 ### 二进制运行
 
-从 [Releases](https://github.com/robotneo/vmware-exporter/releases) 下载对应架构的包并解压。包里除二进制外还含 `vmware.conf` 与 `vmware-exporter.service`，直接拿来用即可。
+从 [Releases](https://github.com/robotneo/vmware-exporter/releases) 下载对应架构的
+systemd 部署包并解压。包里除二进制外，还含一个 `systemd/` 目录（unit、`config.yaml`
+模板、`install.sh` / `uninstall.sh`）。用安装脚本一键部署（x86_64，systemd 232+）：
 
 ```bash
-VERSION=v0.1.12   # 换成你要装的版本
-wget https://github.com/robotneo/vmware-exporter/releases/download/${VERSION}/vmware-exporter-${VERSION}-linux-amd64.tar.gz
-tar -zxvf vmware-exporter-${VERSION}-linux-amd64.tar.gz
-cd vmware-exporter-${VERSION}-linux-amd64
-
-# 二进制装到 /usr/bin —— 必须与 unit 里 ExecStart 的路径一致。
-# 装到 /usr/local/bin 而不改 unit，服务会以 status=203/EXEC 起不来。
-sudo install -m 0755 vmware-exporter /usr/bin/vmware-exporter
-
-# 配置文件：0600 root:root。
-# 尽管服务以非特权的 DynamicUser 身份运行，这个权限依然正确 ——
-# EnvironmentFile 是 systemd 以 root 身份读取后注入子进程环境的，
-# 服务账号本身不需要能打开它。
-sudo install -d -m 0755 /etc/vmware-exporter
-sudo install -m 0600 -o root -g root vmware.conf /etc/vmware-exporter/vmware.conf
-
-# 填入真实的 vCenter 地址与只读账号
-sudo vi /etc/vmware-exporter/vmware.conf
-
-sudo install -m 0644 vmware-exporter.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now vmware-exporter
+tar xzf vmware-exporter-*-linux-amd64-systemd.tar.gz
+cd vmware-exporter-*-linux-amd64-systemd
+sudo ./install.sh
 ```
 
-`/etc/vmware-exporter/vmware.conf` 采用**每行一个环境变量**的格式，配合 unit 里的
-`-envflag.enable` 生效：
+脚本会把二进制装到 `/usr/bin/vmware-exporter`、unit 装到
+`/etc/systemd/system/`、`config.yaml` 模板装到 `/etc/vmware-exporter/config.yaml`，
+并设置开机自启，但**不会启动服务**（此时配置里还是占位值）。接着填入真实的 vCenter
+地址与只读账号：
 
-```ini
-VMWARE_vmware_vcenter=vcenter.example.com:443
-VMWARE_vmware_username=readonly@vsphere.local
-VMWARE_vmware_password=<VCENTER_PASSWORD>
-VMWARE_vmware_insecureTLS=true
+```bash
+sudo vi /etc/vmware-exporter/config.yaml
 ```
 
-> **不要写成 `ARGS="-vmware.password=..."`。** 早期版本用的是那种形式，由 unit 展开到
-> `ExecStart` 上 —— 于是密码进了进程 cmdline，主机上任何用户 `ps` 或读
-> `/proc/<pid>/cmdline` 都能看到。现在改用环境变量注入，密码不再出现在那里。
-> `scripts/check_config.py` 会把残留的 `ARGS=` 行判为回归并让 CI 失败。
->
-> **变量名的大小写**：前缀 + flag 名把 `.` 换 `_`，**flag 名保持原样不转大写**。
-> `VMWARE_VMWARE_PASSWORD` 会被静默忽略，详见[环境变量名的大小写](#环境变量名的大小写容易踩坑)。
+```yaml
+vmware.vcenter: vcenter.example.com:443
+vmware.username: readonly@vsphere.local
+vmware.password: "你的密码"
+vmware.insecureTLS: true
+```
+
+然后启动：
+
+```bash
+sudo systemctl start vmware-exporter
+```
+
+配置走 `-file` 的扁平 `flag-name: value` 映射，而不是命令行，因此密码不会进入
+`/proc/<pid>/cmdline`。配置格式、升级、卸载与排障的完整说明见
+`packaging/systemd/DEPLOY-zh.md`。
+
+> **注意文件权限。** `EnvironmentFile` 是 systemd 以 root 读取，可以 `0600`；但
+> `-file` 是 exporter 进程在 `DynamicUser=yes` 生效后自己打开的，所以 `config.yaml`
+> 必须是 `0644 root:root`，否则报 `cannot read config file: permission denied`。
+> `install.sh` 每次运行都会把权限修正回来。
+> 环境变量（`-envflag.*`）作为独立的配置来源仍然支持，详见后文
+> [环境变量名的大小写](#环境变量名的大小写容易踩坑)。
 
 改完配置用 **reload** 即可，不会中断采集：
 
@@ -708,10 +706,11 @@ docker run -d --name vmware-exporter -p 9169:9169 \
   -envflag.enable -envflag.prefix=VMWARE_ -vmware.insecureTLS
 ```
 
-systemd 部署时，`/etc/vmware-exporter/vmware.conf` **就是**那个 `EnvironmentFile`：
-它以 root 所有、权限 `600` 存放，由 systemd 在降权前以 root 读取并注入子进程环境，
-unit 上的 `-envflag.enable` 负责把这些变量变成 flag 值。密码因此不进 cmdline。
-详见[二进制运行](#二进制运行)。
+systemd 部署时，密码写在 `/etc/vmware-exporter/config.yaml`（由 unit 用
+`-file` 加载），而不是 `ExecStart` 命令行，因此同样不进 cmdline。注意这个文件由
+exporter 进程在降权后自己读取，权限必须是 `0644`（与 systemd 以 root 读取的
+`EnvironmentFile` 不同）。详见[二进制运行](#二进制运行)与
+`packaging/systemd/DEPLOY-zh.md`。
 
 用 file_sd 做多凭证（`__meta_password`）时，凭证是明文写在 target 文件里的 —— 那个文件同样要 `chmod 600` 并限制属主。
 

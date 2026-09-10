@@ -2,9 +2,10 @@
 //
 // 这部分逻辑此前来自 prezhdarov/prometheus-exporter/pkg/config。随框架一并
 // 移除时不能顺手删掉：-file 与 -envflag.* 是仓库对外承诺的接口，
-// docker-compose.yml、vmware.conf 与两份 README 都在用它们，而 docker-compose
-// 里正是靠 -envflag.enable 把密码从 command: 里挪出去，避免同主机上任何能读
-// /proc 的进程看到明文。删掉它等于把一个已经修好的泄露口重新打开。
+// packaging/systemd/config.yaml 用 -file、docker-compose.yml 用 -envflag.*，
+// 两份 README 也都在讲它们，而 docker-compose 里正是靠 -envflag.enable 把密码从
+// command: 里挪出去，避免同主机上任何能读 /proc 的进程看到明文。删掉它等于把一个
+// 已经修好的泄露口重新打开。
 //
 // 相对框架版本的两处实质改动，都是把静默失败变成明确失败：
 //

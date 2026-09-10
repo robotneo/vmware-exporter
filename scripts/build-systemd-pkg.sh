@@ -35,7 +35,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     -X github.com/prometheus/common/version.BuildDate=${BUILD_DATE}
     -X github.com/prometheus/common/version.BuildUser=${BUILD_USER_WHOM}
   " \
-  -o "${DIST}/vmware-exporter-linux-amd64" .
+  -o "${DIST}/vmware-exporter-linux-amd64" ./cmd/vmware-exporter
 
 echo "    binary: $(ls -lh "${DIST}/vmware-exporter-linux-amd64" | awk '{print $5}')"
 
