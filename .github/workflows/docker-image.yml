@@ -6,9 +6,9 @@ name: Docker Image CI
 # dropped some deprecated inputs, but this workflow passes it none. So these are
 # runtime upgrades rather than behaviour changes -- and not optional ones.
 #
-# They drifted because .github/dependabot.yml only declared the gomod ecosystem.
-# The github-actions ecosystem is declared there now, so the next drift arrives
-# as a pull request instead of waiting to be spotted by hand.
+# They had drifted because no dependency-update automation watched the
+# github-actions ecosystem. Dependabot was intentionally removed from this fork,
+# so these action versions are now bumped by hand rather than via pull requests.
 
 on:
   push:

@@ -222,6 +222,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   test still passes with `-count=1`, confirming the panic and the recover both
   still happen.
 
+- **Dependabot is removed and this fork no longer tracks upstream.**
+  `.github/dependabot.yml` is deleted, so no gomod / github-actions / docker
+  update PRs are opened; action and dependency versions are bumped by hand from
+  now on. The matching `check_dependabot()` guard in `scripts/check_config.py`
+  (which previously *required* the file and every present ecosystem to be
+  declared) is removed along with its docstring section, so the offline check
+  stays green without the automation — `check_config.py` still reports OK
+  (32 flags, 30 files scanned). The stale `codex/sync-upstream` branch, which
+  carried no commits of its own and lagged `master` by 65, is deleted from the
+  remote. There was never an `upstream` remote or a scheduled sync workflow, so
+  upstream code only ever moved via an explicit fetch/merge or the GitHub "Sync
+  fork" button; neither exists in normal use now. The fork's parent metadata on
+  GitHub is display-only and pulls nothing by itself.
+
 ### 🔐 Security — rotate your vCenter credentials
 
 **This repository shipped working vCenter passwords in plain text. They are in
