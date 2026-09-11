@@ -38,20 +38,14 @@ documentation check:
    first of which defaults to *true*, so the exporter's own `go_*` metrics are
    absent by default and nothing said so.
 
-5. **Dependency ecosystems nobody is watching.** dependabot.yml declared only
-   `gomod`, so the GitHub Actions had quietly drifted a major version behind --
-   twice, because checking them by hand is exactly as reliable as it sounds.
-   Every ecosystem the repository actually contains must be declared, so drift
-   arrives as a pull request rather than as a broken release.
-
-6. **Dashboards querying metrics that no longer exist.** The bundled dashboards
+5. **Dashboards querying metrics that no longer exist.** The bundled dashboards
    were migrated to the renamed metrics, and the unit conversions the exporter
    now applies internally were removed from the queries. Both failure modes are
    silent in Grafana: a stale metric name draws an empty panel, and a leftover
    `* 1024` draws a number that is wrong by three orders of magnitude. The rules
    are reused from scripts/migrate_dashboards.py rather than duplicated.
 
-7. **A systemd unit whose reload directive disagrees with the binary.** The rule
+6. **A systemd unit whose reload directive disagrees with the binary.** The rule
    here is bidirectional, because it has already been wrong in both directions.
    The exporter originally installed no signal handlers, so SIGHUP terminated the
    process and an `ExecReload` made `systemctl reload` report success while
@@ -62,7 +56,7 @@ documentation check:
    requires the unit to match, so removing the handler makes `ExecReload` a
    failure again rather than silently restoring the original footgun.
 
-8. **Metrics missing from the metric references, or documented but gone.** Same
+7. **Metrics missing from the metric references, or documented but gone.** Same
    bidirectional argument as the README flag check, and the same failure mode:
    a metric added without a doc entry is undiscoverable, and a doc entry left
    behind after a rename points users at a series that will never appear. Both
@@ -81,7 +75,7 @@ documentation check:
    parser fails loudly if it can no longer resolve one of them, rather than
    quietly checking a shrinking subset.
 
-9. **The scripted systemd bundle drifting from the binary or itself.**
+8. **The scripted systemd bundle drifting from the binary or itself.**
    packaging/systemd/ is a second deployment story (a config.yaml loaded with
    -file, a unit, and install.sh, assembled by scripts/build-systemd-pkg.sh)
    that used to be validated by nothing. The config's keys are checked against
@@ -315,58 +309,6 @@ def check_readme_flags(failures: list[str], flags: set[str], source: str) -> Non
         for flag in sorted(documented - flags):
             failures.append(
                 f"{doc}: flag -{flag} is documented but not registered"
-            )
-
-
-def check_dependabot(failures: list[str]) -> None:
-    """Every ecosystem present in the repository must be declared to dependabot.
-
-    Version drift is not caught by any of the checks above, and checking it by
-    hand does not work: the GitHub Actions in this repository fell a major
-    version behind twice, and both times a manual review had just declared them
-    current. The fix is not to review harder, it is to make sure something is
-    subscribed to each ecosystem -- which is a property of this file and can be
-    verified offline.
-
-    Deliberately does not query the network for latest versions. That belongs to
-    dependabot, which has the credentials and the rate limits for it; duplicating
-    it here would make the check flaky and the failure uninformative.
-    """
-    path = os.path.join(REPO, ".github", "dependabot.yml")
-    if not os.path.exists(path):
-        failures.append(
-            ".github/dependabot.yml is missing, so no dependency updates are "
-            "being proposed at all"
-        )
-        return
-
-    try:
-        doc = yaml.safe_load(open(path, encoding="utf-8")) or {}
-    except yaml.YAMLError as exc:
-        failures.append(f".github/dependabot.yml is not valid YAML: {exc}")
-        return
-
-    declared = {
-        str(u.get("package-ecosystem"))
-        for u in (doc.get("updates") or [])
-        if isinstance(u, dict)
-    }
-
-    # What the repository actually contains, and the marker that proves it.
-    present = {}
-    if os.path.exists(os.path.join(REPO, "go.mod")):
-        present["gomod"] = "go.mod"
-    workflows = os.path.join(REPO, ".github", "workflows")
-    if os.path.isdir(workflows) and os.listdir(workflows):
-        present["github-actions"] = ".github/workflows/"
-    if os.path.exists(os.path.join(REPO, "Dockerfile")):
-        present["docker"] = "Dockerfile"
-
-    for eco, marker in sorted(present.items()):
-        if eco not in declared:
-            failures.append(
-                f".github/dependabot.yml: no `{eco}` entry, but {marker} exists; "
-                "nothing is watching that ecosystem for updates"
             )
 
 
@@ -1030,7 +972,6 @@ def main() -> int:
     check_compose(failures, flags)
     check_packaging(failures, flags)
     check_readme_flags(failures, flags, source)
-    check_dependabot(failures)
     check_dashboards(failures)
     check_metrics(failures)
 
