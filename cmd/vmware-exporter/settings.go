@@ -21,6 +21,7 @@ import (
 // config.reloadExempt 里，重载永远不会写它们，读它们没有竞争。
 type exporterSettings struct {
 	maxConcurrency  int
+	scrapeInflight  int
 	targetDisabled  bool
 	metricsDisabled bool
 	debugConsole    bool
@@ -32,6 +33,7 @@ func currentExporterSettings() exporterSettings {
 	config.Snapshot(func() {
 		s = exporterSettings{
 			maxConcurrency:  *maxConcurrency,
+			scrapeInflight:  *maxScrapeInflight,
 			targetDisabled:  *disableExporterTarget,
 			metricsDisabled: *disableExporterMetrics,
 			debugConsole:    *debugConsole,
@@ -50,6 +52,18 @@ func currentMaxConcurrency() int {
 
 	config.Snapshot(func() {
 		v = *maxConcurrency
+	})
+
+	return v
+}
+
+// currentScrapeInflight 是只需要 in-flight 抓取上限时的窄口径快照，供
+// probeHandler 使用（它不读其余 exporter flag）。
+func currentScrapeInflight() int {
+	var v int
+
+	config.Snapshot(func() {
+		v = *maxScrapeInflight
 	})
 
 	return v

@@ -96,6 +96,8 @@ const i18n = (() => {
       "采集器通过可重复的 <code>collect[]</code> 和 <code>nocollect[]</code> 参数选择：",
     "ref.multi.misspelled":
       "拼写错误的采集器名称将被拒绝并返回 HTTP 400 及有效名称列表，不会静默产生空指标集。",
+    "ref.multi.password_note":
+      "<strong>不要在生产抓取里把 <code>password</code> 放进查询串。</strong>查询串会进入反向代理访问日志、浏览器历史与 Referer。Prometheus 请用任务级 <code>basic_auth</code>（凭证进 Authorization 头）；或把 <code>__param_username</code>/<code>__param_password</code> 放进权限设为 600 的 file_sd 目标文件。",
 
     // ── 参考文档：Prometheus 配置 ────────────────────────────────────
     "ref.prom.summary": "Prometheus 配置",
@@ -341,6 +343,8 @@ const i18n = (() => {
       "Collectors are selected with repeatable <code>collect[]</code> and <code>nocollect[]</code> parameters:",
     "ref.multi.misspelled":
       "A misspelled collector name is rejected with HTTP 400 and the list of valid names, rather than silently producing an empty metric set.",
+    "ref.multi.password_note":
+      "<strong>Do not put <code>password</code> in the query string for production scrapes.</strong> The query string lands in reverse-proxy access logs, browser history and the Referer header. In Prometheus use job-level <code>basic_auth</code> (credentials go in the Authorization header), or keep <code>__param_username</code>/<code>__param_password</code> in a file_sd target file chmod 600.",
 
     // ── 参考文档：Prometheus 配置 ────────────────────────────────────
     "ref.prom.summary": "Prometheus configuration",

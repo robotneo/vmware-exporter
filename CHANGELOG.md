@@ -121,6 +121,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   listener is bound, TLS is loaded, the log handler type is fixed). Changing
   them is logged as a warning instead of being silently ignored.
 
+- **Hardening and throughput flags for the scrape surface.**
+  A security/performance re-audit added three knobs plus an unconditional HTTP
+  timeout fix:
+
+  - `-web.max-scrape-inflight` (default `4`, `0` disables) caps how many
+    `/metrics` and `/probe` scrapes run at the *same time*. The existing
+    `-collector.max-concurrency` only bounds goroutines *inside one* scrape;
+    overlapping scrapes each logged in separately and fanned out independently,
+    so scrape intervals shorter than one scrape duration could pile logins onto
+    vCenter and exhaust its session table. Over-limit requests now get a fast
+    **HTTP 503** instead of queueing. The lightweight `-disable.exporter.target`
+    path is not gated (it never logs in).
+
+  - `-probe.allowed-targets` (default empty = allow any, unchanged) is an
+    optional `/probe` target allowlist as defence-in-depth against SSRF: rules
+    are comma-separated and match the target *host* as a suffix starting with
+    `.` (`.example.com`), a CIDR (`10.0.0.0/8`), or an exact host/IP. A target
+    outside the list gets **HTTP 403** before any credentials are used.
+
+  - The HTTP server now sets `ReadHeaderTimeout` (5s) and `IdleTimeout` (60s).
+    exporter-toolkit sets neither, so the previous bare `http.Server{}` waited
+    indefinitely for request headers — a Slowloris client could hold a
+    connection and goroutine for free. `WriteTimeout`/`ReadTimeout` are
+    deliberately left unset because a legitimate scrape can run the full
+    `-vmware.timeout`.
+
+  - The esxcli per-host × per-NIC fan-out is now bounded **globally per
+    scrape**, not just per errgroup layer. The vim25 client's `RoundTripper` is
+    wrapped after login so the token is held only for one in-flight SOAP call;
+    nested goroutines queue at the gate without holding a token while waiting
+    on children, so the worst case is `max-concurrency` concurrent SOAP calls
+    instead of `n × n`. vSAN uses a separate service client and stays bounded
+    by its own (non-per-host) call pattern.
+
+  Each of these is reverse-verified: a test fails when the gate always admits,
+  when the allowlist never rejects, and when the SOAP wrapper bypasses its
+  semaphore (observed peak then equals the unthrottled total).
+
 ### 🔧 Fixed
 
 - **systemd unit no longer kills the service on reload.** The exporter used to

@@ -125,9 +125,10 @@ func esxcliHostNicInfo(ctx context.Context, ch chan<- prometheus.Metric, logger 
 	// 且 prometheus.Metric channel 本身支持多 goroutine 写入。
 	//
 	// 这一层同样受 HostConcurrency 限制。注意上层已经占用了并发预算，
-	// 所以这里是「每台主机内部再限流」而非全局限流 —— 全局精确限流需要
-	// 一个跨层共享的 semaphore，那是 Stage 13 批量化 nic.get 时要做的事，
-	// 届时这一层会整体消失。
+	// 所以这里是「每台主机内部再限流」而非全局限流 —— 真正的全局 SOAP
+	// 并发由 CollectorSet 装在 vim25 client RoundTripper 上的闸统一钉住
+	// （见 internal/collector/throttle.go）：它按单次网络往返计数，无论这里
+	// 嵌套多少层 goroutine，同时在飞的 SOAP 请求数都不超过 maxConcurrency。
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(s.HostConcurrency())
 

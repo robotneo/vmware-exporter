@@ -134,8 +134,11 @@
         <p data-i18n="ref.multi.credentials">凭证也可以通过 HTTP Basic Auth 传递，而非 URL 参数。</p>
         <div class="note" data-i18n-html="ref.multi.basic_auth"><strong>Basic Auth 与 <code>-web.config.file</code> 冲突。</strong>当导出器自身监听器配置了 <code>basic_auth_users</code> 时，<code>Authorization</code> 头被其自身占用，vCenter 凭证无法通过此方式传递。请使用 URL 参数，或调试控制台（通过表单体提交）。</div>
         <p data-i18n-html="ref.multi.collectors">采集器通过可重复的 <code>collect[]</code> 和 <code>nocollect[]</code> 参数选择：</p>
-        <pre><code># 仅默认采集器
-/probe?target=vcenter.example.com&username=admin&password=secret&insecure=true
+        <pre><code># 推荐：用 HTTP Basic Auth 传凭证（不进 URL，也就不进访问日志与浏览器历史）
+curl -u admin:secret 'https://exporter:9169/probe?target=vcenter.example.com'
+
+# /debug 调试控制台以 POST 表单体提交，凭证同样不进 URL
+# 只有浏览器里临时手测才把 username/password 放进查询串，生产抓取不要这么做
 
 # 仅虚拟机和主机指标
 /probe?target=...&collect[]=vm&collect[]=host
@@ -145,6 +148,7 @@
 
 # 全部，但排除 esxcli 采集器
 /probe?target=...&collect[]=all&nocollect[]=esxcli.host.nic&nocollect[]=esxcli.storage</code></pre>
+        <div class="note" data-i18n-html="ref.multi.password_note"><strong>不要在生产抓取里把 <code>password</code> 放进查询串。</strong>查询串会进入反向代理访问日志、浏览器历史与 Referer。Prometheus 请用任务级 <code>basic_auth</code>（凭证进 Authorization 头）；或把 <code>__param_username</code>/<code>__param_password</code> 放进权限设为 600 的 file_sd 目标文件。</div>
         <p data-i18n="ref.multi.misspelled">拼写错误的采集器名称将被拒绝并返回 HTTP 400 及有效名称列表，不会静默产生空指标集。</p>
       </div>
     </details>
