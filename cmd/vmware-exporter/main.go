@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/prezhdarov/vmware-exporter/internal/config"
 	vmware "github.com/prezhdarov/vmware-exporter/vmware/api"
@@ -71,7 +72,56 @@ var (
 	// 存不存在都一样 —— 但面向公网或多租户的部署应该能把它收掉。
 	debugConsole = flag.Bool("web.debug-console", true,
 		"Serve the interactive debug console on /debug. Disable it for deployments where the exporter's HTTP interface is reachable by untrusted users.")
+
+	// scrapeInflight 限制同时进行的抓取数。
+	//
+	// -collector.max-concurrency 限的是**单次抓取内部**同时跑多少个
+	// collector / 主机，但它管不到「同时有多少个抓取在跑」。多 vCenter 的
+	// /probe 部署里，Prometheus 抓取间隔短于单轮耗时（或有人并发戳 /probe）
+	// 时，N 个抓取会叠加成 N 次登录、N 个 vCenter 会话与 N×并发宽度的 SOAP
+	// 请求，足以把 vCenter 的会话表打满。这个闸把叠加的总高度钉住。
+	//
+	// 拿不到令牌时直接返回 503 而不是排队：排队只会让请求堆积到客户端侧
+	// 自己超时，503 让 Prometheus 把这一轮明确记为失败，语义与"目标此刻
+	// 太忙"一致。0 表示不限。
+	maxScrapeInflight = flag.Int("web.max-scrape-inflight", 4,
+		"Maximum number of scrapes (/metrics and /probe) running at the same time. Requests over the limit get HTTP 503. 0 disables the limit.")
+
+	// probeAllowedTargets 是 /probe target 的可选白名单。
+	//
+	// /probe 接受任意 target，默认无鉴权时任何人都能让 exporter 向任意地址
+	// 发起 HTTPS 连接（SSRF / 内网探测面）。默认留空 = 保持原有行为（放开），
+	// 不破坏既有部署；需要收紧时填一个逗号分隔的匹配规则列表，逐条匹配
+	// target 的 host 部分：
+	//
+	//   - 以 "." 开头（如 ".example.com"）：匹配该后缀，含其自身与所有子域
+	//   - 含 "/"（如 "10.0.0.0/8"）：按 CIDR 网段匹配（IP 型 target）
+	//   - 其余（如 "vc.corp" 或 "10.1.2.3"）：精确相等
+	probeAllowedTargets = flag.String("probe.allowed-targets", "",
+		"Comma-separated allowlist for the /probe target host: suffixes starting with '.', CIDRs containing '/', or exact host/IP matches. Empty (default) allows any target.")
 )
+
+// HTTP server 超时。不设 WriteTimeout：一次抓取可能跑满 -vmware.timeout
+// （默认 60s），WriteTimeout 会从读完请求头开始计时并掐断正常的慢响应；
+// 抓取时长本就由 -vmware.timeout 与请求 context 兜住。
+const (
+	readHeaderTimeout = 5 * time.Second
+	idleTimeout       = 60 * time.Second
+)
+
+// newHTTPServer 构造带基本抗慢连接超时的 *http.Server。
+//
+// exporter-toolkit 的 web.ListenAndServe 不会替我们设任何超时（v0.16 的
+// 实现里 grep 不到 ReadHeaderTimeout/IdleTimeout），裸 http.Server{} 的
+// 这些字段全是 0（=无限）。于是一个只连上、慢慢发 header 的客户端
+// （Slowloris）就能长期占住一个连接与一个 goroutine，几乎零成本耗尽 fd。
+// 抽成函数是为了让"超时确实被设置"可测。
+func newHTTPServer() *http.Server {
+	return &http.Server{
+		ReadHeaderTimeout: readHeaderTimeout,
+		IdleTimeout:       idleTimeout,
+	}
+}
 
 func usage() {
 	s := fmt.Sprintf(`%s collects metrics data from VMware vCenter.
@@ -194,7 +244,7 @@ func main() {
 
 	logger.Info("Starting "+exporterName, "listening_on", *listenAddress)
 
-	server := &http.Server{}
+	server := newHTTPServer()
 
 	if err := web.ListenAndServe(server, webConfig(listenAddress), logger); err != nil {
 		logger.Error("listen and serve failed", "error", err)

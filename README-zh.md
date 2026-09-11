@@ -431,7 +431,9 @@ scrape_configs:
 | `-vmware.interval` | int | PerfManager 采样窗口（秒）。**不再参与超时计算。** | `20` |
 | `-vmware.granularity` | int | 采样数据的时间粒度（秒）。必须大于 0，且不大于 `-vmware.interval`。 | `20` |
 | `-vmware.vsan.interval` | int | vSAN 性能查询的时间窗口（秒）。vSAN 统计的最小采集粒度就是 5 分钟，低于 300 拿不到更多数据点。仅 `-collector.vsan.perf` 使用。 | `300` |
-| `-collector.max-concurrency` | int | 并发上限，同时约束两处：`CollectorSet` 层同时运行的 collector 数，以及 esxcli collector 内部按主机 fan-out 的宽度。设为 0 则不限制 collector 层，但 per-host fan-out 仍有内建下限。 | `8` |
+| `-collector.max-concurrency` | int | 并发上限，同时约束三处：`CollectorSet` 层同时运行的 collector 数、esxcli 按主机 fan-out 的 goroutine 宽度，以及包装在 vim25 RoundTripper 上的**单次抓取内全局 SOAP 在飞请求数**（最后一处把"每主机 × 每网卡"嵌套 fan-out 的真实并发钉死在该值，而不是两层各自限流后最坏仍达 n×n）。设为 0 则不限制 collector 层，但 per-host fan-out 仍有内建下限。 | `8` |
+| `-web.max-scrape-inflight` | int | 同时进行的抓取数（`/metrics` 与 `/probe` 合计）。超出上限的请求直接返回 HTTP 503，而不是排队、向 vCenter 叠加更多登录与会话。设为 0 关闭。 | `4` |
+| `-probe.allowed-targets` | string | `/probe` 目标 host 的可选白名单，作为 SSRF 的深度防御：以 `.` 开头按后缀匹配（`.example.com`）、含 `/` 按 CIDR 网段匹配（`10.0.0.0/8`）、其余按精确 host/IP 匹配，逗号分隔。留空（默认）允许任意 target。 | 空 |
 
 > **取代了 `-prom.maxRequests`**：那个参数是死参数 —— 上游框架把它存进
 > `eHandler.maxRequests` 之后就再没读过，设成任何值都没有效果。现在这个值

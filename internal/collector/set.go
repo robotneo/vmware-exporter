@@ -313,6 +313,16 @@ func (cs *CollectorSet) Collect(ch chan<- prometheus.Metric) {
 	s.Namespace = cs.namespace
 	s.MaxConcurrency = cs.maxConcurrency
 
+	// 在登录成功、任何 collector 起跑之前，给本轮抓取的 SOAP 通道装一个
+	// 全局闸。它与 collector/主机层的 SetLimit 不同：闸放在 vim25 client 的
+	// RoundTripper 上，令牌只包住单次网络往返，因此把 esxcli "每主机 × 每网卡"
+	// 这种嵌套 fan-out 真正同时在飞的请求总数钉死在 maxConcurrency，而不是
+	// 两层各自 SetLimit(n) 后最坏仍有 n×n 个并发。详见 throttle.go。
+	//
+	// 时序与上面两个字段相同的约束：必须在 g.Go 之前，否则安装写入与
+	// Update 里的并发读取构成数据竞争；必须在 Login 之后，client 是登录产物。
+	s.ThrottleSOAP(cs.maxConcurrency)
+
 	cs.logger.Debug("login successful", "target", cs.target, "target_type", s.TargetType,
 		"collectors", len(cs.collectors))
 

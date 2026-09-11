@@ -25,6 +25,11 @@ import (
 // 按 target 分桶互不干扰。
 var scrapeErrors = collector.NewScrapeErrors()
 
+// scrapeInflightGate 是 /metrics 与 /probe 共用的进程级"同时抓取数"闸。
+// 只包住真正连 vCenter 的抓取；-disable.exporter.target 时 /metrics 只输出
+// exporter 自身指标（轻量、不登录），不计入闸内。
+var scrapeInflightGate = &scrapeGate{}
+
 // 配置重载的自监控指标。
 //
 // 有它们才能给「reload 失败」配告警。没有的话失败只留一行日志：systemctl
@@ -195,6 +200,15 @@ func metricsHandler(logger *slog.Logger) http.HandlerFunc {
 			return
 		}
 
+		// 进程级 in-flight 闸：抓取间隔短于单轮耗时时阻止请求叠加，把
+		// vCenter 会话与 SOAP 并发的总高度钉住。满员直接 503，不排队。
+		if !scrapeInflightGate.tryAcquire(cfg.scrapeInflight) {
+			logger.Warn("scrape rejected: too many scrapes in flight", "limit", cfg.scrapeInflight)
+			http.Error(w, "exporter is busy scraping, try the next scrape interval", http.StatusServiceUnavailable)
+			return
+		}
+		defer scrapeInflightGate.release()
+
 		// ctx 派生自请求：客户端断连或 Prometheus 抓取超时会真正取消上游的
 		// vCenter 调用。改动前这条路径上的 context 由 api 层用
 		// context.Background() 独立派生，请求侧的取消传不进来。
@@ -246,6 +260,15 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 		return
 	}
 
+	// 可选 target 白名单（SSRF 深度防御）。白名单为空时放行一切。配置了
+	// 规则但本次 target 不命中时明确 403，而不是让它带着调用方提供的凭证去
+	// 连一个不该被探测的地址。
+	if !targetAllowed(target) {
+		http.Error(w, "target is not in the configured allowlist (-probe.allowed-targets)", http.StatusForbidden)
+		logger.Warn("probe target rejected by allowlist", "target", target)
+		return
+	}
+
 	// 认证参数可来自 URL 参数或 HTTP Basic Auth。
 	username := params.Get("username")
 	password := params.Get("password")
@@ -287,6 +310,14 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 	}
 
 	// 凭证与 target 走 probeLogin，它把 Credentials 绑进 collector.Login 接口。
+	inflightLimit := currentScrapeInflight()
+	if !scrapeInflightGate.tryAcquire(inflightLimit) {
+		logger.Warn("probe rejected: too many scrapes in flight", "target", target, "limit", inflightLimit)
+		http.Error(w, "exporter is busy scraping, try the next scrape interval", http.StatusServiceUnavailable)
+		return
+	}
+	defer scrapeInflightGate.release()
+
 	cs, err := collector.NewCollectorSet(r.Context(), vmwareCollectors.Definitions(), collector.Options{
 		Namespace: namespace,
 		Target:    target,
