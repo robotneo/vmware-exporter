@@ -45,6 +45,9 @@ distinct from whether vSphere is healthy.
 | `vmware_scrape_collector_duration_seconds` | `collector` | Duration of one collector. Use it to find which collector is making a large inventory slow. |
 | `vmware_scrape_collector_success` | `collector` | `1` when that collector completed, `0` when it errored. A single failing collector does not fail the scrape. |
 | `vmware_scrape_errors_total` | `collector` | **Counter.** Total scrape errors per collector. The label value `login` covers authentication failures. Alert on `rate()`, not on the raw value. |
+| `vmware_scrape_entities_found` | `collector`, `kind`, `vcenter` | **Gauge, per-scrape snapshot.** Entities discovered in the inventory during the last scrape, by collector and entity kind — e.g. `collector="vm", kind="vm"`. This counts *every* entity, including powered-off VMs and disconnected/maintenance hosts (see the breaking-change note below). |
+| `vmware_scrape_entities_emitted` | `collector`, `kind`, `vcenter` | **Gauge, per-scrape snapshot.** Entities for which data-plane metrics (performance counters, esxcli) were emitted. Static inventory metrics (`_info`, capacity, status) are emitted for every entity; only the perf data plane skips entities vCenter has no real-time samples for. |
+| `vmware_scrape_entities_skipped` | `collector`, `kind`, `reason`, `vcenter` | **Gauge, per-scrape snapshot.** Entities skipped by a data-plane metric during the last scrape, by reason: `powered_off`, `suspended`, `disconnected`, `not_responding`, `maintenance`, `unsupported`, `error`. Every reason a collector cares about is pre-filled with `0`, so the series set is stable and alerts need no `absent()`/`or`. An entity can match more than one reason (e.g. maintenance *and* disconnected), so summing across reasons can exceed the number of skipped entities. Alert on the raw gauge (`> 0`) or on `found - emitted`, never on `rate()` — it is not a counter. |
 | `vmware_exporter_build_info` | `version`, `revision`, `branch`, `goversion`, `goos`, `goarch`, `tags` | Always `1`. Answers "which build is this host running?" |
 | `vmware_exporter_config_last_reload_successful` | — | `1` when the last `systemctl reload` succeeded, `0` when it failed. **Worth alerting on:** `systemctl reload` exits 0 as long as the signal was delivered, so a rejected configuration is invisible otherwise. A failed reload keeps the previous configuration. |
 | `vmware_exporter_config_last_reload_success_timestamp_seconds` | — | Unix time of the last *successful* reload, or of process start if none has happened. |
@@ -63,6 +66,10 @@ vmware_exporter_config_last_reload_successful == 0
 
 # one collector is failing while the scrape still "succeeds"
 rate(vmware_scrape_errors_total[15m]) > 0
+
+# entities were dropped from the data plane this scrape (snapshot gauge,
+# not a counter -- do not wrap it in rate())
+vmware_scrape_entities_skipped > 0
 ```
 
 ## Topology and inventory
@@ -80,6 +87,12 @@ references vSphere itself uses — you join them onto the numeric series to answ
 | `vmware_datacenter_info` | `dcmo`, `dc`, `vcenter`, (`synthetic`) | One series per datacenter. On ESXi the only datacenter is the implicit `ha-datacenter` pseudo-object, which is tagged `synthetic="true"` — filter with `{synthetic!="true"}` to exclude it. |
 | `vmware_folder_info` | `foldermo`, `dc`, `dcmo`, `vcenter` | One series per `host` or `datastore` folder, for walking the inventory tree. Note `dc` here carries the *folder* name, not the datacenter name. |
 | `vmware_cluster_info` | `cmo`, `vmwcluster`, `foldermo`, `vcenter` | One series per cluster. The cluster name label is `vmwcluster`, not `cluster` — `cluster` is a reserved label in many Prometheus setups. |
+| `vmware_cluster_overall_status` | `cmo`, `vmwcluster`, `status`, `vcenter` | Cluster overall status as computed by vCenter. `status` is `gray`, `green`, `yellow`, or `red`; `gray` (unknown) is emitted as-is and must not be folded into `yellow`. |
+| `vmware_cluster_effective_hosts` | `cmo`, `vmwcluster`, `vcenter` | Hosts in the cluster that are connected, powered on and not in maintenance mode (`summary.numEffectiveHosts`). The denominator for "capacity still schedulable". |
+| `vmware_cluster_cpu_capacity_hertz` | `cmo`, `vmwcluster`, `vcenter` | Aggregated CPU resources of all hosts, in hertz (`summary.totalCpu` MHz × 1e6). |
+| `vmware_cluster_cpu_effective_hertz` | `cmo`, `vmwcluster`, `vcenter` | CPU available to run VMs after HA admission-control/failover reservations, in hertz (`summary.effectiveCpu` MHz × 1e6). Maintenance/unresponsive hosts are excluded. |
+| `vmware_cluster_memory_capacity_bytes` | `cmo`, `vmwcluster`, `vcenter` | Aggregated memory of all hosts in bytes (`summary.totalMemory`, already bytes). |
+| `vmware_cluster_memory_effective_bytes` | `cmo`, `vmwcluster`, `vcenter` | Memory available to run VMs after HA reservations, in bytes (`summary.effectiveMemory` is MB — multiplied by 1048576). |
 | `vmware_cluster_datastore` | `cmo`, `vmwcluster`, `dsmo`, `vcenter` | Which datastores a cluster can reach, **one series per datastore**. |
 | `vmware_compute_info` | `cmo`, `host`, `foldermo`, `vcenter`, (`synthetic`) | Standalone compute resources — hosts not in any cluster. Only emitted when no cluster exists. On ESXi this is the synthetic `ha-compute-res`; under vCenter a standalone host has a real auto-generated ComputeResource and is *not* tagged synthetic. |
 | `vmware_compute_datastore` | `cmo`, `host`, `dsmo`, `vcenter`, (`synthetic`) | Datastores reachable from a standalone compute resource, one series per datastore. |
@@ -88,9 +101,23 @@ references vSphere itself uses — you join them onto the numeric series to answ
 
 Collector: `host` (enabled by default).
 
+> **Breaking change (v0.2.0):** `_info`, hardware/software and capacity metrics
+> are now emitted for **every** host, including powered-off, disconnected,
+> not-responding and maintenance-mode hosts. Previously those hosts vanished
+> from inventory metrics entirely, so "host deleted" and "host in maintenance"
+> were indistinguishable in Prometheus. Hardware/software metrics are skipped
+> only when vCenter reports no hardware/product summary at all (a disconnected
+> host). Only performance counters and the esxcli collectors skip non-eligible
+> hosts, counted in `vmware_scrape_entities_skipped`. Filter on the state
+> metrics below when a query needs the old "healthy hosts only" semantics.
+
 | Metric | Labels | Meaning |
 |--------|--------|---------|
-| `vmware_host_info` | `hostmo`, `host`, `cmo`, `vcenter` | One series per ESXi host, with its parent cluster or compute resource. |
+| `vmware_host_info` | `hostmo`, `host`, `cmo`, `uuid`, `vcenter` | One series per ESXi host, with its parent cluster or compute resource. `uuid` is the SMBIOS UUID (`hardware.systemInfo.uuid`), empty when the target does not report it; it is an extra label only — `hostmo` + `vcenter` remain the join key. `cmo` is empty for an orphaned host with no runtime host reference. |
+| `vmware_host_power_state` | `hostmo`, `host`, `state`, `vcenter` | Power state as a label, value always `1`: `poweredOn`, `poweredOff`, `standBy`, or `unknown` (when vCenter reports no state). One series per state the host currently occupies. |
+| `vmware_host_connection_state` | `hostmo`, `host`, `state`, `vcenter` | Connection state as a label, value always `1`: `connected`, `disconnected`, or `notResponding`. |
+| `vmware_host_maintenance_mode` | `hostmo`, `host`, `vcenter` | `1` when the host is in maintenance mode, `0` otherwise. A plain boolean rather than a state label because maintenance has no other values. |
+| `vmware_host_overall_status` | `hostmo`, `host`, `status`, `vcenter` | Host overall status as computed by vCenter. `status` is `gray`, `green`, `yellow`, or `red`; `gray` means "unknown/unreachable" and is emitted as-is. |
 | `vmware_host_hardware_info` | `hostmo`, `host`, `vendor`, `model`, `cpu_type`, `vcenter` | Hardware model and CPU type. |
 | `vmware_host_software_info` | `hostmo`, `host`, `software`, `version`, `build`, `vcenter` | ESXi version and build — what you group by when planning patching. |
 | `vmware_host_cpu_corecount` | `hostmo`, `host`, `vcenter` | Physical CPU cores. |
@@ -107,9 +134,25 @@ Collector: `vm` (enabled by default). This is usually the largest collector by
 series count: one host has a few series, one VM has several plus its performance
 counters.
 
+> **Breaking change (v0.2.0):** `_info` and the capacity/snapshot metrics are
+> now emitted for **every** VM, including powered-off and suspended VMs.
+> Previously only powered-on VMs appeared, so capacity dashboards silently lost
+> their denominator during a shutdown. Only performance counters skip
+> non-powered-on VMs (vCenter has no real-time samples for them), counted in
+> `vmware_scrape_entities_skipped` with reason `powered_off`/`suspended`. Join
+> the power-state metric when a query needs the old semantics:
+>
+> ```promql
+> vmware_vm_info
+>   * on(vcenter, vmmo) group_left(state)
+>   vmware_vm_power_state{state="poweredOn"}
+> ```
+
 | Metric | Labels | Meaning |
 |--------|--------|---------|
-| `vmware_vm_info` | `vmmo`, `vm`, `hostmo`, `vcenter` | One series per VM, with the host it runs on. Join on `hostmo` to reach `vmware_host_info`. |
+| `vmware_vm_info` | `vmmo`, `vm`, `hostmo`, `uuid`, `vcenter` | One series per VM, with the host it runs on. Join on `hostmo` to reach `vmware_host_info` (empty for an orphaned VM whose runtime host reference is gone). `uuid` is `summary.config.uuid`, empty for inaccessible VMs; it is an extra label only — `vmmo` + `vcenter` remain the join key. |
+| `vmware_vm_power_state` | `vmmo`, `vm`, `state`, `vcenter` | Power state as a label, value always `1`: `poweredOn`, `poweredOff`, `suspended`, or `unknown` (when vCenter reports no state). This is what distinguishes "VM gone" from "VM exists but is off". |
+| `vmware_vm_overall_status` | `vmmo`, `vm`, `status`, `vcenter` | VM overall status as computed by vCenter. `status` is `gray`, `green`, `yellow`, or `red`; `gray` is emitted as-is. |
 | `vmware_vm_cpu_corecount` | `vmmo`, `vm`, `hostmo`, `vcenter` | vCPUs configured. |
 | `vmware_vm_mem_capacity_bytes` | `vmmo`, `vm`, `hostmo`, `vcenter` | Configured RAM in bytes. |
 | `vmware_vm_datastore_capacity_used_bytes` | `vmmo`, `vm`, `vcenter`, `dsmo` | Storage this VM commits on a given datastore — disks, logs, snapshots and configuration files. One series per VM/datastore pair, so a VM with disks on three datastores produces three. |
@@ -131,7 +174,8 @@ Static inventory metrics from `Summary`:
 | `vmware_datastore_accessible` | `dsmo`, `ds`, `vcenter` | `1` when the datastore is reachable, `0` when it is not. |
 | `vmware_datastore_capacity_bytes` | `dsmo`, `ds`, `vcenter` | Datastore capacity in bytes. |
 | `vmware_datastore_free_bytes` | `dsmo`, `ds`, `vcenter` | Available space in bytes. |
-| `vmware_datastore_info` | `dsmo`, `ds`, `type`, `pfinstance`, `foldermo`, `vcenter` | Datastore metadata: `type` (VMFS, NFS, vSAN, etc.). `pfinstance` is the datastore URL with the `ds://`, `/vmfs/volumes/` and leading-slash prefixes stripped — this is the form the performance counters use as their instance name, so it is what you join on. |
+| `vmware_datastore_info` | `dsmo`, `ds`, `type`, `pfinstance`, `foldermo`, `vcenter` | Datastore metadata: `type` (VMFS, NFS, vSAN, etc.). `pfinstance` is the datastore URL with the `ds://`, `/vmfs/volumes/` and leading-slash prefixes stripped — this is the form the performance counters use as their instance name, so it is what you join on. For VMFS datastores the remaining path segment is the VMFS volume UUID, which is why there is no separate `uuid` label; NFS/vSAN datastores have no VMFS UUID. |
+| `vmware_datastore_overall_status` | `dsmo`, `ds`, `status`, `vcenter` | Datastore overall status as computed by vCenter. `status` is `gray`, `green`, `yellow`, or `red`; `gray` (often the first sign of an APD/PDL condition) is emitted as-is. |
 
 Performance counters (`disk.provisioned.latest`, `disk.used.latest`):
 

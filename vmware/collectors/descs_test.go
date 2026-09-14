@@ -88,9 +88,13 @@ func TestHostDescLabelOrder(t *testing.T) {
 		desc *prometheus.Desc
 		want []string
 	}{
-		{"info", d.info, []string{"hostmo", "host", "cmo", "vcenter"}},
+		{"info", d.info, []string{"hostmo", "host", "cmo", "uuid", "vcenter"}},
 		{"hardware_info", d.hardwareInfo, []string{"hostmo", "host", "vendor", "model", "cpu_type", "vcenter"}},
 		{"software_info", d.softwareInfo, []string{"hostmo", "host", "software", "version", "build", "vcenter"}},
+		{"overall_status", d.overallStatus, []string{"hostmo", "host", "status", "vcenter"}},
+		{"power_state", d.powerState, []string{"hostmo", "host", "state", "vcenter"}},
+		{"connection_state", d.connectionState, []string{"hostmo", "host", "state", "vcenter"}},
+		{"maintenance_mode", d.maintenanceMode, []string{"hostmo", "host", "vcenter"}},
 		{"cpu_corecount", d.cpuCoreCount, []string{"hostmo", "host", "vcenter"}},
 		{"cpu_threadcount", d.cpuThreadCount, []string{"hostmo", "host", "vcenter"}},
 		{"cpu_capacity", d.cpuCapacity, []string{"hostmo", "host", "vcenter"}},
@@ -113,7 +117,9 @@ func TestVMDescLabelOrder(t *testing.T) {
 		desc *prometheus.Desc
 		want []string
 	}{
-		{"info", d.info, []string{"vmmo", "vm", "hostmo", "vcenter"}},
+		{"info", d.info, []string{"vmmo", "vm", "hostmo", "uuid", "vcenter"}},
+		{"overall_status", d.overallStatus, []string{"vmmo", "vm", "status", "vcenter"}},
+		{"power_state", d.powerState, []string{"vmmo", "vm", "state", "vcenter"}},
 		{"cpu_corecount", d.cpuCoreCount, []string{"vmmo", "vm", "hostmo", "vcenter"}},
 		{"mem_capacity", d.memCapacity, []string{"vmmo", "vm", "hostmo", "vcenter"}},
 		{"datastore_capacity_used", d.dsCapacityUsed, []string{"vmmo", "vm", "vcenter", "dsmo"}},

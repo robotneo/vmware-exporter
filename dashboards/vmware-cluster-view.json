@@ -100,7 +100,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "count(vmware_host_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"})",
+          "expr": "count((vmware_host_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)))",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -168,7 +168,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"})",
+          "expr": "sum((vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)))",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -236,7 +236,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)",
+          "expr": "sum(\n    (vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))\n)",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -304,7 +304,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "count(vmware_vm_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"})",
+          "expr": "count(\n  (vmware_vm_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"})\n  and on(vcenter, vmmo) vmware_vm_power_state{state=\"poweredOn\"}\n)",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -381,7 +381,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n  vmware_host_cpu_usage_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) /\nsum(\n  vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * \n  vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) \n* 100",
+          "expr": "sum(\n  vmware_host_cpu_usage_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) /\nsum(\n  (vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)) * \n  (vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))\n) \n* 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "__auto",
@@ -458,7 +458,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(vmware_host_mem_consumed_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}) / \nsum(vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"})\n* 100\n",
+          "expr": "sum(vmware_host_mem_consumed_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}) / \nsum((vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)))\n* 100\n",
           "interval": "20s",
           "legendFormat": "__auto",
           "range": true,
@@ -536,7 +536,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(\n  vmware_vm_cpu_corecount{vcenter=~\"$vcenter\"} * on (vmmo) group_left \n  vmware_vm_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)\n/ \nsum(vmware_host_cpu_threadcount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"})",
+          "expr": "sum(\n  (vmware_vm_cpu_corecount{vcenter=~\"$vcenter\"} and on(vcenter, vmmo) vmware_vm_power_state{state=\"poweredOn\"}) * on (vmmo) group_left \n  vmware_vm_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)\n/ \nsum((vmware_host_cpu_threadcount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)))",
           "hide": false,
           "instant": false,
           "interval": "20s",
@@ -606,7 +606,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} *\n    vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) - \nsum(\n    vmware_host_cpu_usage_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)",
+          "expr": "sum(\n    (vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)) *\n    (vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))\n) - \nsum(\n    vmware_host_cpu_usage_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -674,7 +674,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} *\n    vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)",
+          "expr": "sum(\n    (vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)) *\n    (vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))\n)",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -742,7 +742,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) / \nsum(\n   vmware_host_cpu_corecount{ vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)",
+          "expr": "sum(\n    (vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, vmmo) vmware_vm_power_state{state=\"poweredOn\"})\n) / \nsum(\n   (vmware_host_cpu_corecount{ vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))\n)",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -810,7 +810,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) - \nsum(\n    vmware_host_mem_consumed_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)",
+          "expr": "sum(\n    (vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))\n) - \nsum(\n    vmware_host_mem_consumed_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -1042,7 +1042,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}",
+          "expr": "(vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))",
           "format": "table",
           "hide": false,
           "instant": true,
@@ -1058,7 +1058,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}",
+          "expr": "(vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))",
           "format": "table",
           "hide": false,
           "instant": true,
@@ -1074,7 +1074,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}",
+          "expr": "(vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))",
           "format": "table",
           "hide": false,
           "instant": true,
@@ -1497,7 +1497,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n  vmware_host_cpu_usage_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) / \nsum(\n  vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} *\n  vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) \n* 100",
+          "expr": "sum(\n  vmware_host_cpu_usage_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) / \nsum(\n  (vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)) *\n  (vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))\n) \n* 100",
           "interval": "20s",
           "legendFormat": "Usage",
           "range": true,
@@ -1522,7 +1522,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "(\navg(\n    sum(\n        rate(vmware_host_cpu_ready_seconds_total{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}[$__rate_interval])\n    ) /\n    sum(\n        vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n    ) \n)\n) * 100",
+          "expr": "(\navg(\n    sum(\n        rate(vmware_host_cpu_ready_seconds_total{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}[$__rate_interval])\n    ) /\n    sum(\n        (vmware_host_cpu_corecount{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))\n    ) \n)\n) * 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Ready",
@@ -1664,7 +1664,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_host_mem_consumed_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) / \nsum(\n    vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)\n* 100",
+          "expr": "sum(\n    vmware_host_mem_consumed_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) / \nsum(\n    (vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))\n)\n* 100",
           "interval": "20s",
           "legendFormat": "Consumed",
           "range": true,
@@ -1676,7 +1676,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_host_mem_active_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) / \nsum(\n    vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)\n* 100",
+          "expr": "sum(\n    vmware_host_mem_active_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) / \nsum(\n    (vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))\n)\n* 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Active",
@@ -1689,7 +1689,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_host_mem_shared_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)/ \nsum(\n    vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)\n* 100",
+          "expr": "sum(\n    vmware_host_mem_shared_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)/ \nsum(\n    (vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))\n)\n* 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Shared",
@@ -1702,7 +1702,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_host_mem_balloon_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)/ \nsum(\n    vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)\n* 100",
+          "expr": "sum(\n    vmware_host_mem_balloon_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)/ \nsum(\n    (vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))\n)\n* 100",
           "hide": false,
           "interval": "20s",
           "legendFormat": "Ballooned",
@@ -2192,7 +2192,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "count(\n    vmware_vm_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * on (hostmo) group_left\n    vmware_host_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", host=~\"$host\"}\n)",
+          "expr": "count(\n  (vmware_vm_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} * on (hostmo) group_left\n    vmware_host_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\", host=~\"$host\"})\n  and on(vcenter, vmmo) vmware_vm_power_state{state=\"poweredOn\"}\n)",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
@@ -2630,7 +2630,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(\n    vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n) / \nsum(\n   vmware_host_cpu_corecount{ vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"}\n)",
+          "expr": "sum(\n    (vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, vmmo) vmware_vm_power_state{state=\"poweredOn\"})\n) / \nsum(\n   (vmware_host_cpu_corecount{ vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))\n)",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,

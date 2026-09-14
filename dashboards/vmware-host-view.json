@@ -976,7 +976,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "count(vmware_vm_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"})",
+          "expr": "count(\n  (vmware_vm_info{vcenter=~\"$vcenter\", hostmo=~\"$hostmo\"})\n  and on(vcenter, vmmo) vmware_vm_power_state{state=\"poweredOn\"}\n)",
           "interval": "20s",
           "legendFormat": "{{host}}",
           "range": true,
