@@ -193,21 +193,12 @@ async function copyProbeURL() {
   const url =
     location.origin + "/probe?" + buildParams("<password>").toString();
 
-  const btn = $("genUrl");
-  const restore = btn.textContent;
-
-  try {
-    await navigator.clipboard.writeText(url);
-    btn.textContent = i18n.__("debug.copied");
-  } catch {
-    // 非 HTTPS 下 clipboard API 不可用，退回到让用户自己复制。
-    window.prompt("Copy this URL", url);
-    return;
-  }
-
-  setTimeout(() => {
-    btn.textContent = restore;
-  }, 1400);
+  // 不弹窗：成功/失败只在按钮上就地反馈。HTTP 下 vmeCopy 内部用
+  // execCommand 兜底（在本次点击手势栈里同步执行）。
+  window.vmeCopy($("genUrl"), url, {
+    ok: i18n.__("debug.copied"),
+    fail: i18n.__("debug.copy_fail"),
+  });
 }
 
 // filterLines 在本地过滤已经拿到的输出，不重发请求。

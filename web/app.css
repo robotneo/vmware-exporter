@@ -293,6 +293,12 @@ input::placeholder { color: var(--text-3); }
 .btn.busy .spinner { display: block; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* 复制按钮就地反馈：不弹窗，只让按钮自己变色 1.4s。
+   用 ok/err 语义色而不是通用的蓝/灰，用户一眼能区分成功与失败；
+   深浅色主题下 --ok/--err 已各自定义。 */
+.btn.copied { border-color: var(--ok); background: var(--ok-soft); color: var(--ok); }
+.btn.copy-failed { border-color: var(--err); background: var(--err-soft); color: var(--err); }
+
 .stats { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; padding: 16px; }
 @media (max-width: 620px) { .stats { grid-template-columns: repeat(2, minmax(0,1fr)); } }
 
