@@ -62,6 +62,20 @@ vmware.granularity: 20
 # 填小于 300 不会拿到更多数据点。
 vmware.vsan.interval: 300
 
+# 单次 QueryPerf SOAP 请求最多携带的实体数（主机/VM/数据存储）。
+# 大规模环境下把全部实体塞进一个请求会撞上 vCenter 的
+# vpxd.stats.maxQueryMetrics 上限或单次超时；分块后各块在
+# collector.max-concurrency 的有界并发下发出、按实体顺序合并，
+# 产出序列与不分块完全一致。填 0 表示不分块（v0.1.19 及更早行为）。
+vmware.perf.chunk-size: 64
+
+# 慢变清单/拓扑检索（datacenter、folder、cluster、datastore、
+# resource pool、vSAN 集群名）的复用有效期。主机/VM 的运行态和
+# 所有性能计数器始终实时，不进缓存。填 0 关闭缓存，回到每轮全量
+# ContainerView 检索（v0.1.19 及更早行为）。多租户 /probe 路径
+# 永远不使用本缓存。
+scrape.inventory-cache-ttl: 5m
+
 
 # ── 采集器开关 ──────────────────────────────────────────────────────────
 #
