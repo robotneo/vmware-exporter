@@ -21,6 +21,11 @@ dist/
 # scripts/migrate_dashboards.py.
 *.json.bak
 *.json.premigrate
+*.lifecycle.bak
+
+# Python bytecode from scripts/check_config.py's dynamic script imports
+__pycache__/
+*.pyc
 
 # The binary from a local `go build -o vmware-exporter .`. Named after the
 # module, so it sits next to the source and is easy to commit by accident.

@@ -1,0 +1,5326 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_VICTORIAMETRICS-METRICS-DATASOURCE",
+      "label": "victoriametrics-metrics-datasource",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "victoriametrics-metrics-datasource",
+      "pluginName": "VictoriaMetrics"
+    }
+  ],
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "10.4.0"
+    },
+    {
+      "type": "datasource",
+      "id": "victoriametrics-metrics-datasource",
+      "name": "VictoriaMetrics",
+      "version": "0.13.3"
+    },
+    {
+      "type": "panel",
+      "id": "stat",
+      "name": "Stat",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "gauge",
+      "name": "Gauge",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "bargauge",
+      "name": "Bar gauge",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "timeseries",
+      "name": "Time series",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "piechart",
+      "name": "Pie chart",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "table",
+      "name": "Table",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "row",
+      "name": "Row",
+      "version": ""
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0,211,255,1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "VMware vSphere 集群视角总览（vmware-exporter 当前指标命名）：集群 KPI 与超配、主机清单、VM CPU/内存/网络 Top 排行、计算资源与网络趋势、各集群横向对比。",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 101,
+      "type": "row",
+      "title": "集群概览 · Cluster Overview",
+      "collapsed": false,
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 102,
+      "type": "stat",
+      "title": "主机数 · Hosts",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "count(vmware_host_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard",
+        "content": "",
+        "mode": "markdown"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3B82F6"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 103,
+      "type": "stat",
+      "title": "逻辑核心 · Cores",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum((vmware_host_cpu_corecount{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)))",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard",
+        "content": "",
+        "mode": "markdown"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#06B6D4"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 104,
+      "type": "stat",
+      "title": "物理内存 · Memory",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum((vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)))",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard",
+        "content": "",
+        "mode": "markdown"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1,
+          "mappings": [],
+          "noValue": "0",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8B5CF6"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 105,
+      "type": "stat",
+      "title": "运行中 VM · Powered VMs",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "count(vmware_vm_sys_uptime_seconds{vcenter=~\"$vcenter\"} * on(vmmo) group_left max by(vmmo)(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}))",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard",
+        "content": "",
+        "mode": "markdown"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#10B981"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 106,
+      "type": "stat",
+      "title": "vCPU 总数 · vCPUs",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum((vmware_vm_cpu_corecount{vcenter=~\"$vcenter\"} and on(vcenter, vmmo) vmware_vm_power_state{state=\"poweredOn\"}) * on(vmmo) group_left max by(vmmo)(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}))",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard",
+        "content": "",
+        "mode": "markdown"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#EC4899"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 107,
+      "type": "stat",
+      "title": "VM 配置内存 · Provisioned",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum((vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\"} and on(vcenter, vmmo) vmware_vm_power_state{state=\"poweredOn\"}) * on(vmmo) group_left max by(vmmo)(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}))",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard",
+        "content": "",
+        "mode": "markdown"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1,
+          "mappings": [],
+          "noValue": "0",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#F59E0B"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 108,
+      "type": "gauge",
+      "title": "CPU 使用率 · CPU Usage",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "100 * sum(vmware_host_cpu_usage_hertz{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}) / sum((vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)) * (vmware_host_cpu_corecount{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)))",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "max": 100,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 75
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 109,
+      "type": "gauge",
+      "title": "内存使用率 · Memory Usage",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "100 * sum(vmware_host_mem_consumed_bytes{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}) / sum((vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)))",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "max": 100,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 75
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 110,
+      "type": "stat",
+      "title": "CPU 超分比 · vCPU/Thread",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 3,
+        "x": 12,
+        "y": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum((vmware_vm_cpu_corecount{vcenter=~\"$vcenter\"} and on(vcenter, vmmo) vmware_vm_power_state{state=\"poweredOn\"}) * on(vmmo) group_left max by(vmmo)(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})) / sum((vmware_host_cpu_threadcount{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)))",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard",
+        "content": "",
+        "mode": "markdown"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 3
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 111,
+      "type": "stat",
+      "title": "内存超分比 · Mem Overcommit",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 3,
+        "x": 15,
+        "y": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum((vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\"} and on(vcenter, vmmo) vmware_vm_power_state{state=\"poweredOn\"}) * on(vmmo) group_left max by(vmmo)(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})) / sum((vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)))",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard",
+        "content": "",
+        "mode": "markdown"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 1.5
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 112,
+      "type": "stat",
+      "title": "vCPU / 物理核",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 3,
+        "x": 18,
+        "y": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum((vmware_vm_cpu_corecount{vcenter=~\"$vcenter\"} and on(vcenter, vmmo) vmware_vm_power_state{state=\"poweredOn\"}) * on(vmmo) group_left max by(vmmo)(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})) / sum((vmware_host_cpu_corecount{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)))",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard",
+        "content": "",
+        "mode": "markdown"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "0",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3B82F6"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 113,
+      "type": "stat",
+      "title": "VM / 主机密度",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 3,
+        "x": 21,
+        "y": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "count(vmware_vm_sys_uptime_seconds{vcenter=~\"$vcenter\"} * on(vmmo) group_left max by(vmmo)(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})) / count((vmware_host_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)))",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard",
+        "content": "",
+        "mode": "markdown"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "mappings": [],
+          "noValue": "0",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#10B981"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 114,
+      "type": "stat",
+      "title": "每核内存 · RAM / Core",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 11
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum((vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))) / sum((vmware_host_cpu_corecount{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)))",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard",
+        "content": "",
+        "mode": "markdown"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1,
+          "mappings": [],
+          "noValue": "0",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#06B6D4"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 115,
+      "type": "stat",
+      "title": "主机膨胀内存 · Balloon (vmmemctl)",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 11
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum(vmware_host_mem_balloon_bytes{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard",
+        "content": "",
+        "mode": "markdown"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1,
+          "mappings": [],
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 10000000000.0
+              },
+              {
+                "color": "red",
+                "value": 100000000000.0
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 116,
+      "type": "stat",
+      "title": "VM 交换内存 · Swapped",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 11
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum(vmware_vm_mem_swapped_bytes{vcenter=~\"$vcenter\"} * on(vmmo) group_left max by(vmmo)(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}))",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard",
+        "content": "",
+        "mode": "markdown"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1,
+          "mappings": [],
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1000000000.0
+              },
+              {
+                "color": "red",
+                "value": 10000000000.0
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 117,
+      "type": "stat",
+      "title": "集群数 · Clusters",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 11
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "count(count by(cmo)(vmware_cluster_info{vcenter=~\"$vcenter\",vmwcluster=~\"$cluster\"}))",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard",
+        "content": "",
+        "mode": "markdown"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8B5CF6"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 118,
+      "type": "stat",
+      "title": "挂载数据存储 · Datastores",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 11
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "count(count by(dsmo)(vmware_cluster_datastore{vcenter=~\"$vcenter\",vmwcluster=~\"$cluster\"}))",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard",
+        "content": "",
+        "mode": "markdown"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#F59E0B"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 119,
+      "type": "stat",
+      "title": "主机平均运行天数 · Avg Uptime",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 11
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "avg(vmware_host_sys_uptime_seconds{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}) / 86400",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard",
+        "content": "",
+        "mode": "markdown"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#10B981"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 120,
+      "type": "row",
+      "title": "主机清单与虚拟机 Top · Hosts & Top VMs",
+      "collapsed": false,
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "panels": []
+    },
+    {
+      "id": 121,
+      "type": "table",
+      "title": "主机清单 · Host Inventory",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 11,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "max by(hostmo,host,vmwcluster)(vmware_host_info{vcenter=~\"$vcenter\"} * on(cmo) group_left(vmwcluster) vmware_cluster_info{vcenter=~\"$vcenter\",vmwcluster=~\"$cluster\"})",
+          "format": "table",
+          "hide": false,
+          "instant": true,
+          "interval": "20s",
+          "legendFormat": "__auto",
+          "range": false,
+          "refId": "ident"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "label_replace(label_join(label_replace(max by(hostmo,vendor,model,cpu_type)(vmware_host_hardware_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}),\"vendor\",\"$1\",\"vendor\",\"(.*) .*\"),\"newmodel\",\" \",\"vendor\",\"model\"),\"cpu_type\",\"$1 $3 $5\",\"cpu_type\",\"(.*)([(]R[)])(.*)([(]R[)])(.*) CPU @.*\")",
+          "format": "table",
+          "hide": false,
+          "instant": true,
+          "interval": "20s",
+          "legendFormat": "__auto",
+          "range": false,
+          "refId": "hardware"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "label_join(label_replace(max by(hostmo,software,version,build)(vmware_host_software_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}),\"build\",\"($1)\",\"build\",\"(.*)\"),\"os\",\" \",\"software\",\"version\",\"build\")",
+          "format": "table",
+          "hide": false,
+          "instant": true,
+          "interval": "20s",
+          "legendFormat": "__auto",
+          "range": false,
+          "refId": "software"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "max by(hostmo)(vmware_host_cpu_corecount{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "format": "table",
+          "hide": false,
+          "instant": true,
+          "interval": "20s",
+          "legendFormat": "__auto",
+          "range": false,
+          "refId": "cores"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "max by(hostmo)(vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "format": "table",
+          "hide": false,
+          "instant": true,
+          "interval": "20s",
+          "legendFormat": "__auto",
+          "range": false,
+          "refId": "speed"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "max by(hostmo)(vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "format": "table",
+          "hide": false,
+          "instant": true,
+          "interval": "20s",
+          "legendFormat": "__auto",
+          "range": false,
+          "refId": "ram"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "max by(hostmo)(vmware_host_sys_uptime_seconds{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "format": "table",
+          "hide": false,
+          "instant": true,
+          "interval": "20s",
+          "legendFormat": "__auto",
+          "range": false,
+          "refId": "up"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "max by(hostmo)(vmware_host_cpu_threadcount{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}) / max by(hostmo)(vmware_host_cpu_corecount{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "format": "table",
+          "hide": false,
+          "instant": true,
+          "interval": "20s",
+          "legendFormat": "__auto",
+          "range": false,
+          "refId": "ht"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "cellHeight": "sm",
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "集群",
+            "desc": false
+          }
+        ],
+        "footer": {
+          "show": false,
+          "reducers": [],
+          "countRows": false,
+          "fields": "",
+          "enablePagination": true
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "left",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false,
+            "minWidth": 90
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#CBD5E1",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "集群"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              },
+              {
+                "id": "custom.minWidth",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "主机 IP"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "custom.minWidth",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "服务器型号"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              },
+              {
+                "id": "custom.minWidth",
+                "value": 170
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "CPU 型号"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              },
+              {
+                "id": "custom.minWidth",
+                "value": 230
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "核数"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.minWidth",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "主频"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "hertz"
+              },
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.minWidth",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "内存"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "custom.align",
+                "value": "right"
+              },
+              {
+                "id": "custom.minWidth",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ESXi 版本"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              },
+              {
+                "id": "custom.minWidth",
+                "value": 200
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "运行时长"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "custom.align",
+                "value": "right"
+              },
+              {
+                "id": "custom.minWidth",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "超线程"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.minWidth",
+                "value": 80
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "1": {
+                        "color": "#F59E0B",
+                        "index": 1,
+                        "text": "否"
+                      },
+                      "2": {
+                        "color": "#10B981",
+                        "index": 0,
+                        "text": "是"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "hostmo",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "hostmo": true,
+              "vendor": true,
+              "model": true,
+              "software": true,
+              "version": true,
+              "build": true,
+              "Value #ident": true,
+              "Value #hardware": true,
+              "Value #software": true,
+              "Time": true,
+              "Time 1": true,
+              "__name__ 1": true,
+              "instance 1": true,
+              "job 1": true,
+              "vcenter 1": true,
+              "Time 2": true,
+              "__name__ 2": true,
+              "instance 2": true,
+              "job 2": true,
+              "vcenter 2": true,
+              "Time 3": true,
+              "__name__ 3": true,
+              "instance 3": true,
+              "job 3": true,
+              "vcenter 3": true,
+              "Time 4": true,
+              "__name__ 4": true,
+              "instance 4": true,
+              "job 4": true,
+              "vcenter 4": true,
+              "Time 5": true,
+              "__name__ 5": true,
+              "instance 5": true,
+              "job 5": true,
+              "vcenter 5": true,
+              "Time 6": true,
+              "__name__ 6": true,
+              "instance 6": true,
+              "job 6": true,
+              "vcenter 6": true,
+              "Time 7": true,
+              "__name__ 7": true,
+              "instance 7": true,
+              "job 7": true,
+              "vcenter 7": true
+            },
+            "includeByName": {},
+            "indexByName": {
+              "vmwcluster": 0,
+              "host": 1,
+              "newmodel": 2,
+              "cpu_type": 3,
+              "Value #cores": 4,
+              "Value #speed": 5,
+              "Value #ram": 6,
+              "os": 7,
+              "Value #up": 8,
+              "Value #ht": 9
+            },
+            "renameByName": {
+              "vmwcluster": "集群",
+              "host": "主机 IP",
+              "newmodel": "服务器型号",
+              "cpu_type": "CPU 型号",
+              "Value #cores": "核数",
+              "Value #speed": "主频",
+              "Value #ram": "内存",
+              "os": "ESXi 版本",
+              "Value #up": "运行时长",
+              "Value #ht": "超线程"
+            }
+          }
+        }
+      ],
+      "interval": "20s"
+    },
+    {
+      "id": 122,
+      "type": "piechart",
+      "title": "VM CPU 消耗 Top $top · CPU Usage",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "label_replace(topk_avg($top, max by(vm)(max by(vmmo)(vmware_vm_cpu_usage_hertz{vcenter=~\"$vcenter\"}) * on(vmmo) group_left(vm) max by(vmmo,vm,hostmo)(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})), \"Others\"), \"vm\", \"其他 Others\", \"vm\", \"\")",
+          "legendFormat": "{{vm}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "pieType": "donut",
+        "displayLabels": [
+          "percent"
+        ],
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "values": [
+            "value",
+            "percent"
+          ],
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "combine": {
+          "threshold": 0.02,
+          "label": "其他 Others"
+        },
+        "displayLabelsAll": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "hertz",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3B82F6",
+                "value": null
+              },
+              {
+                "color": "#10B981",
+                "value": null
+              },
+              {
+                "color": "#F59E0B",
+                "value": null
+              },
+              {
+                "color": "#EF4444",
+                "value": null
+              },
+              {
+                "color": "#8B5CF6",
+                "value": null
+              },
+              {
+                "color": "#06B6D4",
+                "value": null
+              },
+              {
+                "color": "#EC4899",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 123,
+      "type": "piechart",
+      "title": "VM 内存消耗 Top $top · Guest Memory",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "label_replace(topk_avg($top, max by(vm)(max by(vmmo)(vmware_vm_mem_consumed_bytes{vcenter=~\"$vcenter\"}) * on(vmmo) group_left(vm) max by(vmmo,vm,hostmo)(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})), \"Others\"), \"vm\", \"其他 Others\", \"vm\", \"\")",
+          "legendFormat": "{{vm}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "pieType": "donut",
+        "displayLabels": [
+          "percent"
+        ],
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "values": [
+            "value",
+            "percent"
+          ],
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "combine": {
+          "threshold": 0.02,
+          "label": "其他 Others"
+        },
+        "displayLabelsAll": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3B82F6",
+                "value": null
+              },
+              {
+                "color": "#10B981",
+                "value": null
+              },
+              {
+                "color": "#F59E0B",
+                "value": null
+              },
+              {
+                "color": "#EF4444",
+                "value": null
+              },
+              {
+                "color": "#8B5CF6",
+                "value": null
+              },
+              {
+                "color": "#06B6D4",
+                "value": null
+              },
+              {
+                "color": "#EC4899",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 124,
+      "type": "row",
+      "title": "计算资源趋势 · Compute Trends",
+      "collapsed": false,
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 37
+      },
+      "panels": []
+    },
+    {
+      "id": 125,
+      "type": "timeseries",
+      "title": "CPU 使用 / 需求 / 物理容量 · Used vs Demand",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 38
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum(vmware_host_cpu_usage_hertz{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "legendFormat": "已用 Used",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum(vmware_host_cpu_demand_hertz{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "legendFormat": "需求 Demand",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum((vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)) * (vmware_host_cpu_corecount{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)))",
+          "legendFormat": "物理容量 Capacity",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc",
+          "hideZeros": false
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "hertz",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 10,
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "barAlignment": 0,
+            "lineWidth": 2,
+            "spanNulls": true,
+            "showPoints": "never",
+            "pointSize": 5,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "gradientMode": "opacity",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "insertNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "已用 Used"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3B82F6"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 10
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "需求 Demand"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#F59E0B"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 10
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "物理容量 Capacity"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#10B981"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 10
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 126,
+      "type": "timeseries",
+      "title": "内存 已用 / 活动 / 物理容量 · Memory",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 38
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum(vmware_host_mem_consumed_bytes{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "legendFormat": "已用 Consumed",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum(vmware_host_mem_active_bytes{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "legendFormat": "活动 Active",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum((vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)))",
+          "legendFormat": "物理容量 Capacity",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc",
+          "hideZeros": false
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 10,
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "barAlignment": 0,
+            "lineWidth": 2,
+            "spanNulls": true,
+            "showPoints": "never",
+            "pointSize": 5,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "gradientMode": "opacity",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "insertNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "已用 Consumed"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3B82F6"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 10
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "活动 Active"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#F59E0B"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 10
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "物理容量 Capacity"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#10B981"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 10
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 127,
+      "type": "timeseries",
+      "title": "CPU 使用率与调度延迟 · Usage & Latency",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 46
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "100 * sum(vmware_host_cpu_usage_hertz{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}) / sum((vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)) * (vmware_host_cpu_corecount{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)))",
+          "legendFormat": "CPU 使用率 %",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "100 * avg(vmware_host_cpu_latency_ratio{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "legendFormat": "调度延迟 Latency",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "100 * avg(vmware_host_cpu_readiness_ratio{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "legendFormat": "就绪 Ready",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc",
+          "hideZeros": false
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 8,
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "barAlignment": 0,
+            "lineWidth": 2,
+            "spanNulls": true,
+            "showPoints": "never",
+            "pointSize": 5,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "gradientMode": "opacity",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "insertNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "CPU 使用率 %"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3B82F6"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 8
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "调度延迟 Latency"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#EF4444"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 8
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "就绪 Ready"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#F59E0B"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 8
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 128,
+      "type": "timeseries",
+      "title": "各集群 CPU 使用率 · CPU by Cluster",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 46
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "100 * sum by(vmwcluster)(vmware_host_cpu_usage_hertz{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} * on(hostmo) group_left(vmwcluster) (vmware_host_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} * on(cmo) group_left(vmwcluster) vmware_cluster_info{vcenter=~\"$vcenter\",vmwcluster=~\"$cluster\"})) / sum by(vmwcluster)(((vmware_host_cpu_capacity_hertz * vmware_host_cpu_corecount{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}) and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)) * on(hostmo) group_left(vmwcluster) (vmware_host_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} * on(cmo) group_left(vmwcluster) vmware_cluster_info{vcenter=~\"$vcenter\",vmwcluster=~\"$cluster\"}))",
+          "legendFormat": "{{vmwcluster}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc",
+          "hideZeros": false
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "barAlignment": 0,
+            "lineWidth": 2,
+            "spanNulls": true,
+            "showPoints": "never",
+            "pointSize": 5,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "gradientMode": "opacity",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "insertNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 129,
+      "type": "timeseries",
+      "title": "各集群内存使用率 · Memory by Cluster",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 54
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "100 * sum by(vmwcluster)(vmware_host_mem_consumed_bytes{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} * on(hostmo) group_left(vmwcluster) ((vmware_host_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)) * on(cmo) group_left(vmwcluster) vmware_cluster_info{vcenter=~\"$vcenter\",vmwcluster=~\"$cluster\"})) / sum by(vmwcluster)((vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)) * on(hostmo) group_left(vmwcluster) ((vmware_host_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)) * on(cmo) group_left(vmwcluster) vmware_cluster_info{vcenter=~\"$vcenter\",vmwcluster=~\"$cluster\"}))",
+          "legendFormat": "{{vmwcluster}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc",
+          "hideZeros": false
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "barAlignment": 0,
+            "lineWidth": 2,
+            "spanNulls": true,
+            "showPoints": "never",
+            "pointSize": 5,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "gradientMode": "opacity",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "insertNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 130,
+      "type": "timeseries",
+      "title": "内存压力 · 膨胀与交换 Balloon & Swap",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 54
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum(vmware_host_mem_balloon_bytes{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "legendFormat": "主机膨胀 Balloon(vmmemctl)",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum(vmware_vm_mem_swapped_bytes{vcenter=~\"$vcenter\"} * on(vmmo) group_left max by(vmmo)(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}))",
+          "legendFormat": "VM 交换 Swapped",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc",
+          "hideZeros": false
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "barAlignment": 0,
+            "lineWidth": 2,
+            "spanNulls": true,
+            "showPoints": "never",
+            "pointSize": 5,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "gradientMode": "opacity",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "insertNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "主机膨胀 Balloon(vmmemctl)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#F59E0B"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 12
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "VM 交换 Swapped"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#EF4444"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 12
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 131,
+      "type": "row",
+      "title": "网络与存储流量 · Network & Storage",
+      "collapsed": false,
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 62
+      },
+      "panels": []
+    },
+    {
+      "id": 132,
+      "type": "timeseries",
+      "title": "主机网络吞吐 · Host Network Throughput",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 63
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum(vmware_host_net_receive_bytes_per_second{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "legendFormat": "接收 Rx",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum(vmware_host_net_transmit_bytes_per_second{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "legendFormat": "发送 Tx",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc",
+          "hideZeros": false
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "barAlignment": 0,
+            "lineWidth": 2,
+            "spanNulls": true,
+            "showPoints": "never",
+            "pointSize": 5,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "gradientMode": "opacity",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "insertNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "接收 Rx"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3B82F6"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 12
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "发送 Tx"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#10B981"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 12
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 133,
+      "type": "timeseries",
+      "title": "主机网络丢包/错误 · Host Net Drops & Errors",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 63
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(vmware_host_net_receive_dropped_total{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}[$__rate_interval]))",
+          "legendFormat": "Rx 丢包",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(vmware_host_net_transmit_dropped_total{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}[$__rate_interval]))",
+          "legendFormat": "Tx 丢包",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(vmware_host_net_receive_errors_total{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}[$__rate_interval]))",
+          "legendFormat": "Rx 错误",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(vmware_host_net_transmit_errors_total{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}[$__rate_interval]))",
+          "legendFormat": "Tx 错误",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc",
+          "hideZeros": false
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "pps",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 8,
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "barAlignment": 0,
+            "lineWidth": 2,
+            "spanNulls": true,
+            "showPoints": "never",
+            "pointSize": 5,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "gradientMode": "opacity",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "insertNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "Rx 丢包"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#F59E0B"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 8
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "Tx 丢包"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#EC4899"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 8
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "Rx 错误"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#EF4444"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 8
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "Tx 错误"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#8B5CF6"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 8
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 134,
+      "type": "piechart",
+      "title": "VM 网络流量 Top $top · VM Network (Rx+Tx)",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 71
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "label_replace(topk_avg($top, max by(vm)((max by(vmmo)(vmware_vm_net_receive_bytes_per_second{vcenter=~\"$vcenter\"}) + max by(vmmo)(vmware_vm_net_transmit_bytes_per_second{vcenter=~\"$vcenter\"})) * on(vmmo) group_left(vm) max by(vmmo,vm,hostmo)(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})), \"Others\"), \"vm\", \"其他 Others\", \"vm\", \"\")",
+          "legendFormat": "{{vm}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "pieType": "donut",
+        "displayLabels": [
+          "percent"
+        ],
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "values": [
+            "value",
+            "percent"
+          ],
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "combine": {
+          "threshold": 0.02,
+          "label": "其他 Others"
+        },
+        "displayLabelsAll": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3B82F6",
+                "value": null
+              },
+              {
+                "color": "#10B981",
+                "value": null
+              },
+              {
+                "color": "#F59E0B",
+                "value": null
+              },
+              {
+                "color": "#EF4444",
+                "value": null
+              },
+              {
+                "color": "#8B5CF6",
+                "value": null
+              },
+              {
+                "color": "#06B6D4",
+                "value": null
+              },
+              {
+                "color": "#EC4899",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 135,
+      "type": "piechart",
+      "title": "VM 存储吞吐 Top $top · VM Datastore (R+W)",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 71
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "label_replace(topk_avg($top, max by(vm)((max by(vmmo)(vmware_vm_datastore_read_bytes_per_second{vcenter=~\"$vcenter\"}) + max by(vmmo)(vmware_vm_datastore_write_bytes_per_second{vcenter=~\"$vcenter\"})) * on(vmmo) group_left(vm) max by(vmmo,vm,hostmo)(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})), \"Others\"), \"vm\", \"其他 Others\", \"vm\", \"\")",
+          "legendFormat": "{{vm}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "pieType": "donut",
+        "displayLabels": [
+          "percent"
+        ],
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "values": [
+            "value",
+            "percent"
+          ],
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "combine": {
+          "threshold": 0.02,
+          "label": "其他 Others"
+        },
+        "displayLabelsAll": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3B82F6",
+                "value": null
+              },
+              {
+                "color": "#10B981",
+                "value": null
+              },
+              {
+                "color": "#F59E0B",
+                "value": null
+              },
+              {
+                "color": "#EF4444",
+                "value": null
+              },
+              {
+                "color": "#8B5CF6",
+                "value": null
+              },
+              {
+                "color": "#06B6D4",
+                "value": null
+              },
+              {
+                "color": "#EC4899",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 136,
+      "type": "timeseries",
+      "title": "主机存储吞吐 · Host Datastore Throughput",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 81
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum(vmware_host_datastore_read_bytes_per_second{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "legendFormat": "读取 Read",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "sum(vmware_host_datastore_write_bytes_per_second{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "legendFormat": "写入 Write",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc",
+          "hideZeros": false
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 12,
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "barAlignment": 0,
+            "lineWidth": 2,
+            "spanNulls": true,
+            "showPoints": "never",
+            "pointSize": 5,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "gradientMode": "opacity",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "insertNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "读取 Read"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3B82F6"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 12
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "写入 Write"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#F59E0B"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 12
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 137,
+      "type": "timeseries",
+      "title": "主机存储延迟 · Host Datastore Latency",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 81
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "avg(vmware_host_datastore_read_latency_seconds{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "legendFormat": "读延迟 Read",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "avg(vmware_host_datastore_write_latency_seconds{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "legendFormat": "写延迟 Write",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc",
+          "hideZeros": false
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 4,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 8,
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "barAlignment": 0,
+            "lineWidth": 2,
+            "spanNulls": true,
+            "showPoints": "never",
+            "pointSize": 5,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "gradientMode": "opacity",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "insertNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "读延迟 Read"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3B82F6"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 8
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "写延迟 Write"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#EF4444"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 8
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 138,
+      "type": "row",
+      "title": "集群横向对比 · Cluster Comparison",
+      "collapsed": false,
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 89
+      },
+      "panels": []
+    },
+    {
+      "id": 139,
+      "type": "bargauge",
+      "title": "各集群 CPU 使用率 · CPU %",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 90
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "100 * sum by(vmwcluster)(vmware_host_cpu_usage_hertz{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} * on(hostmo) group_left(vmwcluster) (vmware_host_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} * on(cmo) group_left(vmwcluster) vmware_cluster_info{vcenter=~\"$vcenter\",vmwcluster=~\"$cluster\"})) / sum by(vmwcluster)(((vmware_host_cpu_capacity_hertz * vmware_host_cpu_corecount{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}) and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)) * on(hostmo) group_left(vmwcluster) (vmware_host_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} * on(cmo) group_left(vmwcluster) vmware_cluster_info{vcenter=~\"$vcenter\",vmwcluster=~\"$cluster\"}))",
+          "legendFormat": "{{vmwcluster}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 12,
+        "valueMode": "color"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 75
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 140,
+      "type": "bargauge",
+      "title": "各集群内存使用率 · Memory %",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 90
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "100 * sum by(vmwcluster)(vmware_host_mem_consumed_bytes{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} * on(hostmo) group_left(vmwcluster) ((vmware_host_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)) * on(cmo) group_left(vmwcluster) vmware_cluster_info{vcenter=~\"$vcenter\",vmwcluster=~\"$cluster\"})) / sum by(vmwcluster)((vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)) * on(hostmo) group_left(vmwcluster) ((vmware_host_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)) * on(cmo) group_left(vmwcluster) vmware_cluster_info{vcenter=~\"$vcenter\",vmwcluster=~\"$cluster\"}))",
+          "legendFormat": "{{vmwcluster}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 12,
+        "valueMode": "color"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 75
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 141,
+      "type": "bargauge",
+      "title": "各集群运行 VM 数 · Powered VMs",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 97
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "count by(vmwcluster)(vmware_vm_sys_uptime_seconds{vcenter=~\"$vcenter\"} * on(vmmo) group_left(hostmo,vm) max by(vmmo,vm,hostmo)(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}) * on(hostmo) group_left(vmwcluster) (vmware_host_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} * on(cmo) group_left(vmwcluster) vmware_cluster_info{vcenter=~\"$vcenter\",vmwcluster=~\"$cluster\"}))",
+          "legendFormat": "{{vmwcluster}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 12,
+        "valueMode": "color"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3B82F6",
+                "value": null
+              }
+            ]
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 142,
+      "type": "bargauge",
+      "title": "各集群主机数 · Hosts",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 97
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "count by(vmwcluster)((vmware_host_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} * on(cmo) group_left(vmwcluster) vmware_cluster_info{vcenter=~\"$vcenter\",vmwcluster=~\"$cluster\"}))",
+          "legendFormat": "{{vmwcluster}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 12,
+        "valueMode": "color"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#10B981",
+                "value": null
+              }
+            ]
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 143,
+      "type": "bargauge",
+      "title": "主机 CPU 使用率 Top 15 · Busiest Hosts CPU",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 104
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "topk(15, 100 * max by(host)(vmware_host_cpu_usage_hertz{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}) / (max by(host)((vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))) * max by(host)((vmware_host_cpu_corecount{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0)))))",
+          "legendFormat": "{{host}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 12,
+        "valueMode": "color"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 75
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 144,
+      "type": "bargauge",
+      "title": "主机内存使用率 Top 15 · Busiest Hosts Memory",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 104
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "editorMode": "code",
+          "expr": "topk(15, 100 * max by(host)(vmware_host_mem_consumed_bytes{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}) / max by(host)((vmware_host_mem_capacity_bytes{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} and on(vcenter, hostmo) (vmware_host_power_state{state=\"poweredOn\"} and on(vcenter, hostmo) vmware_host_connection_state{state=\"connected\"} and on(vcenter, hostmo) vmware_host_maintenance_mode == 0))))",
+          "legendFormat": "{{host}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "transparent": true,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 12,
+        "valueMode": "color"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 75
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 900,
+      "type": "row",
+      "title": "生命周期与有效容量 · Lifecycle & Effective Capacity",
+      "collapsed": false,
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 112
+      },
+      "panels": []
+    },
+    {
+      "id": 901,
+      "type": "stat",
+      "title": "有效主机 · Effective Hosts",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 113
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "expr": "min(vmware_cluster_effective_hosts{vcenter=~\"$vcenter\",cmo=~\"$clustermo\"})",
+          "refId": "A",
+          "format": "time_series",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 902,
+      "type": "stat",
+      "title": "关机 VM · Powered Off",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 113
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "expr": "count(vmware_vm_power_state{vcenter=~\"$vcenter\",state=\"poweredOff\"} * on(vcenter, vmmo) group_left(hostmo) max by(vcenter, vmmo, hostmo)(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}))",
+          "refId": "A",
+          "format": "time_series",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 903,
+      "type": "stat",
+      "title": "挂起 VM · Suspended",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 113
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "expr": "count(vmware_vm_power_state{vcenter=~\"$vcenter\",state=\"suspended\"} * on(vcenter, vmmo) group_left(hostmo) max by(vcenter, vmmo, hostmo)(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"}))",
+          "refId": "A",
+          "format": "time_series",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 904,
+      "type": "stat",
+      "title": "维护中主机 · Maintenance",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 113
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "expr": "count(vmware_host_maintenance_mode{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} == 1)",
+          "refId": "A",
+          "format": "time_series",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 905,
+      "type": "stat",
+      "title": "断连 / 无响应主机",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 117
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "expr": "count(vmware_host_connection_state{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\",state=~\"disconnected|notResponding\"})",
+          "refId": "A",
+          "format": "time_series",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 906,
+      "type": "stat",
+      "title": "非绿集群 · Not Green",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 117
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "expr": "count(vmware_cluster_overall_status{vcenter=~\"$vcenter\",cmo=~\"$clustermo\",status!=\"green\"})",
+          "refId": "A",
+          "format": "time_series",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 907,
+      "type": "timeseries",
+      "title": "集群 CPU：总容量 vs 有效容量",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 117
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "expr": "sum(vmware_cluster_cpu_capacity_hertz{vcenter=~\"$vcenter\",cmo=~\"$clustermo\"})",
+          "refId": "A",
+          "format": "time_series",
+          "instant": false,
+          "range": true,
+          "legendFormat": "total capacity"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "expr": "sum(vmware_cluster_cpu_effective_hertz{vcenter=~\"$vcenter\",cmo=~\"$clustermo\"})",
+          "refId": "B",
+          "format": "time_series",
+          "instant": false,
+          "range": true,
+          "legendFormat": "effective"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 12,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "hertz"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 908,
+      "type": "timeseries",
+      "title": "集群内存：总容量 vs 有效容量",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 125
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "expr": "sum(vmware_cluster_memory_capacity_bytes{vcenter=~\"$vcenter\",cmo=~\"$clustermo\"})",
+          "refId": "A",
+          "format": "time_series",
+          "instant": false,
+          "range": true,
+          "legendFormat": "total capacity"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "expr": "sum(vmware_cluster_memory_effective_bytes{vcenter=~\"$vcenter\",cmo=~\"$clustermo\"})",
+          "refId": "B",
+          "format": "time_series",
+          "instant": false,
+          "range": true,
+          "legendFormat": "effective"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 12,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 909,
+      "type": "timeseries",
+      "title": "集群整体状态与各主机状态",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 125
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "expr": "max by(status)(vmware_cluster_overall_status{vcenter=~\"$vcenter\",cmo=~\"$clustermo\"})",
+          "refId": "A",
+          "format": "time_series",
+          "instant": false,
+          "range": true,
+          "legendFormat": "cluster {{status}}"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "expr": "count by(state)(vmware_host_connection_state{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"})",
+          "refId": "B",
+          "format": "time_series",
+          "instant": false,
+          "range": true,
+          "legendFormat": "host connection {{state}}"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "expr": "count(vmware_host_maintenance_mode{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"} == 1)",
+          "refId": "C",
+          "format": "time_series",
+          "instant": false,
+          "range": true,
+          "legendFormat": "host maintenance"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 12,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 910,
+      "type": "timeseries",
+      "title": "采集实体：发现 / 输出 / 跳过",
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 133
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "expr": "sum by(collector, kind)(vmware_scrape_entities_found{vcenter=~\"$vcenter\"})",
+          "refId": "A",
+          "format": "time_series",
+          "instant": false,
+          "range": true,
+          "legendFormat": "found {{collector}}/{{kind}}"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "expr": "sum by(collector, kind)(vmware_scrape_entities_emitted{vcenter=~\"$vcenter\"})",
+          "refId": "B",
+          "format": "time_series",
+          "instant": false,
+          "range": true,
+          "legendFormat": "emitted {{collector}}/{{kind}}"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "expr": "sum by(reason)(vmware_scrape_entities_skipped{vcenter=~\"$vcenter\"})",
+          "refId": "C",
+          "format": "time_series",
+          "instant": false,
+          "range": true,
+          "legendFormat": "skipped {{reason}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 12,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "vmware",
+    "vsphere",
+    "cluster",
+    "victoriametrics"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "VictoriaMetrics",
+          "value": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "victoriametrics-metrics-datasource",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "current": {
+          "text": "vmware",
+          "value": "vmware"
+        },
+        "datasource": {
+          "type": "victoriametrics-metrics-datasource",
+          "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+        },
+        "definition": "label_values(vmware_vcenter_info,job)",
+        "includeAll": false,
+        "label": "Job",
+        "name": "job",
+        "options": [],
+        "query": {
+          "query": "label_values(vmware_vcenter_info,job)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "victoriametrics-metrics-datasource",
+          "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+        },
+        "definition": "label_values(vmware_vcenter_info{job=\"$job\"},vcenter)",
+        "includeAll": false,
+        "label": "vCenter",
+        "name": "vcenter",
+        "options": [],
+        "query": {
+          "query": "label_values(vmware_vcenter_info{job=\"$job\"},vcenter)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "victoriametrics-metrics-datasource",
+          "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+        },
+        "definition": "label_values(vmware_cluster_info{vcenter=~\"$vcenter\"},vmwcluster)",
+        "includeAll": true,
+        "multi": true,
+        "label": "集群 Cluster",
+        "name": "cluster",
+        "options": [],
+        "query": {
+          "query": "label_values(vmware_cluster_info{vcenter=~\"$vcenter\"},vmwcluster)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "victoriametrics-metrics-datasource",
+          "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+        },
+        "hide": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": "",
+        "definition": "label_values(vmware_cluster_info{vcenter=~\"$vcenter\",vmwcluster=~\"$cluster\"},cmo)",
+        "name": "clustermo",
+        "options": [],
+        "query": {
+          "query": "label_values(vmware_cluster_info{vcenter=~\"$vcenter\",vmwcluster=~\"$cluster\"},cmo)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "victoriametrics-metrics-datasource",
+          "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+        },
+        "hide": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": "",
+        "definition": "label_values(vmware_host_info{vcenter=~\"$vcenter\",cmo=~\"$clustermo\"},hostmo)",
+        "name": "hostmo",
+        "options": [],
+        "query": {
+          "query": "label_values(vmware_host_info{vcenter=~\"$vcenter\",cmo=~\"$clustermo\"},hostmo)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "text": "10",
+          "value": "10"
+        },
+        "includeAll": false,
+        "label": "Top N",
+        "name": "top",
+        "options": [
+          {
+            "selected": false,
+            "text": "5",
+            "value": "5"
+          },
+          {
+            "selected": true,
+            "text": "10",
+            "value": "10"
+          },
+          {
+            "selected": false,
+            "text": "15",
+            "value": "15"
+          },
+          {
+            "selected": false,
+            "text": "20",
+            "value": "20"
+          },
+          {
+            "selected": false,
+            "text": "30",
+            "value": "30"
+          },
+          {
+            "selected": false,
+            "text": "50",
+            "value": "50"
+          }
+        ],
+        "query": "5,10,15,20,30,50",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "10s",
+      "20s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h"
+    ]
+  },
+  "timezone": "browser",
+  "title": "VMware Cluster Overview",
+  "uid": "vmw-cluster-overview",
+  "version": 1,
+  "weekStart": ""
+}

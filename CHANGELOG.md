@@ -67,22 +67,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Disconnected hosts legitimately have no hardware/product summary; their
     hardware/software/capacity metrics are skipped while `_info` and the state
     metrics still report them.
-  - **The bundled overview dashboards were migrated**, not left to drift.
-    vcenter-view and cluster-view previously relied on the exporter silently
-    filtering ineligible entities: "Running VMs" would now count powered-off
-    VMs, and every host utilisation/overcommit denominator would stay large
-    through a maintenance window (perf numerators still skip the host). Every
-    estate/cluster aggregate now intersects the static series with an explicit
-    eligible set (`power_state{poweredOn}` + `connection_state{connected}` +
-    `maintenance_mode == 0` for hosts, `power_state{poweredOn}` for VMs), so
-    the panels keep their pre-v0.2.0 numbers. Single-entity drill-downs
-    (vm-view, host-view, the per-host cluster block) intentionally keep
-    showing configured capacity while a host/VM is off — visibility is the
-    point there — except "Running VMs", which is powered-on filtered
-    everywhere. The transform lives in `scripts/lifecycle_dashboards.py` with
-    a `--check` audit wired into `check_config.py`; a new overview panel of
-    the old unfiltered shape fails the check. All 161 dashboard expressions
-    parse under the upstream PromQL parser (Grafana `$variables` substituted).
+  - **The bundled dashboards were replaced and made lifecycle-aware.** The five
+    legacy `vmware-{vcenter,cluster,host,vm,datastore}-view.json` dashboards are
+    superseded by a new hand-authored, VictoriaMetrics-oriented set:
+    `vmware-{vcenter,cluster,host,datastore}-overview.json` and
+    `vmware-vm-detail.json` (a `victoriametrics-metrics-datasource`, `$job`/
+    `$target` variables, `topk_avg`, tuple aliases). Without action, the new
+    estate panels would have silently drifted: "running VMs" would count
+    powered-off VMs and every host utilisation/overcommit denominator would
+    stay large through a maintenance window (perf numerators still skip the
+    host). Every estate/cluster aggregate therefore intersects the static
+    series with an explicit eligible set (`power_state{poweredOn}` +
+    `connection_state{connected}` + `maintenance_mode == 0` for hosts,
+    `power_state{poweredOn}` for VMs), keeping the pre-v0.2.0 numbers; panels
+    driven by a real-time perf `* on(...) group_left info` inner join need no
+    change because vCenter already omits the ineligible entities. Single-entity
+    drill-downs (vm-detail, host-overview) intentionally keep showing
+    configured capacity while the host/VM is off — visibility is the point
+    there. Each dashboard additionally gets a **lifecycle & health row** using
+    the new metrics: powered-off/suspended VM counts, maintenance/disconnected/
+    not-responding hosts, non-green `overall_status` entities, cluster total-vs
+    -effective CPU/memory capacity, and the scrape
+    found/emitted/skipped entity gauges. The policy (which panels are wrapped,
+    kept as inventory, or treated as perf joins) is keyed by file + panel id in
+    `scripts/lifecycle_dashboards.py`, with a `--check` audit wired into
+    `check_config.py`: an estate panel of the old unfiltered shape, a drifted
+    override, or a missing lifecycle row fails the build. Every changed/new
+    expression parses under the upstream PromQL parser (Grafana `$variables`
+    substituted; the dashboards' own VictoriaMetrics-only tuple/alias syntax is
+    valid in VictoriaMetrics by construction).
 
   - See the migration guide under **Breaking changes** below; the new metric
     contract is registered in `docs/METRICS.md` / `docs/METRICS-zh.md` and the
