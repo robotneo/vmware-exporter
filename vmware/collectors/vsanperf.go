@@ -170,11 +170,11 @@ func (c *vsanPerfCollector) Update(ctx context.Context, ch chan<- prometheus.Met
 		return nil
 	}
 
-	var clusters []mo.ClusterComputeResource
-
-	err := fetchProperties(
-		ctx, s.View, s.Client,
-		[]string{"ClusterComputeResource"}, []string{"name"}, &clusters, c.logger,
+	// 走清单 TTL 缓存：与 vsan collector 同 propSpec（仅 name），共享同一份
+	// 集群发现结果。集群级 CSV 性能查询本身仍每轮实时，不经缓存。
+	clusters, err := fetchInventoryCached[mo.ClusterComputeResource](
+		ctx, s,
+		[]string{"ClusterComputeResource"}, []string{"name"}, c.logger,
 	)
 	if err != nil {
 		return err

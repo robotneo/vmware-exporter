@@ -125,6 +125,8 @@ type CollectorSet struct {
 	// 见 Collect 里的说明。
 	namespace      string
 	maxConcurrency int
+	inventoryCache *InventoryCache
+	inventoryTTL   time.Duration
 
 	// errors 是跨请求共享的错误计数器，由调用方持有并注入。
 	// 不能是本结构体拥有的状态 —— 见 errors.go 顶部关于「每请求一实例」
@@ -148,6 +150,15 @@ type Options struct {
 
 	// MaxConcurrency 是同时运行的 collector 上限。<= 0 表示不限制。
 	MaxConcurrency int
+
+	// InventoryCache 与 InventoryTTL 配置拓扑/容量类清单检索的进程级缓存。
+	//
+	// 只应由使用单一服务级凭证的 /metrics 路径注入；多租户 /probe 路径必须
+	// 留 nil（InventoryCache=nil 即完全旁路缓存），否则一个凭证拉回的对象
+	// 清单会被另一个凭证的请求读到 —— 那是越权读。InventoryTTL<=0 时即便
+	// 传了缓存实例也一律实时检索。
+	InventoryCache *InventoryCache
+	InventoryTTL   time.Duration
 
 	// Errors 是跨请求累积的错误计数器。必填。
 	//
@@ -206,6 +217,8 @@ func NewCollectorSet(ctx context.Context, definitions []Definition, opts Options
 		target:         opts.Target,
 		namespace:      opts.Namespace,
 		maxConcurrency: opts.MaxConcurrency,
+		inventoryCache: opts.InventoryCache,
+		inventoryTTL:   opts.InventoryTTL,
 		logger:         logger,
 		metrics:        newScrapeMetrics(opts.Namespace),
 		errors:         opts.Errors,
@@ -312,6 +325,8 @@ func (cs *CollectorSet) Collect(ch chan<- prometheus.Metric) {
 	// 构成数据竞争。这两个约束把注入点唯一地钉在这里。
 	s.Namespace = cs.namespace
 	s.MaxConcurrency = cs.maxConcurrency
+	s.InventoryCache = cs.inventoryCache
+	s.InventoryTTL = cs.inventoryTTL
 
 	// 在登录成功、任何 collector 起跑之前，给本轮抓取的 SOAP 通道装一个
 	// 全局闸。它与 collector/主机层的 SetLimit 不同：闸放在 vim25 client 的

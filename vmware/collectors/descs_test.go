@@ -898,7 +898,7 @@ func TestPerfMetricLabelValuePairing(t *testing.T) {
 				s.Perf, s.Target,
 				"HostSystem", "vmware", "host", tc.instance,
 				[]string{"cpu.usage.average"},
-				s.Counters, refs, names,
+				s.Counters, refs, names, 0, 1,
 			)
 
 			metrics := drainMetrics(ch)

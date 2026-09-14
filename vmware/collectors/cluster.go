@@ -31,11 +31,9 @@ func NewClusterCollector(logger *slog.Logger) (collector.Collector, error) {
 
 func (c *clusterCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s *collector.Scrape) error {
 
-	var clusters []mo.ClusterComputeResource
-
-	err := fetchProperties(
-		ctx, s.View, s.Client,
-		[]string{"ClusterComputeResource"}, []string{"name", "summary", "datastore", "parent"}, &clusters, c.logger,
+	clusters, err := fetchInventoryCached[mo.ClusterComputeResource](
+		ctx, s,
+		[]string{"ClusterComputeResource"}, []string{"name", "summary", "datastore", "parent"}, c.logger,
 	)
 	if err != nil {
 		return err
@@ -82,11 +80,9 @@ func (c *clusterCollector) Update(ctx context.Context, ch chan<- prometheus.Metr
 				"target_type", targetTypeESXi)
 		}
 
-		var compute []mo.ComputeResource
-
-		err = fetchProperties(
-			ctx, s.View, s.Client,
-			[]string{"ComputeResource"}, []string{"name", "summary", "datastore", "parent"}, &compute, c.logger,
+		compute, err := fetchInventoryCached[mo.ComputeResource](
+			ctx, s,
+			[]string{"ComputeResource"}, []string{"name", "summary", "datastore", "parent"}, c.logger,
 		)
 		if err != nil {
 			return err

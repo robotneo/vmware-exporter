@@ -219,6 +219,10 @@ func metricsHandler(logger *slog.Logger) http.HandlerFunc {
 			Logger:         logger,
 			Enabled:        collector.Registered(),
 			MaxConcurrency: cfg.maxConcurrency,
+			// 进程级清单缓存只在 /metrics 注入：本路径用单一服务级凭证，
+			// 按 target 分桶的缓存不存在跨凭证串读。TTL=0 时内部自动旁路。
+			InventoryCache: inventoryCache,
+			InventoryTTL:   cfg.inventoryTTL,
 			Errors:         scrapeErrors,
 		})
 		if err != nil {

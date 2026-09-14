@@ -64,11 +64,9 @@ func (c *datacenterCollector) Update(ctx context.Context, ch chan<- prometheus.M
 		), prometheus.GaugeValue, 1.0,
 	)
 
-	var datacenters []mo.Datacenter
-
-	err := fetchProperties(
-		ctx, s.View, client,
-		[]string{"Datacenter"}, []string{"name", "parent"}, &datacenters, c.logger,
+	datacenters, err := fetchInventoryCached[mo.Datacenter](
+		ctx, s,
+		[]string{"Datacenter"}, []string{"name", "parent"}, c.logger,
 	)
 	if err != nil {
 		return err
@@ -96,11 +94,9 @@ func (c *datacenterCollector) Update(ctx context.Context, ch chan<- prometheus.M
 
 	}
 
-	var folders []mo.Folder
-
-	err = fetchProperties(
-		ctx, s.View, client,
-		[]string{"Folder"}, []string{"name", "parent"}, &folders, c.logger,
+	folders, err := fetchInventoryCached[mo.Folder](
+		ctx, s,
+		[]string{"Folder"}, []string{"name", "parent"}, c.logger,
 	)
 	if err != nil {
 		return err

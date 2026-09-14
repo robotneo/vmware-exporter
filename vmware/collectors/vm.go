@@ -161,14 +161,14 @@ func (c *vmCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s
 			defer wg.Done()
 			scrapePerformance(ctx, ch, c.logger, s.Samples, interval, s.Perf,
 				target, "VirtualMachine", s.Namespace, vmSubsystem, "", cVMCounters,
-				s.Counters, vmRefs, vmNames)
+				s.Counters, vmRefs, vmNames, s.PerfChunkSize, s.HostConcurrency())
 		}()
 
 		go func() {
 			defer wg.Done()
 			scrapePerformance(ctx, ch, c.logger, s.Samples, interval, s.Perf,
 				target, "VirtualMachine", s.Namespace, vmSubsystem, "*", iVMCounters,
-				s.Counters, vmRefs, vmNames)
+				s.Counters, vmRefs, vmNames, s.PerfChunkSize, s.HostConcurrency())
 		}()
 
 		wg.Wait()

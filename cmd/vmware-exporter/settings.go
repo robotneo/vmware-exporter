@@ -1,6 +1,8 @@
 package main
 
 import (
+	"time"
+
 	"github.com/prezhdarov/vmware-exporter/internal/config"
 )
 
@@ -25,6 +27,7 @@ type exporterSettings struct {
 	targetDisabled  bool
 	metricsDisabled bool
 	debugConsole    bool
+	inventoryTTL    time.Duration
 }
 
 func currentExporterSettings() exporterSettings {
@@ -37,6 +40,7 @@ func currentExporterSettings() exporterSettings {
 			targetDisabled:  *disableExporterTarget,
 			metricsDisabled: *disableExporterMetrics,
 			debugConsole:    *debugConsole,
+			inventoryTTL:    *inventoryCacheTTL,
 		}
 	})
 

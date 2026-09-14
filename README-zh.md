@@ -428,11 +428,13 @@ scrape_configs:
 | 参数 | 类型 | 说明 | 默认值 |
 | :--- | :--- | :--- | :--- |
 | `-vmware.timeout` | int | 单次抓取的整体超时（秒），覆盖登录、属性检索与性能采样全过程。 | `60` |
+| `-vmware.perf.chunk-size` | int | 单次 QueryPerf SOAP 请求最多携带的实体数（主机/VM/数据存储）。大规模环境下把全部实体塞进一个请求会撞上 vCenter 的 `vpxd.stats.maxQueryMetrics` 上限或单请求超时；分块后各块在 `-collector.max-concurrency` 的有界并发下发出、按实体顺序合并，产出的序列与不分块**逐字一致**。设为 0 表示不分块（v0.1.19 及更早的单请求行为）。 | `64` |
 | `-vmware.interval` | int | PerfManager 采样窗口（秒）。**不再参与超时计算。** | `20` |
 | `-vmware.granularity` | int | 采样数据的时间粒度（秒）。必须大于 0，且不大于 `-vmware.interval`。 | `20` |
 | `-vmware.vsan.interval` | int | vSAN 性能查询的时间窗口（秒）。vSAN 统计的最小采集粒度就是 5 分钟，低于 300 拿不到更多数据点。仅 `-collector.vsan.perf` 使用。 | `300` |
 | `-collector.max-concurrency` | int | 并发上限，同时约束三处：`CollectorSet` 层同时运行的 collector 数、esxcli 按主机 fan-out 的 goroutine 宽度，以及包装在 vim25 RoundTripper 上的**单次抓取内全局 SOAP 在飞请求数**（最后一处把"每主机 × 每网卡"嵌套 fan-out 的真实并发钉死在该值，而不是两层各自限流后最坏仍达 n×n）。设为 0 则不限制 collector 层，但 per-host fan-out 仍有内建下限。 | `8` |
 | `-web.max-scrape-inflight` | int | 同时进行的抓取数（`/metrics` 与 `/probe` 合计）。超出上限的请求直接返回 HTTP 503，而不是排队、向 vCenter 叠加更多登录与会话。设为 0 关闭。 | `4` |
+| `-scrape.inventory-cache-ttl` | duration | `/metrics` 路径上慢变清单/拓扑检索（datacenter、folder、cluster、compute resource、datastore、resource pool、vSAN 集群名发现）的复用有效期。主机/VM 的运行态以及**所有性能计数器始终实时**，不进缓存。设为 `0` 关闭缓存，回到每轮全量 ContainerView 检索（v0.1.19 及更早行为）。缓存为进程级、按 target 分桶，并且**绝不注入多租户 `/probe` 路径**——不同凭证之间不可能互相读到对方的对象清单。 | `5m` |
 | `-probe.allowed-targets` | string | `/probe` 目标 host 的可选白名单，作为 SSRF 的深度防御：以 `.` 开头按后缀匹配（`.example.com`）、含 `/` 按 CIDR 网段匹配（`10.0.0.0/8`）、其余按精确 host/IP 匹配，逗号分隔。留空（默认）允许任意 target。 | 空 |
 
 > **取代了 `-prom.maxRequests`**：那个参数是死参数 —— 上游框架把它存进

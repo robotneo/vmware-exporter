@@ -120,6 +120,8 @@ func TestScrapePerformanceEmitsMetrics(t *testing.T) {
 		s.Counters,
 		refs,
 		names,
+		0,
+		1,
 	)
 
 	metrics := drainMetrics(ch)
@@ -162,6 +164,8 @@ func TestScrapePerformanceWithNoTargetsDoesNotPanicOrEmit(t *testing.T) {
 		s.Counters,
 		nil,
 		map[string]string{},
+		0,
+		1,
 	)
 
 	if got := len(drainMetrics(ch)); got != 0 {
@@ -196,6 +200,8 @@ func TestScrapePerformanceWithNilPerfManagerDoesNotPanicOrEmit(t *testing.T) {
 		s.Counters,
 		refs,
 		names,
+		0,
+		1,
 	)
 
 	if got := len(drainMetrics(ch)); got != 0 {

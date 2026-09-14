@@ -28,6 +28,18 @@ var (
 	vmwInterval   = flag.Int("vmware.interval", 20, "PerfManager sampling window in seconds. Default is 20s.")
 	vmGranularity = flag.Int("vmware.granularity", 20, "The frequency of the sampled data. Default is 20s")
 	vmwTimeout    = flag.Int("vmware.timeout", 60, "Overall timeout in seconds for a single scrape (login, property retrieval and performance sampling). Independent from -vmware.interval.")
+
+	// perfChunkSize 限制单次 QueryPerf SOAP 请求携带的实体数。
+	//
+	// vCenter 有 vpxd.stats.maxQueryMetrics 上限（约束 对象数×计数器数 的
+	// 指标总量），几千台 VM 连同十几个计数器塞进一个请求会超限失败或撞单次
+	// 超时；分块后多块在 -collector.max-concurrency 的有界并发下发出，结果
+	// 按实体顺序合并，输出序列与单请求逐字一致。
+	//
+	// 默认 64 与 telegraf inputs.vsphere 的 max_query_objects 默认值同量级。
+	// 0 表示不分块（v0.1.19 及更早的行为），小规模环境或 ESXi 直连可显式设 0。
+	vmwPerfChunkSize = flag.Int("vmware.perf.chunk-size", 64,
+		"Maximum number of entities (hosts/VMs/datastores) per QueryPerf SOAP request. Chunks run with bounded concurrency and merge in entity order. 0 disables chunking (single request, pre-v0.1.20 behavior).")
 )
 
 // logoutTimeout 是 SOAP Logout 单独使用的超时。抓取用的 ctx 在 Logout 时
@@ -61,6 +73,11 @@ func ValidateFlags() error {
 		return fmt.Errorf("-vmware.timeout must be greater than 0, got %d", cfg.timeout)
 	}
 
+	// 0 是合法值（不分块），所以只拒负数；上不封顶，超大值等价于 0。
+	if cfg.chunkSize < 0 {
+		return fmt.Errorf("-vmware.perf.chunk-size must be greater than or equal to 0, got %d", cfg.chunkSize)
+	}
+
 	if cfg.schema != "http" && cfg.schema != "https" {
 		return fmt.Errorf(`-vmware.schema must be either "http" or "https", got %q`, cfg.schema)
 	}
@@ -90,6 +107,7 @@ type settings struct {
 	interval    int
 	granularity int
 	timeout     int
+	chunkSize   int
 }
 
 // currentSettings 在读锁保护下一次性拷出全部 vmware.* flag。
@@ -109,6 +127,7 @@ func currentSettings() settings {
 			interval:    *vmwInterval,
 			granularity: *vmGranularity,
 			timeout:     *vmwTimeout,
+			chunkSize:   *vmwPerfChunkSize,
 		}
 	})
 
@@ -291,6 +310,10 @@ func (vm *VMware) loginWithCredentials(ctx context.Context, creds Credentials,
 		TargetType: detectTargetType(client, logger),
 		Interval:   int32(cfg.interval),
 		Samples:    int32(samples),
+
+		// 分块大小是 vmware.* 侧配置，随会话一起注入；缓存由
+		// CollectorSet 在登录后注入（只有它分得清 /metrics 与 /probe）。
+		PerfChunkSize: cfg.chunkSize,
 	}
 
 	// 不记录 username：probe 端点的凭证来自请求参数或 Basic Auth，
