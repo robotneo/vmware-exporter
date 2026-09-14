@@ -27,6 +27,7 @@ package collector
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/vmware/govmomi/performance"
 	"github.com/vmware/govmomi/view"
@@ -77,6 +78,25 @@ type Scrape struct {
 	// MaxConcurrency 是整轮抓取的并发预算，由 -collector.max-concurrency 决定。
 	// collector 内部的 per-host fan-out 通过 HostConcurrency() 读取它。
 	MaxConcurrency int
+
+	// PerfChunkSize 是单次 vCenter PerfManager 查询（QueryPerf）携带的最大
+	// 实体数，由 -vmware.perf.chunk-size 决定。<=0 表示不分块（把全部实体
+	// 塞进一个请求，即 v0.1.19 及更早的行为）。
+	//
+	// 分块解决的是大规模环境下单请求过大的问题：vCenter 有
+	// vpxd.stats.maxQueryMetrics 上限（约束 对象数×计数器数 的指标总量），
+	// 超限会让整轮 perf 查询失败；几千个实体塞进一个请求也更容易撞上
+	// -vmware.timeout。分块后多块在有界并发下发出，结果按实体顺序合并，
+	// 输出序列与不分块逐字一致。
+	PerfChunkSize int
+
+	// InventoryCache 是进程级清单/属性缓存。仅 /metrics（单一服务级凭证）
+	// 路径注入；/probe 多租户路径保持 nil —— 见 inventorycache.go 顶部关于
+	// 越权读的说明。为 nil 或 InventoryTTL<=0 时所有属性检索回退到实时拉取。
+	InventoryCache *InventoryCache
+
+	// InventoryTTL 是清单缓存有效期，由 -scrape.inventory-cache-ttl 决定。
+	InventoryTTL time.Duration
 
 	// hostsOnce / hosts / hostsErr 实现 HostSystem 的**请求内**共享。
 	//

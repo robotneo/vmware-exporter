@@ -155,15 +155,17 @@ func (c *vsanCollector) Update(ctx context.Context, ch chan<- prometheus.Metric,
 		return nil
 	}
 
-	var clusters []mo.ClusterComputeResource
-
 	// 只要 name —— cmo 从 Self 拿，其余属性本 collector 用不到。
 	// 刻意不检索 configurationEx：那是 D8 的 A 方案，而 A 方案拿不到 dedup
 	// （vim25 的 VsanClusterConfigInfo 没有 DataEfficiencyConfig），
 	// 走 VsanClusterGetConfig 才能一次拿到 enabled 与 dedup 两样。
-	err := fetchProperties(
-		ctx, s.View, s.Client,
-		[]string{"ClusterComputeResource"}, []string{"name"}, &clusters, c.logger,
+	//
+	// 走清单 TTL 缓存：这是纯集群名发现，与 vsan.perf collector 以及 cluster
+	// collector 共享同一 target|types|props 缓存项（propSpec 相同才共享）。
+	// 后续 VsanClusterGetConfig / 健康查询仍然每轮实时，vSAN 健康状态不缓存。
+	clusters, err := fetchInventoryCached[mo.ClusterComputeResource](
+		ctx, s,
+		[]string{"ClusterComputeResource"}, []string{"name"}, c.logger,
 	)
 	if err != nil {
 		return err

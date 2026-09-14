@@ -36,13 +36,18 @@ func NewdatastoreCollector(logger *slog.Logger) (collector.Collector, error) {
 func (c *datastoreCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s *collector.Scrape) error {
 
 	var (
-		datastores     []mo.Datastore
 		datastoreRefs  []types.ManagedObjectReference
 		datastoreNames = make(map[string]string)
 	)
-	err := fetchProperties(
-		ctx, s.View, s.Client,
-		[]string{"Datastore"}, []string{"summary", "host", "vm", "parent"}, &datastores, c.logger,
+
+	// 走清单 TTL 缓存：datastore 的 summary（容量/剩余/可访问）与 host/vm/parent
+	// 关联都属于慢变的容量与拓扑面 —— 容量监控按分钟级粒度观察足矣。accessible
+	// 最多滞后一个 TTL，但 datastore 不可达时同一轮的 perf 查询仍会实时失败并
+	// 留日志，不会被缓存静默吞掉。perf 计数器（disk.used/provisioned）不经过
+	// 这里，始终实时查询。
+	datastores, err := fetchInventoryCached[mo.Datastore](
+		ctx, s,
+		[]string{"Datastore"}, []string{"summary", "host", "vm", "parent"}, c.logger,
 	)
 	if err != nil {
 		return err
@@ -121,7 +126,7 @@ func (c *datastoreCollector) Update(ctx context.Context, ch chan<- prometheus.Me
 
 	scrapePerformance(ctx, ch, c.logger, s.Samples, interval, s.Perf,
 		s.Target, "Datastore", s.Namespace, datastoreSubsystem, "", datastoreCounters,
-		s.Counters, datastoreRefs, datastoreNames)
+		s.Counters, datastoreRefs, datastoreNames, s.PerfChunkSize, s.HostConcurrency())
 
 	return nil
 }

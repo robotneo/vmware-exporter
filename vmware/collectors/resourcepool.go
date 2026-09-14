@@ -70,16 +70,21 @@ func NewresourcepoolCollector(logger *slog.Logger) (collector.Collector, error) 
 // 下层主机的汇总，语义可疑。
 func (c *resourcepoolCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s *collector.Scrape) error {
 
-	var pools []mo.ResourcePool
-
 	// 属性列表刻意不含 childConfiguration —— 那是嵌套子池的完整
 	// ResourceConfigSpec 数组，深层嵌套时体积可观，而本 collector 用不到它
 	// （子池自己会作为独立实体被检索到）。默认启用的 collector 更要克制。
-	err := fetchProperties(
-		ctx, s.View, s.Client,
+	//
+	// 走清单 TTL 缓存：资源池的拓扑（parent/owner/vm）与配置（reservation/
+	// limit/shares）都是慢变量，唯一的瞬时面是 runtime 里 4 个 CPU/内存用量
+	// gauge，它们服务的是配额/容量治理而非秒级告警，最多滞后一个 TTL 可接受
+	// （与 telegraf inputs.vsphere 的 object_discovery_interval=300s 同哲学）。
+	// 这与 host/vm 不同：后两者的 runtime 还决定哪些实体参与 perf 查询，缓存
+	// 会让开关机/维护进出延迟生效，因此它们保持实时。
+	pools, err := fetchInventoryCached[mo.ResourcePool](
+		ctx, s,
 		[]string{"ResourcePool"},
 		[]string{"name", "parent", "owner", "runtime", "config", "vm", "overallStatus"},
-		&pools, c.logger,
+		c.logger,
 	)
 	if err != nil {
 		return err

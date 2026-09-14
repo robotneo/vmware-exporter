@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	"github.com/prezhdarov/vmware-exporter/internal/config"
 	vmware "github.com/prezhdarov/vmware-exporter/vmware/api"
 	vmwareCollectors "github.com/prezhdarov/vmware-exporter/vmware/collectors"
@@ -99,7 +100,31 @@ var (
 	//   - 其余（如 "vc.corp" 或 "10.1.2.3"）：精确相等
 	probeAllowedTargets = flag.String("probe.allowed-targets", "",
 		"Comma-separated allowlist for the /probe target host: suffixes starting with '.', CIDRs containing '/', or exact host/IP matches. Empty (default) allows any target.")
+
+	// inventoryCacheTTL 控制进程级清单缓存的有效期。
+	//
+	// 缓存只覆盖慢变的拓扑/容量面（datacenter、folder、cluster、compute
+	// resource、datastore、resourcepool、vSAN 集群名发现），host/vm 的运行态
+	// 与全部 perf 计数器始终实时。默认 5m 与 telegraf inputs.vsphere 的
+	// object_discovery_interval=300s 同量级。
+	//
+	// 安全边界：缓存实例只注入 /metrics（单一服务级凭证）。/probe 是多租户
+	// 路径，每个请求一组不同凭证，共享缓存会让低权限凭证读到高权限凭证留下
+	// 的对象清单（越权读），因此 /probe 永远拿到 nil 缓存、每轮实时检索。
+	//
+	// 设为 0 关闭缓存，回到每轮全量 ContainerView 检索（v0.1.19 及更早行为）。
+	inventoryCacheTTL = flag.Duration("scrape.inventory-cache-ttl", 5*time.Minute,
+		"How long inventory/topology lookups (datacenter, folder, cluster, datastore, resource pool) are reused on the /metrics path. Host/VM runtime state and all perf counters stay real-time. 0 disables the cache. The cache is never used on the multi-tenant /probe path.")
 )
+
+// inventoryCache 是 /metrics 路径共享的进程级清单缓存单例。
+//
+// 必须在 handler 之外只有一份：每请求构造的 CollectorSet 若各自持有缓存，
+// 命中率永远是 0。它不持有任何连接或会话，只存上一次（已登出）会话拉回的
+// 纯数据 —— MoRef 在同一 vCenter 内跨会话稳定，复用安全。
+//
+// 刻意不传给 probeHandler：见 inventoryCacheTTL 的安全说明。
+var inventoryCache = collector.NewInventoryCache()
 
 // HTTP server 超时。不设 WriteTimeout：一次抓取可能跑满 -vmware.timeout
 // （默认 60s），WriteTimeout 会从读完请求头开始计时并掐断正常的慢响应；

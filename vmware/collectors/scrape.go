@@ -2,6 +2,7 @@ package vmwareCollectors
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -10,8 +11,10 @@ import (
 	"github.com/vmware/govmomi/performance"
 	"github.com/vmware/govmomi/view"
 	"github.com/vmware/govmomi/vim25"
+	"github.com/vmware/govmomi/vim25/methods"
 	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/types"
+	"golang.org/x/sync/errgroup"
 )
 
 func Load(logger *slog.Logger) {
@@ -59,6 +62,30 @@ func fetchProperties(ctx context.Context, viewManager *view.Manager, vmwClient *
 
 	return nil
 
+}
+
+// fetchInventoryCached 是拓扑/容量类 collector 的清单检索入口：经 Scrape 上的
+// 进程级 TTL 缓存，命中时整轮 ContainerView 检索被跳过，未命中时回退到
+// fetchProperties 实时拉取并回填。
+//
+// 适用范围刻意限定在「变化慢、不含运行态过滤」的清单类型 —— datacenter、
+// folder、cluster、compute resource、datastore、resourcepool、以及 vSAN 用的
+// 集群名列表。host 与 vm 不走这里：它们的检索结果同时承载 runtime
+// （电源/连接/维护态），而这些状态决定哪些实体参与 perf 查询，缓存它们会让
+// 开关机与维护进出最多延迟一个 TTL 才反映，且与后续 P1 的状态指标改造耦合。
+//
+// 返回的切片归缓存所有，调用方必须只读（遍历、读字段），不得 append 或改元素。
+func fetchInventoryCached[T any](ctx context.Context, s *collector.Scrape, moTypes, propSpec []string, logger *slog.Logger) ([]T, error) {
+	key := collector.InventoryKey(s.Target, moTypes, propSpec)
+
+	return collector.FetchInventory(s.InventoryCache, s.InventoryTTL, key, func() ([]T, error) {
+		var out []T
+		if err := fetchProperties(ctx, s.View, s.Client, moTypes, propSpec, &out, logger); err != nil {
+			return nil, err
+		}
+
+		return out, nil
+	})
 }
 
 func emitPerformanceMetrics(
@@ -195,7 +222,8 @@ func emitPerformanceMetrics(
 func scrapePerformance(ctx context.Context, ch chan<- prometheus.Metric, logger *slog.Logger, sampleCount, sampleInterval int32,
 	perfManager *performance.Manager, vcenter, moType, namespace, subsystem, instance string,
 	counters []string, countersSpec map[string]*types.PerfCounterInfo,
-	targetRefs []types.ManagedObjectReference, targetNames map[string]string) {
+	targetRefs []types.ManagedObjectReference, targetNames map[string]string,
+	chunkSize, concurrency int) {
 	if len(targetRefs) == 0 {
 		logger.Debug("no targets for perfman scrape", "type", moType)
 		return
@@ -206,7 +234,8 @@ func scrapePerformance(ctx context.Context, ch chan<- prometheus.Metric, logger 
 		return
 	}
 
-	logger.Debug("gathering perfman metrics", "target_ref", targetRefs[0], "type", moType)
+	logger.Debug("gathering perfman metrics", "target_ref", targetRefs[0], "type", moType,
+		"entities", len(targetRefs), "chunk_size", chunkSize)
 
 	begin := time.Now()
 
@@ -226,25 +255,109 @@ func scrapePerformance(ctx context.Context, ch chan<- prometheus.Metric, logger 
 		return
 	}
 
-	spec := types.PerfQuerySpec{
-		MaxSample:  sampleCount,                                // Number of samples to fetch - if samples are fetched every 20s only one is needed.
-		MetricId:   []types.PerfMetricId{{Instance: instance}}, //Instance takes either null string or * (or in fact any name of an performance manager metric instance)
-		IntervalId: sampleInterval,                             // 20 seconds
+	// 直接用计数器 id 构造 PerfMetricId，而不是每块都调 perfManager.SampleByName：
+	// 后者内部会对每一次调用先 CounterInfoByName 再发一次 SOAP，分块后这个额外
+	// 往返会随块数线性放大。计数器元数据本调用已通过 s.Counters 持有，没有理由
+	// 为每个分块重复拉一遍。
+	metricIDs := make([]types.PerfMetricId, 0, len(supportedCounters))
+	for _, name := range supportedCounters {
+		metricIDs = append(metricIDs, types.PerfMetricId{
+			CounterId: countersSpec[name].Key,
+			Instance:  instance,
+		})
 	}
 
-	sample, err := perfManager.SampleByName(ctx, spec, supportedCounters, targetRefs)
-	if err != nil {
+	template := types.PerfQuerySpec{
+		MaxSample:  sampleCount,    // Number of samples to fetch - if samples are fetched every 20s only one is needed.
+		MetricId:   metricIDs,      //Instance takes either null string or * (or in fact any name of an performance manager metric instance)
+		IntervalId: sampleInterval, // 20 seconds
+	}
+
+	// 历史汇总间隔（>=60s）必须带 StartTime 才能取到 vCenter DB 里的点；
+	// govmomi SampleByName 也是这么做的（now - IntervalId*MaxSample*2）。
+	// 这里在分块前取一次时间并写进模板，保证各块查询的是同一个时间窗口。
+	if template.IntervalId >= 60 && template.MaxSample > 0 {
+		now, err := methods.GetCurrentTime(ctx, perfManager.Client())
+		if err != nil {
+			logger.Error("failed to get current vCenter time for historical query", "error", err, "type", moType)
+			return
+		}
+
+		window := time.Duration(template.IntervalId) * time.Second * time.Duration(template.MaxSample*2)
+		start := now.Add(-window)
+		template.StartTime = &start
+	}
+
+	// 把实体按 chunkSize 切片，多块在有界并发下查询。单请求装几千实体会撞
+	// vCenter 的 vpxd.stats.maxQueryMetrics 上限或单次超时，分块后每块都小而稳；
+	// 即便这里不设并发上限，RoundTripper 上的全局 SOAP 闸（ThrottleSOAP）仍会
+	// 把真正同时在飞的请求数钉在 -collector.max-concurrency，但显式 SetLimit
+	// 避免一次生成与块数等量的 goroutine。
+	chunks := chunkRefs(targetRefs, chunkSize)
+	parts := make([][]types.BasePerfEntityMetricBase, len(chunks))
+
+	g, gctx := errgroup.WithContext(ctx)
+	if concurrency > 0 {
+		g.SetLimit(concurrency)
+	}
+
+	for i, refs := range chunks {
+		i, refs := i, refs
+
+		g.Go(func() error {
+			queryBegin := time.Now()
+
+			// 每个实体一条 spec，与 govmomi SampleByName 内部的展开方式一致，
+			// 但计数器集只解析一次、StartTime 只算一次。
+			specs := make([]types.PerfQuerySpec, 0, len(refs))
+			for _, ref := range refs {
+				spec := template
+				spec.Entity = ref.Reference()
+				specs = append(specs, spec)
+			}
+
+			series, err := perfManager.Query(gctx, specs)
+			if err != nil {
+				return fmt.Errorf("perf query chunk %d/%d (%d entities, type %s): %w",
+					i+1, len(chunks), len(refs), moType, err)
+			}
+
+			parts[i] = series
+
+			logger.Debug("perf chunk scraped", "type", moType, "chunk", i+1, "of", len(chunks),
+				"entities", len(refs), "duration_seconds", time.Since(queryBegin).Seconds())
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		// 任一块失败就不产出这一轮（该计数器组的）性能指标 —— 与改造前单个
+		// SampleByName 失败时的全有或无语义一致，避免发半份数据。
 		logger.Error("error sampling metrics and targets", "error", err, "type", moType)
 		return
 	}
 
-	metrics, err := perfManager.ToMetricSeries(ctx, sample)
+	var rawSeries []types.BasePerfEntityMetricBase
+	for _, part := range parts {
+		rawSeries = append(rawSeries, part...)
+	}
+
+	// 复刻 govmomi SampleByName 对历史查询的尾部截断：2× 窗口可能取回多于
+	// MaxSample 的点，只保留最后 MaxSample 个。不做这一步，datastore 的 300s
+	// 历史点会把窗口里的多个点一起平均，数值与升级前不一致。
+	if template.IntervalId >= 60 && template.MaxSample > 0 {
+		truncateToLastSamples(rawSeries, int(template.MaxSample))
+	}
+
+	metrics, err := perfManager.ToMetricSeries(ctx, rawSeries)
 	if err != nil {
 		logger.Error("error converting perf samples to metric series", "error", err, "type", moType)
 		return
 	}
 
-	logger.Debug("time to fetch perfman samples", "type", moType, "duration_seconds", time.Since(begin).Seconds())
+	logger.Debug("time to fetch perfman samples", "type", moType, "chunks", len(chunks),
+		"duration_seconds", time.Since(begin).Seconds())
 
 	begin = time.Now()
 
@@ -262,4 +375,61 @@ func scrapePerformance(ctx context.Context, ch chan<- prometheus.Metric, logger 
 	)
 
 	logger.Debug("time to process perfman metrics", "type", moType, "duration_seconds", time.Since(begin).Seconds())
+}
+
+// truncateToLastSamples 把每个实体的历史样本裁到只保留最后 n 个。
+//
+// 这是 govmomi SampleByName 在「为历史查询回看 2× 窗口」之后做的同一件事：
+// 多取的点必须丢掉，否则下游对 Value 求平均时窗口被拉长、数值被稀释。本项目
+// 直接调 PerfManager.Query（避免每块重复拉计数器元数据），因此要自己复刻
+// 这一步，保证与升级前经 SampleByName 得到的结果逐字一致。
+func truncateToLastSamples(series []types.BasePerfEntityMetricBase, n int) {
+	for _, base := range series {
+		em, ok := base.(*types.PerfEntityMetric)
+		if !ok {
+			continue
+		}
+
+		if diff := len(em.SampleInfo) - n; diff > 0 {
+			em.SampleInfo = em.SampleInfo[diff:]
+		}
+
+		for _, s := range em.Value {
+			v, ok := s.(*types.PerfMetricIntSeries)
+			if !ok {
+				continue
+			}
+
+			if diff := len(v.Value) - n; diff > 0 {
+				v.Value = v.Value[diff:]
+			}
+		}
+	}
+}
+
+// chunkRefs 把托管对象引用按每片至多 size 个切成连续的片。
+//
+// size<=0（不分块）或引用数不超过一片时，返回装着完整切片的单片 —— 调用方
+// 因此无需区分「分块」与「不分块」两条路径，v0.1.19 及更早的单请求行为就是
+// size=0 时这唯一一片。
+//
+// 切出来的是底层数组的切片视图而非拷贝：QueryPerf 只读这些引用，且这一轮内
+// targetRefs 不会被修改，共享底层数组没有别名风险。
+func chunkRefs(refs []types.ManagedObjectReference, size int) [][]types.ManagedObjectReference {
+	if size <= 0 || len(refs) <= size {
+		return [][]types.ManagedObjectReference{refs}
+	}
+
+	chunks := make([][]types.ManagedObjectReference, 0, (len(refs)+size-1)/size)
+
+	for start := 0; start < len(refs); start += size {
+		end := start + size
+		if end > len(refs) {
+			end = len(refs)
+		}
+
+		chunks = append(chunks, refs[start:end])
+	}
+
+	return chunks
 }

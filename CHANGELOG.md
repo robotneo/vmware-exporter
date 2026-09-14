@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Added
 
+- **Chunked performance queries for large vCenter estates
+  (`-vmware.perf.chunk-size`, default 64).** Host, VM and datastore performance
+  collection used to put every entity into a single `QueryPerf` SOAP request.
+  vCenter enforces `vpxd.stats.maxQueryMetrics` (entities × counters); with a
+  few thousand VMs and a dozen counters the single request either failed
+  outright or exceeded `-vmware.timeout`, losing that whole counter group.
+  Entities are now split into bounded chunks queried with bounded concurrency
+  (the width is `-collector.max-concurrency`, still capped by the global SOAP
+  throttle), then merged back in entity order. Counter metadata is resolved
+  once instead of once per chunk (govmomi's `SampleByName` re-issues
+  `CounterInfoByName` on every call), and the historical tail-truncation is
+  reproduced so datastore 300s rollup values are identical to the old path.
+  Set the flag to `0` for the pre-v0.1.20 single-request behaviour.
+
+- **Process-level TTL cache for slow-changing inventory
+  (`-scrape.inventory-cache-ttl`, default 5m).** Every enabled collector
+  previously issued a `CreateContainerView` + `RetrieveProperties` + `Destroy`
+  round trip on every 20s scrape, even for topology that changes rarely.
+  Datacenter, folder, cluster, standalone compute resource, datastore, resource
+  pool and the vSAN cluster-name discovery now share a per-target cache keyed
+  by object types **and** requested properties (so a smaller property set can
+  never satisfy a larger one); concurrent misses collapse through
+  singleflight, failed retrievals are never cached, and expired entries are
+  evicted. Host/VM runtime state — which decides power/maintenance filtering
+  for perf queries — and every performance counter stay strictly real-time.
+  The cache is injected **only** on the single-credential `/metrics` path; the
+  multi-tenant `/probe` path always passes a nil cache so one set of
+  credentials can never read another's inventory. Set the flag to `0` to
+  disable.
+
 - **A landing page that is actually HTML, and an interactive debug console at
   `/debug`.** The page served at `/` used to be a string literal concatenated
   inside `main()` with no `<!DOCTYPE>` and no opening `<html>`/`<body>` tags —

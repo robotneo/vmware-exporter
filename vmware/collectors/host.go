@@ -170,14 +170,14 @@ func (c *hostCollector) Update(ctx context.Context, ch chan<- prometheus.Metric,
 			defer wg.Done()
 			scrapePerformance(ctx, ch, c.logger, s.Samples, interval, s.Perf,
 				target, "HostSystem", s.Namespace, hostSubsystem, "", cHostCounters,
-				s.Counters, hostRefs, hostNames)
+				s.Counters, hostRefs, hostNames, s.PerfChunkSize, s.HostConcurrency())
 		}()
 
 		go func() {
 			defer wg.Done()
 			scrapePerformance(ctx, ch, c.logger, s.Samples, interval, s.Perf,
 				target, "HostSystem", s.Namespace, hostSubsystem, "*", iHostCounters,
-				s.Counters, hostRefs, hostNames)
+				s.Counters, hostRefs, hostNames, s.PerfChunkSize, s.HostConcurrency())
 		}()
 
 		wg.Wait()
