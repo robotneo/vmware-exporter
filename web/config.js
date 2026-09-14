@@ -722,23 +722,14 @@ $("outTabs").querySelectorAll(".chip").forEach((btn) => {
   });
 });
 
-$("copyBtn").addEventListener("click", async () => {
-  const btn = $("copyBtn");
-  const restore = btn.textContent;
-
-  try {
-    await navigator.clipboard.writeText(build());
-    btn.textContent = i18n.__("config.copied");
-  } catch {
-    // 非 HTTPS 下 clipboard API 不可用，退回到让用户自己复制。
-    window.prompt("Copy this text", build());
-
-    return;
-  }
-
-  setTimeout(() => {
-    btn.textContent = restore;
-  }, 1400);
+$("copyBtn").addEventListener("click", () => {
+  // 复制 build() 的原文：.yml 就是 YAML、.sh 就是 shell，vmeCopy 只按
+  // text/plain 原样写入剪贴板，不转义、不改缩进。成功/失败只在按钮自身
+  // 上变色提示，不弹任何对话框（HTTP 非安全上下文下走 execCommand 兜底）。
+  window.vmeCopy($("copyBtn"), build(), {
+    ok: i18n.__("config.copied"),
+    fail: i18n.__("config.copy_fail"),
+  });
 });
 
 $("dlBtn").addEventListener("click", () => {

@@ -134,6 +134,7 @@ const i18n = (() => {
     "debug.running": "抓取中…",
     "debug.copy_url": "复制探针 URL",
     "debug.copied": "已复制",
+    "debug.copy_fail": "复制失败，请手动选择",
 
     "debug.result": "结果",
     "debug.not_run": "尚未运行",
@@ -213,6 +214,7 @@ const i18n = (() => {
     "config.tab_flags": "导出器参数",
     "config.copy": "复制",
     "config.copied": "已复制",
+    "config.copy_fail": "复制失败，请手动选择",
     "config.download": "下载",
     "config.out_hint": "行有效内容",
 
@@ -381,6 +383,7 @@ const i18n = (() => {
     "debug.running": "Running",
     "debug.copy_url": "Copy probe URL",
     "debug.copied": "Copied",
+    "debug.copy_fail": "Copy failed, select text manually",
 
     "debug.result": "Result",
     "debug.not_run": "Not run yet",
@@ -472,6 +475,7 @@ const i18n = (() => {
     "config.tab_flags": "Exporter flags",
     "config.copy": "Copy",
     "config.copied": "Copied",
+    "config.copy_fail": "Copy failed, select text manually",
     "config.download": "Download",
     "config.out_hint": " significant lines",
 
