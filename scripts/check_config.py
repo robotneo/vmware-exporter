@@ -92,6 +92,7 @@ from __future__ import annotations
 
 import glob
 import importlib.util
+import json
 import os
 import pathlib
 import re
@@ -946,6 +947,46 @@ def check_dashboards(failures: list[str]) -> None:
             failures.append(f"{path.name}: {problem}")
 
 
+def check_lifecycle_dashboards(failures: list[str]) -> None:
+    """Assert estate dashboards respect the v0.2.0 lifecycle semantics.
+
+    v0.2.0 made ``vm_info``/``host_info`` and the static capacity series appear
+    for powered-off VMs and disconnected/maintenance hosts. An overview panel
+    that still aggregates those metrics without intersecting the new
+    power/connection/maintenance gauges silently changes meaning (maintenance
+    stops shrinking the numerator but the denominator stays), the same class of
+    invisible-in-Grafana regression check_dashboards() guards for the metric
+    rename. scripts/lifecycle_dashboards.py owns the rules and this check, so a
+    new overview panel of the old shape fails here rather than shipping.
+    """
+    script = pathlib.Path(REPO) / "scripts" / "lifecycle_dashboards.py"
+    dashboards = pathlib.Path(REPO) / "dashboards"
+    if not script.exists() or not dashboards.is_dir():
+        return
+
+    spec = importlib.util.spec_from_file_location("lifecycle_dashboards", script)
+    if spec is None or spec.loader is None:
+        failures.append(f"could not load {script.name} to check the dashboards")
+        return
+
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"could not load {script.name}: {exc}")
+        return
+
+    for path in sorted(dashboards.glob("vmware-*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            problems = module.check_dashboard(data, path.name)
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"{path.name}: could not be checked: {exc}")
+            continue
+        for problem in problems:
+            failures.append(f"{path.name}: {problem}")
+
+
 def main() -> int:
     flags, source = registered_flags()
     if not flags:
@@ -973,6 +1014,7 @@ def main() -> int:
     check_packaging(failures, flags)
     check_readme_flags(failures, flags, source)
     check_dashboards(failures)
+    check_lifecycle_dashboards(failures)
     check_metrics(failures)
 
     if failures:

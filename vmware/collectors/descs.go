@@ -41,12 +41,20 @@ import (
 const deprecatedSuffix = " DEPRECATED: use %s instead, this metric will be removed in a future release."
 
 type hostDescs struct {
-	// hostmo, host, cmo, vcenter
+	// hostmo, host, cmo, uuid, vcenter
 	info *prometheus.Desc
 	// hostmo, host, vendor, model, cpu_type, vcenter
 	hardwareInfo *prometheus.Desc
 	// hostmo, host, software, version, build, vcenter
 	softwareInfo *prometheus.Desc
+	// hostmo, host, status, vcenter
+	overallStatus *prometheus.Desc
+	// hostmo, host, state, vcenter -- state is poweredOn|poweredOff|standBy|unknown
+	powerState *prometheus.Desc
+	// hostmo, host, state, vcenter -- state is connected|disconnected|notResponding
+	connectionState *prometheus.Desc
+	// hostmo, host, vcenter
+	maintenanceMode *prometheus.Desc
 	// hostmo, host, vcenter
 	cpuCoreCount *prometheus.Desc
 	// hostmo, host, vcenter
@@ -64,8 +72,12 @@ type hostDescs struct {
 }
 
 type vmDescs struct {
-	// vmmo, vm, hostmo, vcenter
+	// vmmo, vm, hostmo, uuid, vcenter
 	info *prometheus.Desc
+	// vmmo, vm, status, vcenter
+	overallStatus *prometheus.Desc
+	// vmmo, vm, state, vcenter -- state is poweredOn|poweredOff|suspended
+	powerState *prometheus.Desc
 	// vmmo, vm, hostmo, vcenter
 	cpuCoreCount *prometheus.Desc
 	// vmmo, vm, hostmo, vcenter -- legacy, value is MB
@@ -89,6 +101,8 @@ type vmDescs struct {
 type datastoreDescs struct {
 	// dsmo, ds, type, pfinstance, foldermo, vcenter
 	info *prometheus.Desc
+	// dsmo, ds, status, vcenter
+	overallStatus *prometheus.Desc
 	// dsmo, ds, vcenter -- legacy, name carries no unit
 	capacity *prometheus.Desc
 	// dsmo, ds, vcenter
@@ -99,6 +113,27 @@ type datastoreDescs struct {
 	freeBytes *prometheus.Desc
 	// dsmo, ds, vcenter
 	accessible *prometheus.Desc
+}
+
+// clusterDescs 覆盖 cluster collector 在真实 ClusterComputeResource 上产出的指标。
+//
+// ESXi/独立主机走的 compute 兜底分支产出 vmware_compute_info，与这里无关，
+// 仍在 cluster.go 内内联构造（实体数恒为 1，复用 Desc 没有收益）。
+//
+// !!! 每个字段上方注释里的 label 顺序即 MustNewConstMetric 的传值顺序 !!!
+type clusterDescs struct {
+	// cmo, vmwcluster, status, vcenter
+	overallStatus *prometheus.Desc
+	// cmo, vmwcluster, vcenter
+	effectiveHosts *prometheus.Desc
+	// cmo, vmwcluster, vcenter
+	cpuCapacityHertz *prometheus.Desc
+	// cmo, vmwcluster, vcenter
+	cpuEffectiveHertz *prometheus.Desc
+	// cmo, vmwcluster, vcenter
+	memoryCapacityBytes *prometheus.Desc
+	// cmo, vmwcluster, vcenter
+	memoryEffectiveBytes *prometheus.Desc
 }
 
 // resourcePoolDescs 覆盖 resourcepool collector 的全部指标。
@@ -180,6 +215,7 @@ type collectorDescs struct {
 	host         hostDescs
 	vm           vmDescs
 	datastore    datastoreDescs
+	cluster      clusterDescs
 	resourcePool resourcePoolDescs
 	vsan         vsanDescs
 }
@@ -213,6 +249,7 @@ func buildDescs(namespace string) *collectorDescs {
 		host:         buildHostDescs(namespace),
 		vm:           buildVMDescs(namespace),
 		datastore:    buildDatastoreDescs(namespace),
+		cluster:      buildClusterDescs(namespace),
 		resourcePool: buildResourcePoolDescs(namespace),
 		vsan:         buildVsanDescs(namespace),
 	}
@@ -228,8 +265,8 @@ func buildHostDescs(namespace string) hostDescs {
 
 	return hostDescs{
 		info: d("info",
-			"Basic host info.",
-			"hostmo", "host", "cmo", "vcenter"),
+			"Basic host info. The uuid label is the SMBIOS UUID (hardware.systemInfo.uuid), empty when the target does not report it.",
+			"hostmo", "host", "cmo", "uuid", "vcenter"),
 
 		hardwareInfo: d("hardware_info",
 			"Host hardware information.",
@@ -238,6 +275,29 @@ func buildHostDescs(namespace string) hostDescs {
 		softwareInfo: d("software_info",
 			"Host software information.",
 			"hostmo", "host", "software", "version", "build", "vcenter"),
+
+		// 状态进 label、值恒为 1，与 resourcepool_overall_status 同一形态。
+		// gray 必须原样输出（它常先于真实故障出现），不归并进 yellow。
+		overallStatus: d("overall_status",
+			"Host overall status as reported by vSphere. "+
+				"The status label carries the colour: gray, green, yellow or red.",
+			"hostmo", "host", "status", "vcenter"),
+
+		powerState: d("power_state",
+			"Host power state, as a label. "+
+				"The state label is poweredOn, poweredOff, standBy or unknown.",
+			"hostmo", "host", "state", "vcenter"),
+
+		connectionState: d("connection_state",
+			"Host connection state, as a label. "+
+				"The state label is connected, disconnected or notResponding.",
+			"hostmo", "host", "state", "vcenter"),
+
+		// 布尔量没有状态维：maintenance 只有开/关两值，拆成状态 label 只会
+		// 让"否"也占一条恒定为 0 的冗余序列。
+		maintenanceMode: d("maintenance_mode",
+			"Whether the host is in maintenance mode (1) or not (0).",
+			"hostmo", "host", "vcenter"),
 
 		cpuCoreCount: d("cpu_corecount",
 			"Number of physical CPU cores on the host.",
@@ -291,8 +351,19 @@ func buildVMDescs(namespace string) vmDescs {
 
 	return vmDescs{
 		info: d("info",
-			"Basic virtual machine info, for joining on parent references.",
-			"vmmo", "vm", "hostmo", "vcenter"),
+			"Basic virtual machine info, for joining on parent references. "+
+				"The uuid label is config.uuid, empty when the VM is inaccessible or the target does not report it.",
+			"vmmo", "vm", "hostmo", "uuid", "vcenter"),
+
+		overallStatus: d("overall_status",
+			"Virtual machine overall status as reported by vSphere. "+
+				"The status label carries the colour: gray, green, yellow or red.",
+			"vmmo", "vm", "status", "vcenter"),
+
+		powerState: d("power_state",
+			"Virtual machine power state, as a label. "+
+				"The state label is poweredOn, poweredOff or suspended.",
+			"vmmo", "vm", "state", "vcenter"),
 
 		cpuCoreCount: d("cpu_corecount",
 			"Number of virtual CPUs configured for the virtual machine.",
@@ -347,6 +418,13 @@ func buildDatastoreDescs(namespace string) datastoreDescs {
 			"Datastore info, for joining on parent references.",
 			"dsmo", "ds", "type", "pfinstance", "foldermo", "vcenter"),
 
+		// DatastoreSummary 上没有 overallStatus，这里取 mo.ManagedEntity
+		// 基础属性（属性路径 "overallStatus"），见 datastore.go。
+		overallStatus: d("overall_status",
+			"Datastore overall status as reported by vSphere. "+
+				"The status label carries the colour: gray, green, yellow or red.",
+			"dsmo", "ds", "status", "vcenter"),
+
 		// capacity / free 的值本来就是字节，换算是 ×1，改动只在名字上。
 		capacity: d("capacity",
 			"Datastore capacity in bytes."+
@@ -371,6 +449,51 @@ func buildDatastoreDescs(namespace string) datastoreDescs {
 		accessible: d("accessible",
 			"Whether the datastore is accessible.",
 			"dsmo", "ds", "vcenter"),
+	}
+}
+
+// buildClusterDescs 构造 cluster collector 在真实集群上产出指标的 Desc 集合。
+//
+// 单位约定与 resourcepool 一致：CPU 一律 hertz（summary 给的是 MHz，×1e6），
+// 内存一律字节。注意 ComputeResourceSummary 的两个内存字段单位不同：
+// TotalMemory 本来就是字节；EffectiveMemory 是 MB，必须 ×1048576（2^20）。
+func buildClusterDescs(namespace string) clusterDescs {
+	d := func(name, help string, labels ...string) *prometheus.Desc {
+		return prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, clusterSubsystem, name),
+			help, labels, nil,
+		)
+	}
+
+	return clusterDescs{
+		overallStatus: d("overall_status",
+			"Cluster overall status as reported by vSphere. "+
+				"The status label carries the colour: gray, green, yellow or red.",
+			"cmo", "vmwcluster", "status", "vcenter"),
+
+		// 名字刻意不带 _count：promlint 禁止非 histogram/summary 指标使用
+		// 该后缀（与直方图的 _count 混淆）。指标名本身已表达"数量"。
+		effectiveHosts: d("effective_hosts",
+			"Number of hosts in the cluster that are connected, powered on and not in maintenance mode.",
+			"cmo", "vmwcluster", "vcenter"),
+
+		cpuCapacityHertz: d("cpu_capacity_hertz",
+			"Aggregated CPU resources of all hosts in the cluster, in hertz (summary.totalCpu).",
+			"cmo", "vmwcluster", "vcenter"),
+
+		cpuEffectiveHertz: d("cpu_effective_hertz",
+			"Aggregated CPU resources available to run virtual machines, in hertz (summary.effectiveCpu). "+
+				"Hosts in maintenance mode or unresponsive are not counted.",
+			"cmo", "vmwcluster", "vcenter"),
+
+		memoryCapacityBytes: d("memory_capacity_bytes",
+			"Aggregated memory resources of all hosts in the cluster, in bytes (summary.totalMemory).",
+			"cmo", "vmwcluster", "vcenter"),
+
+		memoryEffectiveBytes: d("memory_effective_bytes",
+			"Aggregated memory resources available to run virtual machines, in bytes (summary.effectiveMemory times 1048576). "+
+				"Hosts in maintenance mode or unresponsive are not counted.",
+			"cmo", "vmwcluster", "vcenter"),
 	}
 }
 

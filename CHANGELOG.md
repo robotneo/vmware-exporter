@@ -9,6 +9,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Added
 
+- **Lifecycle visibility for powered-off VMs and maintenance hosts
+  (Batch 0 of the P1/P2/P3 roadmap, the v0.2.0 breaking change).** The
+  exporter used to drop a VM the moment it was powered off and a host the
+  moment it disconnected or entered maintenance mode — `_info` and capacity
+  metrics vanished along with the performance counters, so Prometheus could
+  not tell "the object was deleted" from "the object exists but is down", and
+  every capacity dashboard silently lost its denominator during a maintenance
+  window. The inventory surface (`_info`, capacity, status) is now emitted for
+  **all** entities; only the perf data plane skips entities vCenter holds no
+  real-time samples for.
+
+  New metrics, all gauges:
+
+  | Metric | Labels | Purpose |
+  | --- | --- | --- |
+  | `vmware_vm_power_state` | `vmmo`, `vm`, `state`, `vcenter` | State label (`poweredOn`/`poweredOff`/`suspended`/`unknown`), value 1 |
+  | `vmware_host_power_state` | `hostmo`, `host`, `state`, `vcenter` | `poweredOn`/`poweredOff`/`standBy`/`unknown`, value 1 |
+  | `vmware_host_connection_state` | `hostmo`, `host`, `state`, `vcenter` | `connected`/`disconnected`/`notResponding`, value 1 |
+  | `vmware_host_maintenance_mode` | `hostmo`, `host`, `vcenter` | Plain 0/1 boolean |
+  | `vmware_vm_overall_status` | `vmmo`, `vm`, `status`, `vcenter` | `green`/`yellow`/`red`/`gray`, value 1 |
+  | `vmware_host_overall_status` | `hostmo`, `host`, `status`, `vcenter` | same four colours |
+  | `vmware_datastore_overall_status` | `dsmo`, `ds`, `status`, `vcenter` | same four colours |
+  | `vmware_cluster_overall_status` | `cmo`, `vmwcluster`, `status`, `vcenter` | same four colours |
+  | `vmware_cluster_effective_hosts` | `cmo`, `vmwcluster`, `vcenter` | Connected, powered-on, non-maintenance hosts |
+  | `vmware_cluster_cpu_capacity_hertz` | `cmo`, `vmwcluster`, `vcenter` | `summary.totalCpu` MHz × 1e6 |
+  | `vmware_cluster_cpu_effective_hertz` | `cmo`, `vmwcluster`, `vcenter` | `summary.effectiveCpu` MHz × 1e6, after HA reservations |
+  | `vmware_cluster_memory_capacity_bytes` | `cmo`, `vmwcluster`, `vcenter` | `summary.totalMemory`, already bytes |
+  | `vmware_cluster_memory_effective_bytes` | `cmo`, `vmwcluster`, `vcenter` | `summary.effectiveMemory` (MB) × 1048576 |
+  | `vmware_scrape_entities_found` | `vcenter`, `collector`, `kind` | Entities discovered in the last scrape |
+  | `vmware_scrape_entities_emitted` | `vcenter`, `collector`, `kind` | Entities that got data-plane metrics |
+  | `vmware_scrape_entities_skipped` | `vcenter`, `collector`, `kind`, `reason` | Per-reason skip count for the last scrape |
+
+  Notes that matter operationally:
+
+  - The state/overall-status shape mirrors the existing
+    `vmware_resourcepool_overall_status`: status in a label, constant value 1,
+    one series per state — no scatter of one boolean metric per possible state.
+    `gray` (unknown) is always emitted verbatim; it frequently precedes a real
+    failure and must not be folded into `yellow`.
+  - The three `vmware_scrape_entities_*` metrics are **per-scrape snapshot
+    gauges**, not counters — they deliberately have no `_total` suffix
+    (promlint forbids it on non-counters), so alert on the raw value or on
+    `found - emitted`, never on `rate()`. Every reason a collector can produce
+    is pre-filled with `0`, keeping the series set stable so alerts need no
+    `absent()`/`or`; one entity can match several reasons (maintenance *and*
+    disconnected), so cross-reason sums can exceed the skipped count.
+  - `vmware_cluster_effective_hosts` lost the draft's `_count` suffix for the
+    same promlint rule (`_count` is reserved for histograms/summaries).
+  - The new `uuid` label on `vmware_vm_info` comes from
+    `summary.config.uuid` and on `vmware_host_info` from
+    `hardware.systemInfo.uuid` — both already in the fetched property sets, so
+    the change adds **zero** API round trips. It is an extra label only;
+    `moid` + `vcenter` remain the join key. Datastore gets no separate uuid
+    label: pulling the large `info` property for one label is not worth it, and
+    the VMFS volume UUID already rides on the existing `pfinstance` label.
+  - Disconnected hosts legitimately have no hardware/product summary; their
+    hardware/software/capacity metrics are skipped while `_info` and the state
+    metrics still report them.
+  - **The bundled overview dashboards were migrated**, not left to drift.
+    vcenter-view and cluster-view previously relied on the exporter silently
+    filtering ineligible entities: "Running VMs" would now count powered-off
+    VMs, and every host utilisation/overcommit denominator would stay large
+    through a maintenance window (perf numerators still skip the host). Every
+    estate/cluster aggregate now intersects the static series with an explicit
+    eligible set (`power_state{poweredOn}` + `connection_state{connected}` +
+    `maintenance_mode == 0` for hosts, `power_state{poweredOn}` for VMs), so
+    the panels keep their pre-v0.2.0 numbers. Single-entity drill-downs
+    (vm-view, host-view, the per-host cluster block) intentionally keep
+    showing configured capacity while a host/VM is off — visibility is the
+    point there — except "Running VMs", which is powered-on filtered
+    everywhere. The transform lives in `scripts/lifecycle_dashboards.py` with
+    a `--check` audit wired into `check_config.py`; a new overview panel of
+    the old unfiltered shape fails the check. All 161 dashboard expressions
+    parse under the upstream PromQL parser (Grafana `$variables` substituted).
+
+  - See the migration guide under **Breaking changes** below; the new metric
+    contract is registered in `docs/METRICS.md` / `docs/METRICS-zh.md` and the
+    round-trip `check_config.py` guard is green.
+
 - **Chunked performance queries for large vCenter estates
   (`-vmware.perf.chunk-size`, default 64).** Host, VM and datastore performance
   collection used to put every entity into a single `QueryPerf` SOAP request.
@@ -343,6 +422,91 @@ Two things were added to keep this from happening again:
 
 These require action before upgrading. Nothing else in this release changes the
 wire format of an existing metric.
+
+#### Powered-off VMs and maintenance hosts now appear in inventory metrics (v0.2.0)
+
+Before v0.2.0, `vmware_vm_info` and `vmware_host_info` — together with their
+capacity series — were emitted **only** for powered-on VMs and
+connected/non-maintenance hosts. The same entities now always appear, with the
+new state gauges carrying the reason. If a query, recording rule or dashboard
+implicitly assumed "every series in `vmware_vm_info` is a running VM", its
+counts and denominators change the moment a VM is shut down.
+
+Find affected queries with a quick grep for the inventory metric names:
+
+```sh
+grep -rE 'vmware_(vm|host)_(info|cpu_corecount|mem_capacity)' \
+  /etc/prometheus /var/lib/grafana/dashboards 2>/dev/null
+```
+
+The migration is a single `group_left` join onto the new state gauge, which you
+can stage as a recording rule and migrate panels one at a time.
+
+Powered-on VMs only (old `vmware_vm_info` semantics):
+
+```promql
+vmware_vm_info
+  * on(vcenter, vmmo) group_left(state)
+  vmware_vm_power_state{state="poweredOn"}
+```
+
+Connected, powered-on, non-maintenance hosts only (old `vmware_host_info`
+semantics):
+
+```promql
+vmware_host_info
+  and on(vcenter, hostmo) vmware_host_power_state{state="poweredOn"}
+  and on(vcenter, hostmo) vmware_host_connection_state{state="connected"}
+  and on(vcenter, hostmo) vmware_host_maintenance_mode == 0
+```
+
+(The state gauges carry their value in a `state` label rather than as distinct
+metric names, so the filter is an `and` on the label, not a multiplication;
+join with `* ... group_left(state)` instead when you want the state label on
+the result, as the VM example does.)
+
+Capacity totals need the same treatment. Old:
+
+```promql
+sum(vmware_vm_mem_capacity_bytes)                      # configured VM RAM
+sum(vmware_host_mem_capacity_bytes)                    # host physical RAM
+```
+
+New — keep the denominator stable by counting only what used to be visible:
+
+```promql
+sum(
+  vmware_vm_mem_capacity_bytes
+    * on(vcenter, vmmo) group_left(state)
+    vmware_vm_power_state{state="poweredOn"}
+)
+
+sum(
+  vmware_host_mem_capacity_bytes
+    and on(vcenter, hostmo) vmware_host_power_state{state="poweredOn"}
+    and on(vcenter, hostmo) vmware_host_connection_state{state="connected"}
+    and on(vcenter, hostmo) vmware_host_maintenance_mode == 0
+)
+```
+
+Alternatively — and this is the better end state — keep the new all-entity
+denominator and alert on the gap instead of hiding it:
+
+```promql
+# configured VM RAM sitting on powered-off VMs
+sum(vmware_vm_mem_capacity_bytes)
+  - sum(
+      vmware_vm_mem_capacity_bytes
+        * on(vcenter, vmmo) group_left(state)
+        vmware_vm_power_state{state="poweredOn"}
+    )
+```
+
+`vmware_scrape_entities_skipped` (reasons `powered_off`, `suspended`,
+`disconnected`, `not_responding`, `maintenance`) gives the same visibility at
+the collector level; alert on the raw gauge, since it is a per-scrape snapshot
+rather than a counter. No series were renamed or removed in this change, and no
+flag gates the new behaviour — the state gauges are the migration path.
 
 #### Metrics renamed
 

@@ -42,6 +42,14 @@
 → Batch 2（P2 快照）**，每批独立 dev 分支、`--no-ff` 合并。其余 P2/P3 维持
 "需要时再立项"，不排期。
 
+> **实现状态（2026-09-10 更新）：Batch 0 已全部落地**于分支
+> `dev/v0.2.0-lifecycle`（生命周期 gauges、停止过滤、overallStatus 全覆盖、
+> 集群容量、UUID label、实体跳过自监控），含 26+ 测试、`docs/METRICS(.zh)`
+> 登记、CHANGELOG 迁移指南、bundled overview dashboard 同步迁移
+> （`scripts/lifecycle_dashboards.py` + check_config 护栏）。三处与本草案不同
+> 的落地决策（实体计数 gauge 去掉 `_total`、`effective_hosts` 去掉 `_count`、
+> datastore 不另加 uuid label）见 2.3、2.4、3.4 内的「实现偏差」注记。
+
 ---
 
 ## 1. 前置：缺口文档 P0 四项的现状（v0.1.20 实测）
@@ -83,7 +91,7 @@ vmware_host_maintenance_mode{vcenter, host, hostmo} 0|1
 
 - `_info` 与配置/容量类指标对**所有**实体无条件输出（维护中、关机都输出）。
 - 只有 **perf 性能计数器**跳过关机/断连实体 —— 那是 vCenter 侧确实无实时数据，
-  不是 exporter 的选择；跳过处加 debug 日志并计入 `entities_skipped_total`（见 3.4）。
+  不是 exporter 的选择；跳过处加 debug 日志并计入 `entities_skipped`（见 3.4）。
 - esxcli 两个 collector 的同条件过滤保留（主机不可达时 esxcli 本来就调不通），
   但跳过同样要计数。
 
@@ -128,12 +136,17 @@ cluster 已检索 `summary`。其中 `ComputeResourceSummary` 含 `numEffectiveH
 建议指标：
 
 ```
-vmware_cluster_effective_host_count    gauge
+vmware_cluster_effective_hosts         gauge   # numEffectiveHosts
 vmware_cluster_cpu_capacity_hz         gauge   # totalCpu * 1e6，总量
 vmware_cluster_cpu_effective_hz        gauge   # effectiveCpu * 1e6，可调度量
-vmware_cluster_memory_capacity_bytes   gauge   # totalMemory * MiB
-vmware_cluster_memory_effective_bytes  gauge   # effectiveMemory * MiB
+vmware_cluster_memory_capacity_bytes   gauge   # totalMemory，本身即字节
+vmware_cluster_memory_effective_bytes  gauge   # effectiveMemory(MB) * 1048576
 ```
+
+> **实现偏差（2026-09-10 回写）**：最初草案名为 `effective_host_count`，
+> promlint 禁止非 histogram 指标使用 `_count` 后缀，落地时改为
+> `effective_hosts`。另外 `ComputeResourceSummary.TotalMemory` 单位本身就是
+> 字节（无需换算），只有 `EffectiveMemory` 是 MB。
 
 **单位口径**刻意对齐 resourcepool 已用的 `_hz` / `_bytes` 后缀
 （`resourcepool.go:182,190`），不造裸 MHz/MB 指标，避免重蹈
@@ -141,11 +154,17 @@ OPTIMIZATION-PLAN P2-1/P2-2 那种"help 写 MB、值是字节"的旧账。
 
 ### 2.4 稳定 UUID（只加 label，不换主键）
 
-- VM：属性加 `config.uuid`、`config.instanceUuid`；Host：已取 `hardware`，输出
-  `hardware.systemInfo.uuid`；Datastore：VMFS 用 `info.vmfs.uuid`，其他类型回退
-  `summary.url`。
-- 作为**额外 label** `uuid` 出现在对应 `_info` 指标上；取不到（权限受限/旧版本/
-  非 VMFS）时为空串，不报错、不阻断采集。
+- VM：输出 `summary.config.uuid`（`VirtualMachineConfigSummary` 自带，无需为
+  `config.uuid` 增加额外往返）；Host：已取 `hardware`，输出
+  `hardware.systemInfo.uuid`。
+- 作为**额外 label** `uuid` 出现在 vm/host 的 `_info` 指标上；取不到（权限受限/
+  旧版本/不可访问实体）时为空串，不报错、不阻断采集。
+- **Datastore 偏差（2026-09-10 回写）**：草案原计划取 `info.vmfs.uuid`，但
+  `info` 是一个体积很大的属性，仅为一个 label 把它拉进每轮 inventory 不划算；
+  且 VMFS 卷 UUID 已经由现有 `datastore_info` 的 `pfinstance` label 承载
+  （值取自去除 `/vmfs/volumes/` 前缀的路径，VMFS 下该路径末段就是卷 UUID）。
+  因此 Batch 0 不给 datastore 另加 `uuid` label；NFS/vSAN 等类型本就没有
+  VMFS UUID。若未来需要跨重挂载稳定标识，再单独立项评估。
 - **本批不改任何 join 键**：`moid` + `vcenter` 仍是事实主键。缺口文档 Q1/Q5
   （跨 vCenter 去重、Linked Mode 双份合并）是消费侧建模决策，等出现真实的跨
   vCenter vMotion / Linked Mode 场景再立项；现在换主键只会徒增基数和迁移成本。
@@ -246,16 +265,27 @@ Batch 0 让"被跳过的实体"从"消失"变为"显式状态"，但还需要让
 观测，否则告警配置无的放矢：
 
 ```
-vmware_scrape_entities_total{vcenter, collector, kind}        gauge   # 本轮发现的实体数
-vmware_scrape_entities_emitted_total{vcenter, collector, kind} gauge   # 实际输出的实体数
-vmware_scrape_entities_skipped_total{vcenter, collector, reason="poweredOff|disconnected|maintenance|unsupported|error"} gauge
+vmware_scrape_entities_found{vcenter, collector, kind}    gauge   # 本轮发现的实体数
+vmware_scrape_entities_emitted{vcenter, collector, kind}  gauge   # 实际输出的实体数
+vmware_scrape_entities_skipped{vcenter, collector, kind, reason="powered_off|suspended|disconnected|not_responding|maintenance|unsupported|error"} gauge
 ```
+
+> **实现偏差（2026-09-10 回写）**：草案原名带 `_total` 后缀
+> （`entities_total` / `emitted_total` / `skipped_total`）。这些是**每轮抓取的
+> 瞬时快照 gauge**而非单调递增 counter，promlint 禁止非 counter 使用 `_total`，
+> 落地时去掉后缀；`found` 比 `total` 更准确表达"本轮发现"。reason 枚举采用蛇形
+> 小写（`powered_off`、`not_responding`）。
 
 - 与已有的 `vmware_scrape_duration_seconds`、`vmware_scrape_errors_total{collector}`
   同属 scrape 自监控族，在统一调度层（`internal/collector`）聚合，不让每个
   collector 各造一份计数。
 - 这些序列按 collector/kind/reason 分维，**基数与实体数无关**，是安全的。
-- 可直接支撑告警：`rate(vmware_scrape_entities_skipped_total{reason="error"}[10m]) > 0`。
+- 每个 collector 会预填自己关心的全部 reason（含 0 值），正常状态下序列集合也
+  稳定，告警表达式不需要 `absent()`/`or` 兜底。同一实体可能同时命中多个原因
+  （如维护中且断连），因此跨 reason 求和可能大于实际跳过数。
+- 因为是快照 gauge 而非 counter，"跳过数上升"类告警用
+  `vmware_scrape_entities_skipped > 0`（或 `changes()`/`increase` 语义不可用，
+  需比较 found/emitted 差值），不要写 `rate(..._skipped[10m])`。
 
 ---
 

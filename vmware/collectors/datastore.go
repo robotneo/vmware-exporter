@@ -45,9 +45,12 @@ func (c *datastoreCollector) Update(ctx context.Context, ch chan<- prometheus.Me
 	// 最多滞后一个 TTL，但 datastore 不可达时同一轮的 perf 查询仍会实时失败并
 	// 留日志，不会被缓存静默吞掉。perf 计数器（disk.used/provisioned）不经过
 	// 这里，始终实时查询。
+	//
+	// overallStatus 是 mo.ManagedEntity 基础属性（DatastoreSummary 上没有它），
+	// 单独加进属性列表，不增加任何往返。
 	datastores, err := fetchInventoryCached[mo.Datastore](
 		ctx, s,
-		[]string{"Datastore"}, []string{"summary", "host", "vm", "parent"}, c.logger,
+		[]string{"Datastore"}, []string{"summary", "host", "vm", "parent", "overallStatus"}, c.logger,
 	)
 	if err != nil {
 		return err
@@ -89,6 +92,12 @@ func (c *datastoreCollector) Update(ctx context.Context, ch chan<- prometheus.Me
 			prometheus.GaugeValue, boolToFloat64(datastore.Summary.Accessible),
 			dsmo, dsName, s.Target)
 
+		// overallStatus 取自 mo.ManagedEntity 基础属性。gray（未知）原样
+		// 输出 —— 它常先于真实故障出现（尤其 APD/PDL 场景），不能归并进 yellow。
+		ch <- prometheus.MustNewConstMetric(descs.overallStatus,
+			prometheus.GaugeValue, 1.0,
+			dsmo, dsName, string(datastore.OverallStatus), s.Target)
+
 		if !legacy {
 			continue
 		}
@@ -127,6 +136,10 @@ func (c *datastoreCollector) Update(ctx context.Context, ch chan<- prometheus.Me
 	scrapePerformance(ctx, ch, c.logger, s.Samples, interval, s.Perf,
 		s.Target, "Datastore", s.Namespace, datastoreSubsystem, "", datastoreCounters,
 		s.Counters, datastoreRefs, datastoreNames, s.PerfChunkSize, s.HostConcurrency())
+
+	// datastore 数据面不按状态过滤：disk.used/provisioned 是历史汇总查询，
+	// 不可达存储也会被 vCenter 返回（值可能为 0）。found 与 emitted 相同。
+	s.RecordEntities(datastoreSubsystem, "datastore", len(datastores), len(datastores), nil)
 
 	return nil
 }

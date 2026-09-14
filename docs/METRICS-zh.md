@@ -42,6 +42,9 @@ flag，都必须在同一次改动里同步更新本文档。`scripts/check_conf
 | `vmware_scrape_collector_duration_seconds` | `collector` | 单个采集器的耗时。用于定位哪个采集器拖慢了抓取。 |
 | `vmware_scrape_collector_success` | `collector` | `1` 表示该采集器完成，`0` 表示出错。单个采集器失败不会导致整轮抓取失败。 |
 | `vmware_scrape_errors_total` | `collector` | **Counter。** 每个采集器累积的抓取错误数。`login` 值覆盖认证失败。请对 `rate()` 设告警，不要直接看原始值。 |
+| `vmware_scrape_entities_found` | `collector`, `kind`, `vcenter` | **Gauge，每轮抓取的快照。** 上一轮在清单中发现的实体数，按采集器和实体类型分维（例如 `collector="vm", kind="vm"`）。统计**所有**实体，包括关机 VM 和断连/维护中的主机（见下文破坏性变更说明）。 |
+| `vmware_scrape_entities_emitted` | `collector`, `kind`, `vcenter` | **Gauge，每轮抓取的快照。** 实际输出了数据面指标（性能计数器、esxcli）的实体数。静态清单指标（`_info`、容量、状态）对每个实体都输出；只有 perf 数据面会跳过 vCenter 没有实时采样的实体。 |
+| `vmware_scrape_entities_skipped` | `collector`, `kind`, `reason`, `vcenter` | **Gauge，每轮抓取的快照。** 上一轮被数据面指标跳过的实体数，按原因分维：`powered_off`、`suspended`、`disconnected`、`not_responding`、`maintenance`、`unsupported`、`error`。每个采集器关心的全部原因都会预填 `0` 值，序列集合稳定，告警不需要 `absent()`/`or` 兜底。同一实体可能同时命中多个原因（如既在维护中又断连），因此跨原因求和可能大于实际跳过数。请对原始 gauge（`> 0`）或 `found - emitted` 差值设告警，**不要**用 `rate()`——它不是 counter。 |
 | `vmware_exporter_build_info` | `version`, `revision`, `branch`, `goversion`, `goos`, `goarch`, `tags` | 恒为 `1`。回答「当前宿主机跑的是哪个构建？」 |
 | `vmware_exporter_config_last_reload_successful` | — | `1` 表示上次 `systemctl reload` 成功，`0` 表示失败。**值得专门设告警：** `systemctl reload` 只要信号送达就返回 0，配置文件被拒绝时不会报错。失败的重载会保留旧配置。 |
 | `vmware_exporter_config_last_reload_success_timestamp_seconds` | — | 最后一次**成功**重载的 Unix 时间戳；如果从未重载过，则为进程启动时间。 |
@@ -60,6 +63,9 @@ vmware_exporter_config_last_reload_successful == 0
 
 # 某个采集器持续失败，但整轮抓取仍然 "成功"
 rate(vmware_scrape_errors_total[15m]) > 0
+
+# 本轮有实体被数据面跳过（快照 gauge，不是 counter —— 不要套 rate()）
+vmware_scrape_entities_skipped > 0
 ```
 
 ## 拓扑与清单
@@ -76,6 +82,12 @@ rate(vmware_scrape_errors_total[15m]) > 0
 | `vmware_datacenter_info` | `dcmo`, `dc`, `vcenter`, (`synthetic`) | 每个数据中心一条序列。ESXi 上唯一的数据中心是隐式的 `ha-datacenter` 伪对象，标记为 `synthetic="true"`——用 `{synthetic!="true"}` 过滤掉。 |
 | `vmware_folder_info` | `foldermo`, `dc`, `dcmo`, `vcenter` | 每个 `host` 或 `datastore` 文件夹一条序列，用于遍历清单树。注意这里的 `dc` 是**文件夹**名，不是数据中心名。 |
 | `vmware_cluster_info` | `cmo`, `vmwcluster`, `foldermo`, `vcenter` | 每个集群一条序列。集群名的标签是 `vmwcluster`，不是 `cluster`——`cluster` 在许多 Prometheus 设置中是保留标签。 |
+| `vmware_cluster_overall_status` | `cmo`, `vmwcluster`, `status`, `vcenter` | vCenter 计算的集群整体状态。`status` 为 `gray`、`green`、`yellow` 或 `red`；`gray`（未知）原样输出，不能归并进 yellow。 |
+| `vmware_cluster_effective_hosts` | `cmo`, `vmwcluster`, `vcenter` | 集群中已连接、已开机且不在维护模式的主机数（`summary.numEffectiveHosts`），是「仍可调度容量」的分母。 |
+| `vmware_cluster_cpu_capacity_hertz` | `cmo`, `vmwcluster`, `vcenter` | 全部主机的聚合 CPU 资源（赫兹，`summary.totalCpu` MHz × 1e6）。 |
+| `vmware_cluster_cpu_effective_hertz` | `cmo`, `vmwcluster`, `vcenter` | 扣除 HA 准入控制/故障切换预留后可用于运行 VM 的 CPU（赫兹，`summary.effectiveCpu` MHz × 1e6），不含维护中/无响应主机。 |
+| `vmware_cluster_memory_capacity_bytes` | `cmo`, `vmwcluster`, `vcenter` | 全部主机的聚合内存（字节，`summary.totalMemory` 本身即为字节）。 |
+| `vmware_cluster_memory_effective_bytes` | `cmo`, `vmwcluster`, `vcenter` | 扣除 HA 预留后可用于运行 VM 的内存（字节，`summary.effectiveMemory` 单位为 MB，已 ×1048576）。 |
 | `vmware_cluster_datastore` | `cmo`, `vmwcluster`, `dsmo`, `vcenter` | 集群可达的数据存储，**每个数据存储一条序列**。 |
 | `vmware_compute_info` | `cmo`, `host`, `foldermo`, `vcenter`, (`synthetic`) | 独立计算资源——不在任何集群中的主机。仅在不存在集群时发出。在 ESXi 上这是 `ha-compute-res` 伪对象；在 vCenter 下独立主机有真实的自动生成的 ComputeResource，**不**标记为 synthetic。 |
 | `vmware_compute_datastore` | `cmo`, `host`, `dsmo`, `vcenter`, (`synthetic`) | 独立计算资源可达的数据存储，每个数据存储一条序列。 |
@@ -84,9 +96,21 @@ rate(vmware_scrape_errors_total[15m]) > 0
 
 采集器：`host`（默认启用）。
 
+> **v0.2.0 破坏性变更：** `_info`、硬件/软件和容量指标现在对**每一台**主机输出，
+> 包括关机、断连（disconnected）、无响应（notResponding）和维护模式中的主机。
+> 此前这些主机会从清单指标中彻底消失，Prometheus 无法区分「主机被删除」和「主机
+> 进了维护」。仅当 vCenter 完全不返回硬件/产品摘要时（断连主机）才跳过硬件/软件
+> 指标。只有性能计数器和 esxcli 采集器会跳过不符合条件的主机，跳过数计入
+> `vmware_scrape_entities_skipped`。需要旧的「仅健康主机」语义时，用下面的状态
+> 指标过滤。
+
 | 指标 | 标签 | 含义 |
 |------|------|------|
-| `vmware_host_info` | `hostmo`, `host`, `cmo`, `vcenter` | 每个 ESXi 主机一条序列，带有其父集群或计算资源。 |
+| `vmware_host_info` | `hostmo`, `host`, `cmo`, `uuid`, `vcenter` | 每个 ESXi 主机一条序列，带有其父集群或计算资源。`uuid` 是 SMBIOS UUID（`hardware.systemInfo.uuid`），目标不返回时为空；它只是额外标签——join 键仍是 `hostmo` + `vcenter`。运行时父引用缺失的孤立主机 `cmo` 为空串。 |
+| `vmware_host_power_state` | `hostmo`, `host`, `state`, `vcenter` | 电源状态进标签，值恒为 `1`：`poweredOn`、`poweredOff`、`standBy` 或 `unknown`（vCenter 未返回状态时）。主机当前所处状态对应一条序列。 |
+| `vmware_host_connection_state` | `hostmo`, `host`, `state`, `vcenter` | 连接状态进标签，值恒为 `1`：`connected`、`disconnected` 或 `notResponding`。 |
+| `vmware_host_maintenance_mode` | `hostmo`, `host`, `vcenter` | 维护模式中为 `1`，否则为 `0`。用纯布尔量而非状态标签，因为维护模式没有其他取值。 |
+| `vmware_host_overall_status` | `hostmo`, `host`, `status`, `vcenter` | vCenter 计算的主机整体状态。`status` 为 `gray`、`green`、`yellow` 或 `red`；`gray` 表示「未知/不可达」，原样输出。 |
 | `vmware_host_hardware_info` | `hostmo`, `host`, `vendor`, `model`, `cpu_type`, `vcenter` | 硬件型号和 CPU 类型。 |
 | `vmware_host_software_info` | `hostmo`, `host`, `software`, `version`, `build`, `vcenter` | ESXi 版本和构建号——规划补丁时按此分组。 |
 | `vmware_host_cpu_corecount` | `hostmo`, `host`, `vcenter` | 物理 CPU 核心数。 |
@@ -101,9 +125,23 @@ rate(vmware_scrape_errors_total[15m]) > 0
 采集器：`vm`（默认启用）。这通常是指标最多的采集器：一台主机只有几条序列，一台
 VM 有数条序列加上它的性能计数器。
 
+> **v0.2.0 破坏性变更：** `_info` 与容量/快照指标现在对**每一台** VM 输出，包括
+> 关机和挂起的 VM。此前只有开机 VM 出现，关机窗口里容量看板会悄悄丢失分母。只有
+> 性能计数器跳过非开机 VM（vCenter 对它们没有实时采样），跳过数计入
+> `vmware_scrape_entities_skipped`（原因 `powered_off`/`suspended`）。需要旧语义
+> 时 join 电源状态指标：
+>
+> ```promql
+> vmware_vm_info
+>   * on(vcenter, vmmo) group_left(state)
+>   vmware_vm_power_state{state="poweredOn"}
+> ```
+
 | 指标 | 标签 | 含义 |
 |------|------|------|
-| `vmware_vm_info` | `vmmo`, `vm`, `hostmo`, `vcenter` | 每个 VM 一条序列，带它所在的主机。通过 `hostmo` 可 join 到 `vmware_host_info`。 |
+| `vmware_vm_info` | `vmmo`, `vm`, `hostmo`, `uuid`, `vcenter` | 每个 VM 一条序列，带它所在的主机。通过 `hostmo` 可 join 到 `vmware_host_info`（运行时主机引用消失的孤立 VM 该标签为空串）。`uuid` 取自 `summary.config.uuid`，不可访问的 VM 为空；它只是额外标签——join 键仍是 `vmmo` + `vcenter`。 |
+| `vmware_vm_power_state` | `vmmo`, `vm`, `state`, `vcenter` | 电源状态进标签，值恒为 `1`：`poweredOn`、`poweredOff`、`suspended` 或 `unknown`（vCenter 未返回状态时）。这是区分「VM 不存在」与「VM 存在但关机」的指标。 |
+| `vmware_vm_overall_status` | `vmmo`, `vm`, `status`, `vcenter` | vCenter 计算的 VM 整体状态。`status` 为 `gray`、`green`、`yellow` 或 `red`；`gray` 原样输出。 |
 | `vmware_vm_cpu_corecount` | `vmmo`, `vm`, `hostmo`, `vcenter` | 配置的 vCPU 数。 |
 | `vmware_vm_mem_capacity_bytes` | `vmmo`, `vm`, `hostmo`, `vcenter` | 配置的内存（字节）。 |
 | `vmware_vm_datastore_capacity_used_bytes` | `vmmo`, `vm`, `vcenter`, `dsmo` | 该 VM 在给定数据存储上占用的存储——磁盘、日志、快照和配置文件。每个 VM/数据存储对一条序列，所以一个 VM 在三个数据存储上有磁盘就会产生三条。 |
@@ -125,7 +163,8 @@ VM 有数条序列加上它的性能计数器。
 | `vmware_datastore_accessible` | `dsmo`, `ds`, `vcenter` | `1` 表示数据存储可达，`0` 表示不可达。 |
 | `vmware_datastore_capacity_bytes` | `dsmo`, `ds`, `vcenter` | 数据存储总容量（字节）。 |
 | `vmware_datastore_free_bytes` | `dsmo`, `ds`, `vcenter` | 可用空间（字节）。 |
-| `vmware_datastore_info` | `dsmo`, `ds`, `type`, `pfinstance`, `foldermo`, `vcenter` | 数据存储元数据：`type`（VMFS、NFS、vSAN 等）。`pfinstance` 是数据存储 URL 去掉 `ds://`、`/vmfs/volumes/` 等前缀后的结果——性能计数器用它作为实例名来做 join。 |
+| `vmware_datastore_info` | `dsmo`, `ds`, `type`, `pfinstance`, `foldermo`, `vcenter` | 数据存储元数据：`type`（VMFS、NFS、vSAN 等）。`pfinstance` 是数据存储 URL 去掉 `ds://`、`/vmfs/volumes/` 等前缀后的结果——性能计数器用它作为实例名来做 join。VMFS 数据存储上剩下的路径段就是 VMFS 卷 UUID，因此不再单设 `uuid` 标签；NFS/vSAN 没有 VMFS UUID。 |
+| `vmware_datastore_overall_status` | `dsmo`, `ds`, `status`, `vcenter` | vCenter 计算的数据存储整体状态。`status` 为 `gray`、`green`、`yellow` 或 `red`；`gray`（常是 APD/PDL 的最早信号）原样输出。 |
 
 性能计数器（`disk.provisioned.latest`、`disk.used.latest`）：
 

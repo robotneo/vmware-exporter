@@ -10,6 +10,7 @@ import (
 
 	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/types"
 )
 
@@ -49,6 +50,12 @@ func (c *hostCollector) Update(ctx context.Context, ch chan<- prometheus.Metric,
 	var (
 		hostRefs  []types.ManagedObjectReference
 		hostNames = make(map[string]string)
+
+		totalHosts int
+		// 跳过原因 map 预填全部数据面关心的原因（含 0），让正常态也有
+		// 稳定的 0 值序列。原因清单收敛在 hostSkipReasons，host 与两个
+		// esxcli collector 共用同一套。
+		skipReasons = hostSkipReasons(mo.HostSystem{})
 	)
 
 	begin := time.Now()
@@ -70,23 +77,71 @@ func (c *hostCollector) Update(ctx context.Context, ch chan<- prometheus.Metric,
 	legacy := emitLegacyNames()
 
 	for _, host := range hosts {
+		totalHosts++
 
-		if host.Runtime.PowerState == "poweredOn" && host.Runtime.ConnectionState == "connected" && !host.Runtime.InMaintenanceMode {
+		moid := host.Self.Value
+		name := host.Summary.Config.Name
 
-			hostRefs = append(hostRefs, host.Self)
+		// 生命周期状态对每台主机无条件输出（关机/断连/维护都输出）。
+		// 这让 Prometheus 能区分"主机不存在"与"主机存在但不可用"，
+		// 维护窗口里容量看板的分母也不会再悄悄变小。
+		powerState := string(host.Runtime.PowerState)
+		if powerState == "" {
+			powerState = "unknown"
+		}
+		connectionState := string(host.Runtime.ConnectionState)
+		if connectionState == "" {
+			connectionState = "unknown"
+		}
 
-			hostNames[host.Self.Value] = host.Summary.Config.Name
+		ch <- prometheus.MustNewConstMetric(descs.powerState,
+			prometheus.GaugeValue, 1.0,
+			moid, name, powerState, target)
 
-			c.logger.Debug("gathering metrics for host", "host", host.Summary.Config.Name, "host_moref", host.Self.Value)
+		ch <- prometheus.MustNewConstMetric(descs.connectionState,
+			prometheus.GaugeValue, 1.0,
+			moid, name, connectionState, target)
 
-			moid := host.Self.Value
-			name := host.Summary.Config.Name
+		ch <- prometheus.MustNewConstMetric(descs.maintenanceMode,
+			prometheus.GaugeValue, boolToFloat64(host.Runtime.InMaintenanceMode),
+			moid, name, target)
+
+		ch <- prometheus.MustNewConstMetric(descs.overallStatus,
+			prometheus.GaugeValue, 1.0,
+			moid, name, string(host.Summary.OverallStatus), target)
+
+		// _info 对所有主机无条件输出。parent 在主机被移除/断连时可能为空
+		// 引用，cmo 退化为空串而不是 "<nil>"。
+		parentMoid := ""
+		if host.Parent != nil {
+			parentMoid = host.Parent.Value
+		}
+
+		// uuid 取自 hardware.systemInfo.uuid（hardware 已在共享检索的
+		// 属性并集中，零新增往返）。hardware 是指针，主机断连时可能为
+		// nil —— 降级为空串，不阻断其余指标。
+		uuid := ""
+		if host.Hardware != nil {
+			uuid = host.Hardware.SystemInfo.Uuid
+		}
+
+		ch <- prometheus.MustNewConstMetric(descs.info,
+			prometheus.GaugeValue, 1.0,
+			moid, name, parentMoid, uuid, target)
+
+		// 硬件/软件/容量类指标依赖摘要内容。断连主机的摘要可能整体缺失
+		// （Summary.Hardware 为零值、Config.Product 为空），此时输出一堆
+		// 全 0/空 label 序列没有信息量，还会把容量汇总算大 —— 跳过这些
+		// 派生指标，但上面的 info/状态序列照发。
+		if host.Summary.Hardware == nil || host.Summary.Config.Product == nil {
+			c.logger.Debug("skipping host capacity metrics, host summary unavailable",
+				"host", name, "host_moref", moid,
+				"power_state", powerState, "connection_state", connectionState)
+		} else {
+			c.logger.Debug("gathering metrics for host", "host", name, "host_moref", moid)
+
 			hw := host.Summary.Hardware
 			product := host.Summary.Config.Product
-
-			ch <- prometheus.MustNewConstMetric(descs.info,
-				prometheus.GaugeValue, 1.0,
-				moid, name, host.Parent.Value, target)
 
 			ch <- prometheus.MustNewConstMetric(descs.hardwareInfo,
 				prometheus.GaugeValue, 1.0,
@@ -104,8 +159,8 @@ func (c *hostCollector) Update(ctx context.Context, ch chan<- prometheus.Metric,
 				prometheus.GaugeValue, float64(hw.NumCpuThreads),
 				moid, name, target)
 
-			// MHz → hertz、MB → bytes 的换算落在新指标上；旧指标只在
-			// -metrics.legacy=true 时输出，且保留原始取值。
+			// MHz → hertz 换算落在新指标上；旧指标只在 -metrics.legacy=true
+			// 时输出，且保留原始取值。
 			ch <- prometheus.MustNewConstMetric(descs.cpuCapacityHertz,
 				prometheus.GaugeValue, float64(hw.CpuMhz)*1e6,
 				moid, name, target)
@@ -114,24 +169,39 @@ func (c *hostCollector) Update(ctx context.Context, ch chan<- prometheus.Metric,
 				prometheus.GaugeValue, float64(hw.MemorySize),
 				moid, name, target)
 
-			if !legacy {
-				continue
+			if legacy {
+				ch <- prometheus.MustNewConstMetric(descs.cpuCapacity,
+					prometheus.GaugeValue, float64(hw.CpuMhz),
+					moid, name, target)
+
+				ch <- prometheus.MustNewConstMetric(descs.cpuCapacityMHz,
+					prometheus.GaugeValue, float64(hw.CpuMhz),
+					moid, name, target)
+
+				ch <- prometheus.MustNewConstMetric(descs.memCapacity,
+					prometheus.GaugeValue, float64(hw.MemorySize),
+					moid, name, target)
 			}
-
-			ch <- prometheus.MustNewConstMetric(descs.cpuCapacity,
-				prometheus.GaugeValue, float64(hw.CpuMhz),
-				moid, name, target)
-
-			ch <- prometheus.MustNewConstMetric(descs.cpuCapacityMHz,
-				prometheus.GaugeValue, float64(hw.CpuMhz),
-				moid, name, target)
-
-			ch <- prometheus.MustNewConstMetric(descs.memCapacity,
-				prometheus.GaugeValue, float64(hw.MemorySize),
-				moid, name, target)
-
 		}
+
+		// perf 数据面仍只覆盖「开机 + 已连接 + 非维护」的主机：其余状态
+		// 下 vCenter 本就没有实时数据。与旧实现同一个判定（现收敛进
+		// hostDataPlaneEligible），但跳过现在会按原因计数，而不是让实体
+		// 连同 info 一起消失。
+		if !hostDataPlaneEligible(host) {
+			addSkipReasons(skipReasons, hostSkipReasons(host))
+			c.logger.Debug("skipping perf counters for host",
+				"host", name, "host_moref", moid,
+				"power_state", powerState, "connection_state", connectionState,
+				"maintenance", host.Runtime.InMaintenanceMode)
+			continue
+		}
+
+		hostRefs = append(hostRefs, host.Self)
+		hostNames[host.Self.Value] = name
 	}
+
+	s.RecordEntities(hostSubsystem, "host", totalHosts, len(hostRefs), skipReasons)
 
 	c.logger.Debug("time to process property collector for host", "duration_seconds", time.Since(begin).Seconds())
 

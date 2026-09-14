@@ -49,6 +49,18 @@ func (c *vmCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s
 		vms     []mo.VirtualMachine
 		vmRefs  []types.ManagedObjectReference
 		vmNames = make(map[string]string)
+
+		// 实体级自监控：本轮发现的 VM 数、perf 抓取因非开机态跳过的数量。
+		// 跳过的是性能计数器（vCenter 对关机 VM 本就没有实时数据），
+		// info/容量/状态指标对全部 VM 无条件输出 —— 见 DESIGN-p1-p3-roadmap 2.1。
+		totalVMs   int
+		skippedVMs int
+		// 预填 vm 数据面关心的全部跳过原因：正常状态下也输出 0 值序列，
+		// 这样「有 VM 被跳过」的告警不必用 absent()/or 兜底。
+		skipReasons = map[string]int{
+			collector.SkipReasonPoweredOff: 0,
+			collector.SkipReasonSuspended:  0,
+		}
 	)
 
 	begin := time.Now()
@@ -73,36 +85,63 @@ func (c *vmCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s
 	legacy := emitLegacyNames()
 
 	for _, vm := range vms {
+		totalVMs++
 
-		if vm.Runtime.PowerState == "poweredOn" {
+		moid := vm.Self.Value
+		name := vm.Summary.Config.Name
 
-			vmRefs = append(vmRefs, vm.Self)
+		// runtime.host 在关机/孤立 VM 上可能为空引用，hostmo 退化为空串
+		// 而不是解引用一个零值 ManagedObjectReference（那会得到字符串 "<nil>"）。
+		hostMoid := ""
+		if vm.Runtime.Host != nil {
+			hostMoid = vm.Runtime.Host.Value
+		}
 
-			vmNames[vm.Self.Value] = vm.Summary.Config.Name
+		// uuid 取自 summary.config.uuid（VirtualMachineConfigSummary 自带，
+		// 不需要额外的 config 往返）。不可访问的 VM 上 summary.config 为
+		// 空对象，uuid 就是空串 —— 降级为无值 label，不阻断采集。
+		uuid := vm.Summary.Config.Uuid
 
-			moid := vm.Self.Value
-			name := vm.Summary.Config.Name
-			hostMoid := vm.Runtime.Host.Value
+		// 电源状态对每台 VM 输出（含关机/挂起）。正是这条让 Prometheus
+		// 能区分"VM 不存在"与"VM 存在但没开机"。
+		powerState := string(vm.Runtime.PowerState)
+		if powerState == "" {
+			powerState = "unknown"
+		}
 
-			ch <- prometheus.MustNewConstMetric(descs.info,
-				prometheus.GaugeValue, 1.0,
+		ch <- prometheus.MustNewConstMetric(descs.powerState,
+			prometheus.GaugeValue, 1.0,
+			moid, name, powerState, target)
+
+		ch <- prometheus.MustNewConstMetric(descs.overallStatus,
+			prometheus.GaugeValue, 1.0,
+			moid, name, string(vm.Summary.OverallStatus), target)
+
+		// _info 与配置/容量类指标对所有 VM 无条件输出，包括关机 VM。
+		// 旧版本这些指标被电源态门控，v0.2.0 起显式可见 —— 这是 breaking
+		// change，迁移写法见 CHANGELOG。
+		ch <- prometheus.MustNewConstMetric(descs.info,
+			prometheus.GaugeValue, 1.0,
+			moid, name, hostMoid, uuid, target)
+
+		ch <- prometheus.MustNewConstMetric(descs.cpuCoreCount,
+			prometheus.GaugeValue, float64(vm.Summary.Config.NumCpu),
+			moid, name, hostMoid, target)
+
+		// MemorySizeMB 的 MB 是 2^20 字节。
+		ch <- prometheus.MustNewConstMetric(descs.memCapacityBytes,
+			prometheus.GaugeValue, float64(vm.Summary.Config.MemorySizeMB)*1048576,
+			moid, name, hostMoid, target)
+
+		if legacy {
+			ch <- prometheus.MustNewConstMetric(descs.memCapacity,
+				prometheus.GaugeValue, float64(vm.Summary.Config.MemorySizeMB),
 				moid, name, hostMoid, target)
+		}
 
-			ch <- prometheus.MustNewConstMetric(descs.cpuCoreCount,
-				prometheus.GaugeValue, float64(vm.Summary.Config.NumCpu),
-				moid, name, hostMoid, target)
-
-			// MemorySizeMB 的 MB 是 2^20 字节。
-			ch <- prometheus.MustNewConstMetric(descs.memCapacityBytes,
-				prometheus.GaugeValue, float64(vm.Summary.Config.MemorySizeMB)*1048576,
-				moid, name, hostMoid, target)
-
-			if legacy {
-				ch <- prometheus.MustNewConstMetric(descs.memCapacity,
-					prometheus.GaugeValue, float64(vm.Summary.Config.MemorySizeMB),
-					moid, name, hostMoid, target)
-			}
-
+		// PerDatastoreUsage 在关机 VM 上通常为空；Storage 本身是指针，
+		// VM 不可访问时为 nil，必须判空（旧代码只有开机分支会走到这里）。
+		if vm.Storage != nil {
 			for _, datastore := range vm.Storage.PerDatastoreUsage {
 
 				ch <- prometheus.MustNewConstMetric(descs.dsCapacityUsedBytes,
@@ -116,24 +155,42 @@ func (c *vmCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s
 						moid, name, target, datastore.Datastore.Value)
 				}
 			}
+		}
 
-			// 有快照时把创建时间的 Unix 秒数作为 metric value 输出。
-			if vm.Snapshot != nil {
-				c.logger.Debug("vm has snapshots", "vm", name, "vm_moref", moid)
-				for _, rootSnap := range vm.Snapshot.RootSnapshotList {
+		// 有快照时把创建时间的 Unix 秒数作为 metric value 输出。
+		if vm.Snapshot != nil {
+			c.logger.Debug("vm has snapshots", "vm", name, "vm_moref", moid)
+			for _, rootSnap := range vm.Snapshot.RootSnapshotList {
 
-					// created label 已移除（P1-4）：它是同一个时间戳的
-					// RFC3339 形式，而 value 就是 Unix 秒数，label 里那份
-					// 纯属冗余。时间戳做 label 会让每个快照占一条独立序列，
-					// 快照删除后序列仍以僵尸形式留在 TSDB 里直到过期。
-					ch <- prometheus.MustNewConstMetric(descs.snapshotInfo,
-						prometheus.GaugeValue, float64(rootSnap.CreateTime.Unix()),
-						moid, name, target, rootSnap.Name)
-				}
+				// created label 已移除（P1-4）：它是同一个时间戳的
+				// RFC3339 形式，而 value 就是 Unix 秒数，label 里那份
+				// 纯属冗余。时间戳做 label 会让每个快照占一条独立序列，
+				// 快照删除后序列仍以僵尸形式留在 TSDB 里直到过期。
+				ch <- prometheus.MustNewConstMetric(descs.snapshotInfo,
+					prometheus.GaugeValue, float64(rootSnap.CreateTime.Unix()),
+					moid, name, target, rootSnap.Name)
 			}
 		}
 
+		// 只有 perf 计数器仍按电源态跳过：vCenter 对非开机 VM 没有实时
+		// 采样，查询它们只会得到空结果并浪费分块配额。
+		if vm.Runtime.PowerState != "poweredOn" {
+			skippedVMs++
+			reason := collector.SkipReasonPoweredOff
+			if vm.Runtime.PowerState == "suspended" {
+				reason = collector.SkipReasonSuspended
+			}
+			skipReasons[reason]++
+			c.logger.Debug("skipping perf counters for non-powered-on vm",
+				"vm", name, "vm_moref", moid, "power_state", powerState)
+			continue
+		}
+
+		vmRefs = append(vmRefs, vm.Self)
+		vmNames[vm.Self.Value] = name
 	}
+
+	s.RecordEntities(vmSubsystem, "vm", totalVMs, totalVMs-skippedVMs, skipReasons)
 
 	c.logger.Debug("time to process property collector for vm", "duration_seconds", time.Since(begin).Seconds())
 

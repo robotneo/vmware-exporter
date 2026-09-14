@@ -135,8 +135,10 @@ func restoreExporterFlags(t *testing.T) {
 // TestCollectorSetDescribeExposesScrapeMetrics 验证 Describe 不是空实现。
 // 空 Describe 会让 registry 把 collector 当作 unchecked，从而跳过重复注册检测。
 //
-// 期望数量从 2 变成 5：Stage 9 新增了 vmware_up 与
-// vmware_scrape_duration_seconds，Stage 10a 又加了 vmware_scrape_errors_total。
+// 期望数量从 2 变成 8：Stage 9 新增了 vmware_up 与
+// vmware_scrape_duration_seconds，Stage 10a 又加了 vmware_scrape_errors_total；
+// v0.2.0 新增三个实体自监控 gauge（entities_found/emitted/skipped），
+// 让「被跳过的实体」从静默消失变为可观测、可告警的状态。
 //   - vmware_up：不是 Prometheus 自己生成的那个 up（那个只表示 HTTP 请求
 //     成功）。对多 target exporter 来说 HTTP 成功而 vCenter 登录失败是常态，
 //     没有这个指标就写不出「目标不可达」的告警。
@@ -176,6 +178,9 @@ func TestCollectorSetDescribeExposesScrapeMetrics(t *testing.T) {
 		"vmware_scrape_collector_duration_seconds",
 		"vmware_scrape_collector_success",
 		"vmware_scrape_errors_total",
+		"vmware_scrape_entities_found",
+		"vmware_scrape_entities_emitted",
+		"vmware_scrape_entities_skipped",
 	}
 
 	if len(descs) != len(want) {

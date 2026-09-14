@@ -112,11 +112,27 @@ type Scrape struct {
 	hostsOnce sync.Once
 	hosts     []mo.HostSystem
 	hostsErr  error
+
+	// entityStats 汇聚本轮各 collector 的实体计数（发现/输出/跳过），
+	// 由 CollectorSet 在登录成功后注入，g.Wait() 之后作为 scrape 自监控
+	// gauge 输出。为 nil 时（裸 Scrape 驱动的单元测试）上报静默丢弃。
+	entityStats *EntityStats
 }
 
 // IsESXi 报告本次抓取的目标是否为 ESXi 主机而非 vCenter。
 func (s *Scrape) IsESXi() bool {
 	return s.TargetType == TargetTypeESXi
+}
+
+// RecordEntities 转发到本轮的 EntityStats。
+//
+// collector 用它上报「发现 N 个实体、数据面输出 M 个、其余按原因跳过」。
+// stats 未注入时（裸 Scrape 的单元测试）静默丢弃，因此调用点不需要判空。
+func (s *Scrape) RecordEntities(collectorName, kind string, found, emitted int, skipped map[string]int) {
+	if s == nil {
+		return
+	}
+	s.entityStats.RecordEntities(collectorName, kind, found, emitted, skipped)
 }
 
 // HostConcurrency 返回 collector 内部按主机 fan-out 时应使用的并发上限。

@@ -467,3 +467,47 @@ func TestHostsRemembersError(t *testing.T) {
 		t.Errorf("fetcher was called %d times, want 1", got)
 	}
 }
+
+// TestEntityMetricsAreEmittedAfterScrape 验证 collector 通过 Scrape 上报的
+// 实体计数，会在所有 collector 结束后作为 scrape 自监控 gauge 输出，且
+// 预填的 0 值原因也有序列（正常态不该让告警依赖 absent()）。
+func TestEntityMetricsAreEmittedAfterScrape(t *testing.T) {
+	defs := []Definition{{
+		Name: "vm",
+		Creator: func(*slog.Logger) (Collector, error) {
+			return &stubCollector{onUpdate: func(_ context.Context, s *Scrape) error {
+				s.RecordEntities("vm", "vm", 10, 8, map[string]int{
+					SkipReasonPoweredOff: 2,
+					SkipReasonSuspended:  0, // 预填的 0 也必须有序列
+				})
+				return nil
+			}}, nil
+		},
+		DefaultEnabled: DefaultEnabled,
+	}}
+
+	cs, err := NewCollectorSet(context.Background(), defs, Options{
+		Namespace: "vmware",
+		Target:    "vcenter.example.com",
+		Login:     &stubLogin{scrape: &Scrape{Target: "vcenter.example.com"}},
+		Errors:    NewScrapeErrors(),
+	})
+	if err != nil {
+		t.Fatalf("NewCollectorSet failed: %s", err)
+	}
+
+	body := gatherText(t, cs)
+
+	// 文本格式的 label 按名字字母序输出（collector,kind[,reason],vcenter），
+	// 断言字符串必须按这个顺序写，而不是 Desc 声明顺序。
+	for _, want := range []string{
+		`vmware_scrape_entities_found{collector="vm",kind="vm",vcenter="vcenter.example.com"} 10`,
+		`vmware_scrape_entities_emitted{collector="vm",kind="vm",vcenter="vcenter.example.com"} 8`,
+		`vmware_scrape_entities_skipped{collector="vm",kind="vm",reason="powered_off",vcenter="vcenter.example.com"} 2`,
+		`vmware_scrape_entities_skipped{collector="vm",kind="vm",reason="suspended",vcenter="vcenter.example.com"} 0`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected scrape output to contain:\n  %s\nbody:\n%s", want, body)
+		}
+	}
+}

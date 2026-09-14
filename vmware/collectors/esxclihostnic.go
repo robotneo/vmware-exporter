@@ -53,14 +53,17 @@ func NewesxcliHostNICCollector(logger *slog.Logger) (collector.Collector, error)
 
 func (c *esxclihostnicCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s *collector.Scrape) error {
 
-	// 与 host collector 共享同一份 HostSystem 检索结果。改动前这里自己
-	// 又拉一遍（属性集是 runtime/name/config/hardware），三个主机相关的
-	// collector 全开时同一份清单被检索三次。
+	// 与 host / esxcli.storage 共享同一份 HostSystem 检索结果。改动前这里
+	// 自己又拉一遍（属性集是 runtime/name/config/hardware），三个主机相关
+	// 的 collector 全开时同一份清单被检索三次。
 	hosts, err := s.Hosts(ctx, fetchHosts(c.logger))
 	if err != nil {
 		return err
 
 	}
+
+	dispatched := 0
+	skipReasons := hostSkipReasons(mo.HostSystem{})
 
 	// 每主机一个 goroutine，每张网卡再一个 —— 这是无界 fan-out 的第二和
 	// 第三层。500 主机 × 4 网卡 = 2500 个 goroutine 同时打同一个 vCenter。
@@ -72,16 +75,28 @@ func (c *esxclihostnicCollector) Update(ctx context.Context, ch chan<- prometheu
 
 	for _, host := range hosts {
 
-		if host.Runtime.PowerState == "poweredOn" && host.Runtime.ConnectionState == "connected" && !host.Runtime.InMaintenanceMode {
+		if hostDataPlaneEligible(host) {
+			dispatched++
 
 			g.Go(func() error {
 				esxcliHostNicInfo(gctx, ch, c.logger, s, host, &esxclihostnicSubsystem)
 				return nil
 			})
 
+			continue
 		}
 
+		// 主机不可达时 esxcli 本就调不通，跳过与 host perf 相同的条件，
+		// 但跳过原因要计数 —— 否则维护窗口里 esxcli 序列消失会与
+		// 「collector 没运行」无法区分。
+		addSkipReasons(skipReasons, hostSkipReasons(host))
+		c.logger.Debug("skipping esxcli host nic collection for host",
+			"host", host.Name, "power_state", host.Runtime.PowerState,
+			"connection_state", host.Runtime.ConnectionState,
+			"maintenance", host.Runtime.InMaintenanceMode)
 	}
+
+	s.RecordEntities(esxclihostnicSubsystem, "host", len(hosts), dispatched, skipReasons)
 
 	// 闭包永远返回 nil：单台主机的 esxcli 失败不该让其他主机的采集也中断。
 	// 失败已经通过日志暴露，且整个 collector 的成败由上层的 success 指标表达。

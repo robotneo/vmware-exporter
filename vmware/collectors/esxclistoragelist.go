@@ -52,7 +52,8 @@ func (c *esxclistoragelistCollector) Update(ctx context.Context, ch chan<- prome
 
 	}
 
-	dCounter := 0
+	dispatched := 0
+	skipReasons := hostSkipReasons(mo.HostSystem{})
 
 	// 与 esxcli.host.nic 同理：per-host fan-out 必须有上限，
 	// 否则并发 goroutine 数直接等于 vCenter 里的主机数。
@@ -61,19 +62,30 @@ func (c *esxclistoragelistCollector) Update(ctx context.Context, ch chan<- prome
 
 	for _, host := range hosts {
 
-		if host.Runtime.PowerState == "poweredOn" && host.Runtime.ConnectionState == "connected" && !host.Runtime.InMaintenanceMode {
+		if hostDataPlaneEligible(host) {
 
-			dCounter++
+			dispatched++
 
 			g.Go(func() error {
 				esxcliStorageDriverInfo(gctx, ch, c.logger, s, host, &esxclistoragelistSubsystem)
 				return nil
 			})
 
+			continue
 		}
+
+		// 与 esxcli.host.nic 相同的过滤口径：esxcli 在主机不可达时调不通，
+		// 跳过但按原因计数。
+		addSkipReasons(skipReasons, hostSkipReasons(host))
+		c.logger.Debug("skipping esxcli storage collection for host",
+			"host", host.Name, "power_state", host.Runtime.PowerState,
+			"connection_state", host.Runtime.ConnectionState,
+			"maintenance", host.Runtime.InMaintenanceMode)
 	}
 
-	c.logger.Debug("dispatched storage driver routines", "count", dCounter,
+	s.RecordEntities(esxclistoragelistSubsystem, "host", len(hosts), dispatched, skipReasons)
+
+	c.logger.Debug("dispatched storage driver routines", "count", dispatched,
 		"max_concurrency", s.HostConcurrency())
 
 	// 单台主机失败不中断其他主机，同 esxcli.host.nic。

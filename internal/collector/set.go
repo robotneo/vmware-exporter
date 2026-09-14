@@ -32,6 +32,9 @@ type ScrapeMetrics struct {
 	collectorSuccess *prometheus.Desc
 	collectorSeconds *prometheus.Desc
 	errorsTotal      *prometheus.Desc
+	entitiesFound    *prometheus.Desc
+	entitiesEmitted  *prometheus.Desc
+	entitiesSkipped  *prometheus.Desc
 }
 
 // Login 抽象登录/登出，由 vmware/api 实现。
@@ -98,6 +101,38 @@ func newScrapeMetrics(namespace string) ScrapeMetrics {
 			prometheus.BuildFQName(namespace, "scrape", "errors_total"),
 			"Total number of scrape errors, by collector. The value \"login\" covers failures to authenticate against the target.",
 			[]string{"collector"},
+			nil,
+		),
+
+		// 以下三个是实体级的本轮快照（gauge，不是 counter）：一个 collector
+		// 一轮只上报一次，实体数随环境变化而上下波动，套 rate() 没有意义。
+		// 因此名字刻意**不带 _total** —— promlint 禁止非 counter 使用此后缀，
+		// 而 DESIGN-p1-p3-roadmap 3.4 草案里的 *_total 命名会被门拦下。
+		//
+		// 它们带 vcenter label，与 success/duration 不同：后者描述「这次
+		// 抓取动作本身」，由 HTTP target 即可定位；实体计数要回答「这个
+		// vCenter 上有多少 VM 被跳过」，/probe 多租户下必须自带后端标识。
+		entitiesFound: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "scrape", "entities_found"),
+			"Number of entities discovered in the inventory during the last scrape, by collector and entity kind.",
+			[]string{"vcenter", "collector", "kind"},
+			nil,
+		),
+
+		entitiesEmitted: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "scrape", "entities_emitted"),
+			"Number of entities for which data-plane metrics (performance counters, esxcli) were emitted during the last scrape.",
+			[]string{"vcenter", "collector", "kind"},
+			nil,
+		),
+
+		// 一个实体可能同时命中多个跳过原因（维护中断连），所以各 reason
+		// 之和可能大于 found-emitted，help 里说明这一点以免用户拿它对账。
+		entitiesSkipped: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "scrape", "entities_skipped"),
+			"Number of entities skipped by a data-plane metric during the last scrape, by reason. "+
+				"An entity can be counted under more than one reason, so summing across reasons can exceed the number of skipped entities.",
+			[]string{"vcenter", "collector", "kind", "reason"},
 			nil,
 		),
 	}
@@ -248,6 +283,9 @@ func (cs *CollectorSet) Describe(ch chan<- *prometheus.Desc) {
 	ch <- cs.metrics.collectorSeconds
 	ch <- cs.metrics.collectorSuccess
 	ch <- cs.metrics.errorsTotal
+	ch <- cs.metrics.entitiesFound
+	ch <- cs.metrics.entitiesEmitted
+	ch <- cs.metrics.entitiesSkipped
 }
 
 // Collect 实现 prometheus.Collector：登录、并发跑所有 collector、登出。
@@ -328,6 +366,13 @@ func (cs *CollectorSet) Collect(ch chan<- prometheus.Metric) {
 	s.InventoryCache = cs.inventoryCache
 	s.InventoryTTL = cs.inventoryTTL
 
+	// 实体统计是本轮快照：每个请求新建一个 EntityStats，随 Scrape 传给
+	// 并发运行的 collector，g.Wait() 之后再统一输出（见方法尾部）。
+	// 时序与上面的字段注入相同 —— 必须在 g.Go 之前赋值，否则 collector
+	// 并发上报与这里的写入构成数据竞争。
+	entityStats := NewEntityStats()
+	s.entityStats = entityStats
+
 	// 在登录成功、任何 collector 起跑之前，给本轮抓取的 SOAP 通道装一个
 	// 全局闸。它与 collector/主机层的 SetLimit 不同：闸放在 vim25 client 的
 	// RoundTripper 上，令牌只包住单次网络往返，因此把 esxcli "每主机 × 每网卡"
@@ -384,6 +429,24 @@ func (cs *CollectorSet) Collect(ch chan<- prometheus.Metric) {
 
 	// 忽略返回值是安全的：上面的闭包永远返回 nil。
 	_ = g.Wait()
+
+	// 实体计数必须在 g.Wait() 之后输出：所有 collector 的 RecordEntities
+	// 都发生在各自的 goroutine 里，提前读会漏掉还没跑完的 collector。
+	for _, snap := range entityStats.snapshot() {
+		ch <- prometheus.MustNewConstMetric(cs.metrics.entitiesFound, prometheus.GaugeValue,
+			float64(snap.found), cs.target, snap.collectorName, snap.kind)
+		ch <- prometheus.MustNewConstMetric(cs.metrics.entitiesEmitted, prometheus.GaugeValue,
+			float64(snap.emitted), cs.target, snap.collectorName, snap.kind)
+
+		// skipped map 里的每个原因都输出，包括本轮计数为 0 的：collector
+		// 上报时预填自己关心的全部原因，于是正常状态也有稳定的 0 值序列，
+		// 「跳过数 == 0」这类告警不需要再用 or 兜底。一个实体可命中多个
+		// 原因（维护中断连），所以跨 reason 求和可能大于实际跳过实体数。
+		for reason, n := range snap.skipped {
+			ch <- prometheus.MustNewConstMetric(cs.metrics.entitiesSkipped, prometheus.GaugeValue,
+				float64(n), cs.target, snap.collectorName, snap.kind, reason)
+		}
+	}
 
 	// all_collectors 标签沿用框架的取值，既有 dashboard 有引用。
 	// 它与新增的无标签 scrape_duration_seconds 的差别是不含 login/logout。
