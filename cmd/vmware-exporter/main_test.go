@@ -158,6 +158,7 @@ func TestCollectorSetDescribeExposesScrapeMetrics(t *testing.T) {
 		// 不需要真的启用任何 collector。
 		Enabled: map[string]bool{},
 		Errors:  collector.NewScrapeErrors(),
+		SOAP:    collector.NewSOAPStats(),
 	})
 	if err != nil {
 		t.Fatalf("NewCollectorSet() returned error: %v", err)
@@ -181,6 +182,9 @@ func TestCollectorSetDescribeExposesScrapeMetrics(t *testing.T) {
 		"vmware_scrape_entities_found",
 		"vmware_scrape_entities_emitted",
 		"vmware_scrape_entities_skipped",
+		"vmware_soap_requests_total",
+		"vmware_soap_inflight",
+		"vmware_soap_throttle_wait_seconds",
 	}
 
 	if len(descs) != len(want) {

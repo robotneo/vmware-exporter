@@ -117,6 +117,11 @@ type Scrape struct {
 	// 由 CollectorSet 在登录成功后注入，g.Wait() 之后作为 scrape 自监控
 	// gauge 输出。为 nil 时（裸 Scrape 驱动的单元测试）上报静默丢弃。
 	entityStats *EntityStats
+
+	// soapRec 记录本轮 SOAP 往返（在飞峰值/成败/等令牌耗时），由
+	// ThrottleSOAP 安装，轮末 CollectorSet 冲入进程级 SOAPStats（P-09）。
+	// limit<=0 未装闸、或登录失败时为 nil，对应指标按零值导出。
+	soapRec *soapRecorder
 }
 
 // IsESXi 报告本次抓取的目标是否为 ESXi 主机而非 vCenter。

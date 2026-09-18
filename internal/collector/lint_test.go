@@ -35,6 +35,7 @@ func TestScrapeMetricsPassPromlint(t *testing.T) {
 		Target:    "vcenter.example.com",
 		Login:     &stubLogin{scrape: &Scrape{Target: "vcenter.example.com"}},
 		Errors:    NewScrapeErrors(),
+		SOAP:      NewSOAPStats(),
 	})
 	if err != nil {
 		t.Fatalf("NewCollectorSet failed: %s", err)

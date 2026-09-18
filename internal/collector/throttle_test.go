@@ -126,12 +126,21 @@ func TestThrottleSOAP(t *testing.T) {
 		}
 	})
 
-	t.Run("no wrap when limit zero", func(t *testing.T) {
+	t.Run("wraps without semaphore when limit zero", func(t *testing.T) {
+		// limit<=0 不再保留原生 RoundTripper：仍包一层记录器（P-09 需要在任何
+		// 并发配置下统计往返），只是不带信号量、不限并发。
 		rt := newFakeRT()
 		s := &Scrape{Client: &vim25.Client{RoundTripper: rt}}
 		s.ThrottleSOAP(0)
-		if s.Client.RoundTripper != soap.RoundTripper(rt) {
-			t.Fatal("limit 0 must leave the original RoundTripper untouched")
+		w, ok := s.Client.RoundTripper.(*throttledRoundTripper)
+		if !ok {
+			t.Fatalf("RoundTripper = %T, want *throttledRoundTripper even at limit 0", s.Client.RoundTripper)
+		}
+		if w.sem != nil {
+			t.Fatal("limit 0 must install a passthrough wrapper without a semaphore")
+		}
+		if s.soapRec == nil {
+			t.Fatal("limit 0 must still install the per-scrape SOAP recorder")
 		}
 	})
 

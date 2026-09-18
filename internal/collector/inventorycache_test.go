@@ -265,6 +265,7 @@ func TestCollectorSetInjectsInventoryCache(t *testing.T) {
 		InventoryCache: cache,
 		InventoryTTL:   ttl,
 		Errors:         NewScrapeErrors(),
+		SOAP:           NewSOAPStats(),
 	})
 	if err != nil {
 		t.Fatalf("NewCollectorSet failed: %s", err)
@@ -296,6 +297,7 @@ func TestCollectorSetInjectsInventoryCache(t *testing.T) {
 		Namespace: "vmware",
 		Login:     probeLogin,
 		Errors:    NewScrapeErrors(),
+		SOAP:      NewSOAPStats(),
 	})
 	if err != nil {
 		t.Fatalf("probe NewCollectorSet failed: %s", err)
