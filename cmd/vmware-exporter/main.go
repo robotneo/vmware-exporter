@@ -47,7 +47,7 @@ var (
 	disableExporterTarget  = flag.Bool("disable.exporter.target", false, "Disable default target for /metrics path.")
 	disableExporterMetrics = flag.Bool("disable.exporter.metrics", true, "Disable exporter metrics in /metrics path. Always enabled if /metrics target disabled")
 
-	logLevel  = flag.String("log.level", "debug", "Log Level minimums. Available options are: debug,info,warn and error")
+	logLevel  = flag.String("log.level", "info", "Log Level minimums. Available options are: debug,info,warn and error")
 	logFormat = flag.String("log.format", "logfmt", "Log output format. Available options are: logfmt and json")
 
 	// webConfigFile 交给 exporter-toolkit 处理 TLS 与 HTTP Basic Auth。

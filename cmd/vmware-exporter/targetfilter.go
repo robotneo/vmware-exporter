@@ -5,26 +5,43 @@ import (
 	"strings"
 
 	"github.com/prezhdarov/vmware-exporter/internal/config"
+	"github.com/prezhdarov/vmware-exporter/internal/target"
 )
 
-// targetAllowed 判断 /probe 请求的 target 是否落在 -probe.allowed-targets
-// 白名单内。白名单为空时放开一切（保持默认兼容）。
+// checkTarget 解析并校验 /probe 的 target，再按白名单判定，一步到位。
+// 返回规范化后的 Endpoint 与是否放行；畸形 target（userinfo/path/query/
+// 非法端口等）与未命中白名单都返回 false。
+func checkTarget(raw string) (target.Endpoint, bool) {
+	ep, err := target.Parse(raw)
+	if err != nil {
+		return target.Endpoint{}, false
+	}
+
+	if !targetAllowlisted(ep.Host) {
+		return target.Endpoint{}, false
+	}
+
+	return ep, true
+}
+
+// targetAllowlisted 按 -probe.allowed-targets 判定已规范化的 host。
 //
-// 这个闸是 SSRF 的深度防御：/probe 默认无鉴权且接受任意 target，任何能访问
-// 端口的人都能让 exporter 向任意地址发起 HTTPS 连接。能配 web.config 做认证
-// 或网络层隔离时优先用那些；这个白名单给"必须在应用层限制可探测目标"的
-// 部署一个选项。
+// 解析与白名单必须在同一个规范化结果上完成。此前 splitHost 用
+// net.SplitHostPort 取 host，而连接侧用 url/soap 解析 authority；对
+// "allowed.example.com:443@169.254.169.254" 这类输入两边结论不同，白名单
+// 匹配 @ 前的主机、实际连接 @ 后的主机。调用方必须先用 internal/target.Parse
+// 拒绝 userinfo/path/query/fragment/非法端口，再把 Endpoint.Host 传进来。
 //
 // 走 Snapshot 读 flag 而不是裸解引用：该 flag 是 SIGHUP 可热改的配置，
 // 请求路径上读它必须与其它 flag 一样受 RWMutex 保护，否则就是数据竞争。
-func targetAllowed(target string) bool {
+func targetAllowlisted(host string) bool {
 	var rules string
 
 	config.Snapshot(func() {
 		rules = *probeAllowedTargets
 	})
 
-	return targetAllowedByRules(splitHost(target), splitRules(rules))
+	return targetAllowedByRules(host, splitRules(rules))
 }
 
 // splitRules 把逗号分隔的配置拆成去空白、去空项、小写化后的规则切片。
@@ -39,19 +56,6 @@ func splitRules(raw string) []string {
 	}
 
 	return out
-}
-
-// splitHost 从 "host:port" / "[::1]:443" 形态的 target 中取出 host 部分；
-// 没有端口时原样返回（小写化）。target 直接拼进 soap URL，正常形态都带端口，
-// 但裸主机名（如 vcsim 测试里的 "127.0.0.1"）也要能匹配，所以两种都收。
-func splitHost(target string) string {
-	host := strings.TrimSpace(target)
-
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-
-	return strings.ToLower(host)
 }
 
 // targetAllowedByRules 是白名单判定的纯内核，便于不依赖 flag 与 SIGHUP

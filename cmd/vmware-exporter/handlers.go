@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/prezhdarov/vmware-exporter/internal/collector"
+	"github.com/prezhdarov/vmware-exporter/internal/target"
 	vmware "github.com/prezhdarov/vmware-exporter/vmware/api"
 	vmwareCollectors "github.com/prezhdarov/vmware-exporter/vmware/collectors"
 
@@ -16,6 +18,14 @@ import (
 	versioncollector "github.com/prometheus/client_golang/prometheus/collectors/version"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+// maxProbeBodyBytes 限制一次 /probe 请求体的读入大小。
+//
+// /probe 的表单体只承载 target/凭证/collector 名，实际只有几百字节；
+// Go 对 application/x-www-form-urlencoded 会把整个 body 读进内存（不像
+// multipart 有 32MB 与磁盘溢出保护），不设上限时未授权调用方可以用超大 body
+// 做内存型 DoS。1MB 对合法请求绰绰有余，超限返回 413。GET 查询串不受影响。
+const maxProbeBodyBytes = 1 << 20
 
 // scrapeErrors 是 vmware_scrape_errors_total 的进程级累加状态。
 //
@@ -237,6 +247,11 @@ func metricsHandler(logger *slog.Logger) http.HandlerFunc {
 
 // probeHandler 处理 probe 请求，支持多 target 和独立凭证。
 func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
+	// POST 表单体先加上大小上限（见 maxProbeBodyBytes），防止未授权的超大
+	// urlencoded body 被整表读入内存。超限 MaxBytesReader 会在 ParseForm 时
+	// 返回 *http.MaxBytesError，这里明确回 413；GET 无 body，包装无副作用。
+	r.Body = http.MaxBytesReader(w, r.Body, maxProbeBodyBytes)
+
 	// ParseForm 让 GET 的查询串与 POST 的表单体走同一套取值逻辑。调试页
 	// 用 POST 提交，凭证因此留在请求体里，不进 URL、不进浏览器历史、也不进
 	// 任何记录查询串的反向代理日志。
@@ -245,31 +260,42 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 	// POST 分支调用时，GET 请求的 r.Form 是一个空 map，现有的
 	// /probe?target=... 会全部拿不到参数 —— Prometheus 那一侧会直接失效。
 	//
-	// error 只记日志、不中断，是为了保持与 r.URL.Query() 相同的宽容语义：
-	// 那个函数遇到畸形百分号转义时静默丢弃该键，其余键照常返回；ParseForm
-	// 则返回 error，但同样会把能解析的键填进 r.Form。中断请求会把「某个
-	// 参数写错了」从「那个参数为空，于是报 400 缺少 target」变成「整个请求
-	// 400」，对既有调用方是行为变更。
+	// error 分两类：请求体超限要中断并回 413；其余（如畸形百分号转义）只记
+	// 日志、不中断，保持与 r.URL.Query() 相同的宽容语义——ParseForm 仍会把
+	// 能解析的键填进 r.Form。
 	if err := r.ParseForm(); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			logger.Warn("probe request body exceeds limit", "limit_bytes", maxProbeBodyBytes)
+			http.Error(w, fmt.Sprintf("request body exceeds %d bytes", maxProbeBodyBytes), http.StatusRequestEntityTooLarge)
+			return
+		}
+
 		logger.Warn("could not fully parse probe request parameters; continuing with what was parsed",
 			"error", err)
 	}
 
 	params := r.Form
 
-	target := params.Get("target")
-	if target == "" {
-		http.Error(w, "target parameter is required", http.StatusBadRequest)
-		logger.Error("probe request missing target parameter")
+	rawTarget := params.Get("target")
+
+	// target 先规范化再做任何后续动作。它只允许是 host 或 host:port，拒绝
+	// userinfo/path/query/fragment/非法端口 —— 否则白名单按 @ 前主机放行、
+	// 连接层却连到 @ 后主机（SSRF + 凭证转发）。后续一律使用规范化后的
+	// ep.Authority，原始字符串不再下传。
+	endpoint, err := target.Parse(rawTarget)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		logger.Warn("probe request with invalid target", "error", err)
 		return
 	}
 
 	// 可选 target 白名单（SSRF 深度防御）。白名单为空时放行一切。配置了
 	// 规则但本次 target 不命中时明确 403，而不是让它带着调用方提供的凭证去
 	// 连一个不该被探测的地址。
-	if !targetAllowed(target) {
+	if !targetAllowlisted(endpoint.Host) {
 		http.Error(w, "target is not in the configured allowlist (-probe.allowed-targets)", http.StatusForbidden)
-		logger.Warn("probe target rejected by allowlist", "target", target)
+		logger.Warn("probe target rejected by allowlist", "target", endpoint.Authority)
 		return
 	}
 
@@ -286,13 +312,21 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 
 	if username == "" || password == "" {
 		http.Error(w, "username and password are required (via URL params or Basic Auth)", http.StatusBadRequest)
-		logger.Error("probe request missing credentials", "target", target)
+		logger.Error("probe request missing credentials", "target", endpoint.Authority)
 		return
 	}
 
 	schema := params.Get("schema")
 	if schema == "" {
 		schema = "https"
+	}
+
+	// schema 白名单：否则调用方可传任意值，或用 schema=http 让凭证以明文
+	// 发往 target（配合上面的 SSRF 可发往攻击者主机）。
+	if schema != "http" && schema != "https" {
+		http.Error(w, `schema must be either "http" or "https"`, http.StatusBadRequest)
+		logger.Warn("probe request with invalid schema", "target", endpoint.Authority, "schema", schema)
+		return
 	}
 
 	insecure := params.Get("insecure") == "true"
@@ -308,7 +342,7 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 
 		http.Error(w, msg, http.StatusBadRequest)
 		logger.Error("probe request specified unknown collectors",
-			"target", target, "unknown", strings.Join(unknownCollectors, ","))
+			"target", endpoint.Authority, "unknown", strings.Join(unknownCollectors, ","))
 
 		return
 	}
@@ -316,7 +350,7 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 	// 凭证与 target 走 probeLogin，它把 Credentials 绑进 collector.Login 接口。
 	inflightLimit := currentScrapeInflight()
 	if !scrapeInflightGate.tryAcquire(inflightLimit) {
-		logger.Warn("probe rejected: too many scrapes in flight", "target", target, "limit", inflightLimit)
+		logger.Warn("probe rejected: too many scrapes in flight", "target", endpoint.Authority, "limit", inflightLimit)
 		http.Error(w, "exporter is busy scraping, try the next scrape interval", http.StatusServiceUnavailable)
 		return
 	}
@@ -324,11 +358,11 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 
 	cs, err := collector.NewCollectorSet(r.Context(), vmwareCollectors.Definitions(), collector.Options{
 		Namespace: namespace,
-		Target:    target,
+		Target:    endpoint.Authority,
 		Login: &probeLogin{
 			api: vmware.NewAPI(),
 			creds: vmware.Credentials{
-				Target:   target,
+				Target:   endpoint.Authority,
 				Username: username,
 				Password: password,
 				Schema:   schema,
@@ -342,13 +376,13 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 		Errors:         scrapeErrors,
 	})
 	if err != nil {
-		logger.Error("could not create the collector set", "target", target, "error", err)
+		logger.Error("could not create the collector set", "target", endpoint.Authority, "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	logger.Debug("probe request received",
-		"target", target,
+		"target", endpoint.Authority,
 		"schema", schema,
 		"insecure", insecure,
 		"collectors", strings.Join(cs.Names(), ","))

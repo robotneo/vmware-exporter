@@ -281,6 +281,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the allowlist never rejects, and when the SOAP wrapper bypasses its
   semaphore (observed peak then equals the unthrottled total).
 
+### 🔐 Security — /probe hardening (S1)
+
+- **SSRF allowlist userinfo bypass closed (CVE-class, high).** The allowlist
+  and the SOAP client parsed the `target` parameter differently:
+  `allowed.example.com:443@169.254.169.254` matched the `.example.com` suffix
+  rule via `net.SplitHostPort` while the URL/SOAP layer actually connected to
+  the host after `@` — and the request's Basic credentials were forwarded to
+  that host. Both the HTTP layer and the connection layer now normalize the
+  target through one parser (`internal/target`), which rejects userinfo, path,
+  query and fragment and accepts only `host` / `host:port`. The vcenter label
+  and internal error buckets now use the normalized authority, so case/whitespace
+  variants no longer create separate buckets.
+- **Unbounded `/probe` target memory growth closed.** `vmware_scrape_errors`
+  is keyed by target, and on `/probe` the target (and the login-failure count)
+  comes from the request; an unauthenticated caller could grow the map without
+  limit by sending a fresh random target each scrape. Distinct target buckets
+  are now bounded by an LRU (default 1000, far above any real fleet size) and
+  targets are normalized before bucketing.
+- **`/probe` request body is capped at 1 MiB** (`http.MaxBytesReader`, 413 on
+  overflow). Go reads an entire `application/x-www-form-urlencoded` body into
+  memory; without a cap an oversized POST was an unauthenticated memory DoS.
+  GET query strings are unaffected.
+- **`schema` parameter restricted to `http`/`https`** (400 otherwise), so a
+  request cannot force an arbitrary scheme. Legitimate inputs are unchanged.
+
+### ⚡ Performance — scrape CPU/memory batch A
+
+- **Default log level is now `info` instead of `debug`.** At `debug` every
+  scrape assembled and (in json mode) serialized log arguments for each chunk,
+  each skipped entity and each unavailable counter — measurable CPU and
+  journal/IO cost in large environments, and the binary/container shipped with
+  that default (the systemd template already pinned `info`). Verbose per-scrape
+  logging is one `-log.level=debug` flag or a SIGHUP reload away; the flag
+  continues to hot-reload, so no restart is needed for temporary debugging.
+- **esxcli `host.nic` and `storage.core` adapter descriptors are reused.**
+  Each esxcli metric series built a fresh `*prometheus.Desc` per entity per
+  scrape; the entity identifiers (`moid`/`host`/device) are now variable labels
+  and the descriptive hardware values (driver/version/firmware and
+  vendor/model/revision) remain constant labels, so one Desc per metric-name +
+  hardware-combination is cached and shared across all hosts and all scrapes.
+  Exposed series, labels and cardinality are unchanged.
+- **Datastore path-cleanup regexp compiled once** at package level instead of
+  being recompiled on every datastore scrape.
+
 ### 🔧 Fixed
 
 - **systemd unit no longer kills the service on reload.** The exporter used to

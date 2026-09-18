@@ -21,6 +21,11 @@ var datastoreCollectorFlag = flag.Bool(fmt.Sprintf("collector.%s", datastoreSubs
 
 var datastoreCounters = []string{"disk.provisioned.latest", "disk.used.latest"}
 
+// datastorePathRE 把 datastore URL 里的协议/路径成分剥掉，只留规范名。
+// 必须是包级变量：它原来在 Update 内 MustCompile，等于每轮抓取都重新编译
+// 同一个正则（P-07），datastore collector 默认开启，这是确定的纯浪费。
+var datastorePathRE = regexp.MustCompile(`(vmfs)?(volumes)?(ds)?(:)?(/+)`)
+
 type datastoreCollector struct {
 	logger *slog.Logger
 }
@@ -57,8 +62,6 @@ func (c *datastoreCollector) Update(ctx context.Context, ch chan<- prometheus.Me
 
 	}
 
-	re := regexp.MustCompile(`(vmfs)?(volumes)?(ds)?(:)?(/+)`)
-
 	descs := descsFor(s.Namespace).datastore
 
 	// -metrics.legacy 在循环外快照一次，理由见 emitLegacyNames：
@@ -77,7 +80,7 @@ func (c *datastoreCollector) Update(ctx context.Context, ch chan<- prometheus.Me
 		ch <- prometheus.MustNewConstMetric(descs.info,
 			prometheus.GaugeValue, 1.0,
 			dsmo, dsName, datastore.Summary.Type,
-			re.ReplaceAllString(datastore.Summary.Url, ""),
+			datastorePathRE.ReplaceAllString(datastore.Summary.Url, ""),
 			datastore.Parent.Value, s.Target)
 
 		ch <- prometheus.MustNewConstMetric(descs.capacityBytes,

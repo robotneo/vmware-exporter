@@ -101,10 +101,11 @@ sudo systemctl reload vmware-exporter
 
 优先级：命令行 > 配置文件 > 环境变量。
 
-### 两个反直觉的默认值
+### 一个反直觉的默认值
 
-- `log.level` 内置默认是 **debug**（不是 info）。模板里已经显式写了 `info`
 - `disable.exporter.metrics` 默认 **true**，即 exporter 自身的进程指标默认不暴露
+- `log.level` 内置默认与模板一致都是 **info**；排查单次抓取问题时可临时在
+  `config.yaml` 改成 `debug`，SIGHUP 热重载生效，无需重启
 
 ## 权限：config.yaml 必须是 0644
 

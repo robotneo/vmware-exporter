@@ -10,6 +10,7 @@ import (
 
 	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	"github.com/prezhdarov/vmware-exporter/internal/config"
+	"github.com/prezhdarov/vmware-exporter/internal/target"
 
 	"github.com/vmware/govmomi/performance"
 	"github.com/vmware/govmomi/session/cache"
@@ -230,6 +231,16 @@ func (vm *VMware) loginWithCredentials(ctx context.Context, creds Credentials,
 	if logger == nil {
 		logger = slog.Default()
 	}
+
+	// 连接层再次校验 target，与 /probe 的白名单校验共用同一个解析器：
+	// 这里既覆盖 /probe（纵深防御），也覆盖 /metrics 的 -vmware.vcenter。
+	// 拒绝 userinfo/path/query/fragment 后，再由下面的 url.UserPassword 以
+	// 受控方式附加 Basic 凭证，避免调用方把凭证或混淆主机藏进 target。
+	endpoint, err := target.Parse(creds.Target)
+	if err != nil {
+		return nil, noop, fmt.Errorf("invalid vcenter target: %w", err)
+	}
+	creds.Target = endpoint.Authority
 
 	urlx, err := soap.ParseURL(fmt.Sprintf("%s://%s%s", creds.Schema, creds.Target, vim25.Path))
 	if err != nil {
