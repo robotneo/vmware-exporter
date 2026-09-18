@@ -41,6 +41,9 @@ var esxclihostnicCollectorFlag = flag.Bool("collector.esxcli.host.nic", collecto
 
 type esxclihostnicCollector struct {
 	logger *slog.Logger
+	// descs 跟随 collector 实例（CollectorSet 每轮抓取新建一个），按 label
+	// 组合复用 Desc，避免每块网卡 NewDesc，见 esxcliDescCache（P-01）。
+	descs *esxcliDescCache
 }
 
 func init() {
@@ -48,7 +51,7 @@ func init() {
 }
 
 func NewesxcliHostNICCollector(logger *slog.Logger) (collector.Collector, error) {
-	return &esxclihostnicCollector{logger}, nil
+	return &esxclihostnicCollector{logger: logger, descs: newEsxcliDescCache()}, nil
 }
 
 func (c *esxclihostnicCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s *collector.Scrape) error {
@@ -79,7 +82,7 @@ func (c *esxclihostnicCollector) Update(ctx context.Context, ch chan<- prometheu
 			dispatched++
 
 			g.Go(func() error {
-				esxcliHostNicInfo(gctx, ch, c.logger, s, host, &esxclihostnicSubsystem)
+				esxcliHostNicInfo(gctx, ch, c.logger, s, host, &esxclihostnicSubsystem, c.descs)
 				return nil
 			})
 
@@ -106,7 +109,7 @@ func (c *esxclihostnicCollector) Update(ctx context.Context, ch chan<- prometheu
 }
 
 func esxcliHostNicInfo(ctx context.Context, ch chan<- prometheus.Metric, logger *slog.Logger,
-	s *collector.Scrape, host mo.HostSystem, subsystem *string) {
+	s *collector.Scrape, host mo.HostSystem, subsystem *string, descs *esxcliDescCache) {
 
 	var (
 		data     NicListResponse
@@ -151,7 +154,7 @@ func esxcliHostNicInfo(ctx context.Context, ch chan<- prometheus.Metric, logger 
 		g.Go(func() error {
 			esxcliGetNicInfo(gctx, ch, logger, s, request,
 				&host.Self.Value, &host.Name, &s.Namespace, subsystem, &nic,
-				drivers, firmware)
+				drivers, firmware, descs)
 			return nil
 		})
 	}
@@ -161,7 +164,8 @@ func esxcliHostNicInfo(ctx context.Context, ch chan<- prometheus.Metric, logger 
 
 func esxcliGetNicInfo(ctx context.Context, ch chan<- prometheus.Metric, logger *slog.Logger,
 	s *collector.Scrape, request esxcli.ExecuteSoapRequest,
-	hostRef, hostName, namespace, subsystem *string, nic *NicListInfo, drivers, firmware *versionSet) {
+	hostRef, hostName, namespace, subsystem *string, nic *NicListInfo, drivers, firmware *versionSet,
+	descs *esxcliDescCache) {
 
 	var data NicResponse
 
@@ -179,12 +183,22 @@ func esxcliGetNicInfo(ctx context.Context, ch chan<- prometheus.Metric, logger *
 	newFirmware := firmware.Add(data.DriverInfo.Driver, data.DriverInfo.Firmware)
 
 	if newDriver || newFirmware {
-		ch <- prometheus.MustNewConstMetric(
-			prometheus.NewDesc(
-				prometheus.BuildFQName(*namespace, *subsystem, "driver"),
-				"NIC Info", nil, map[string]string{"mo": *hostRef, "host": *hostName, "descr": nic.Description, "driver": data.DriverInfo.Driver, "version": data.DriverInfo.Version, "firmware": data.DriverInfo.Firmware},
-			), prometheus.GaugeValue, float64(1),
+		// 逐实体的 mo/host/descr 走 variableLabels（发指标时传值），
+		// driver/version/firmware 走 constLabels（P-01）。同型号硬件的主机
+		// 因而复用同一个 Desc；exposition 的 label 名/值/基数与改前逐字一致。
+		constLabels := map[string]string{
+			"driver":   data.DriverInfo.Driver,
+			"version":  data.DriverInfo.Version,
+			"firmware": data.DriverInfo.Firmware,
+		}
+		desc := descs.get(
+			prometheus.BuildFQName(*namespace, *subsystem, "driver"),
+			"NIC Info",
+			[]string{"mo", "host", "descr"},
+			constLabels,
 		)
+		// variableLabels 传值顺序须与声明一致：mo, host, descr。
+		ch <- prometheus.MustNewConstMetric(desc, prometheus.GaugeValue, float64(1),
+			*hostRef, *hostName, nic.Description)
 	}
-
 }

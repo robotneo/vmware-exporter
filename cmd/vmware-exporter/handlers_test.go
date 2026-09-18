@@ -25,8 +25,66 @@ func TestProbeHandlerReturnsBadRequestWithoutTarget(t *testing.T) {
 		t.Fatalf("status code = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 
-	if !strings.Contains(rec.Body.String(), "target parameter is required") {
-		t.Fatalf("response body = %q, want it to contain %q", rec.Body.String(), "target parameter is required")
+	if !strings.Contains(rec.Body.String(), "target is required") {
+		t.Fatalf("response body = %q, want it to contain %q", rec.Body.String(), "target is required")
+	}
+}
+
+// TestProbeRejectsOversizedBody 锁住 S-02：urlencoded 表单体被 Go 整表读入
+// 内存，必须用 MaxBytesReader 封顶，超限回 413，避免未授权内存型 DoS。
+func TestProbeRejectsOversizedBody(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	form := url.Values{}
+	form.Set("target", "vcenter.example.com")
+	form.Set("username", "u")
+	form.Set("password", "p")
+	// 填充一个超过 1MB 上限的无关字段，模拟超大 body。
+	form.Set("pad", strings.Repeat("x", maxProbeBodyBytes+1024))
+
+	req := httptest.NewRequest(http.MethodPost, "/probe", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	probeHandler(rec, req, logger)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d for an oversized probe body", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+}
+
+// TestProbeRejectsInvalidSchema 锁住 S-05：schema 只允许 http/https，防止调用
+// 方传任意值或用明文 http 把凭证发往非预期目标。
+func TestProbeRejectsInvalidSchema(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	req := httptest.NewRequest(http.MethodGet,
+		"/probe?target=vcenter.example.com&username=u&password=p&schema=ftp", nil)
+	rec := httptest.NewRecorder()
+
+	probeHandler(rec, req, logger)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d for schema=ftp", rec.Code, http.StatusBadRequest)
+	}
+
+	if !strings.Contains(rec.Body.String(), "schema") {
+		t.Fatalf("response body = %q, want it to mention schema", rec.Body.String())
+	}
+}
+
+// TestProbeRejectsUserinfoTarget 是 S-01 在 handler 层的直接断言（无白名单，
+// 默认放开）：即便没有配置 allowlist，userinfo/path/query 形态也必须被解析器
+// 拒绝，因为它会造成校验与连接的主机不一致。
+func TestProbeRejectsUserinfoTarget(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	req := httptest.NewRequest(http.MethodGet,
+		"/probe?target=vcenter.example.com:443@169.254.169.254&username=u&password=p", nil)
+	rec := httptest.NewRecorder()
+
+	probeHandler(rec, req, logger)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d for a userinfo target", rec.Code, http.StatusBadRequest)
 	}
 }
 

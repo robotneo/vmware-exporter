@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -171,6 +172,58 @@ func TestErrorsTotalIsPerTarget(t *testing.T) {
 	bodyA := gatherText(t, build("a.example.com", errors.New("boom")))
 	if want := `vmware_scrape_errors_total{collector="c0"} 4`; !strings.Contains(bodyA, want) {
 		t.Errorf("target A did not accumulate its own errors; want %s, body:\n%s", want, bodyA)
+	}
+}
+
+// TestScrapeErrorsBoundsDistinctTargets 锁住 M-01：/probe 的 target 来自请求，
+// 攻击者每轮换一个 target（即使全部登录失败）也不能让进程内存随 target 数无限
+// 增长。distinct target 桶数必须被钉在上限内，合法 target 的计数仍正确。
+func TestScrapeErrorsBoundsDistinctTargets(t *testing.T) {
+	const limit = 16
+	e := NewScrapeErrorsWithLimit(limit)
+
+	for i := 0; i < 10000; i++ {
+		e.Add(fmt.Sprintf("evil-%d.example.invalid:443", i), "login")
+	}
+
+	if got := e.TargetCount(); got > limit {
+		t.Fatalf("distinct target buckets = %d, must be <= limit %d", got, limit)
+	}
+
+	// 正常 target 在持续使用时不应被一次性伪造 target 淘汰：它每轮都会被
+	// Snapshot touch（健康）或 Add（故障），LRU 中保持最近使用。
+	for i := 0; i < 10000; i++ {
+		e.Add(fmt.Sprintf("evil-%d.example.invalid:443", i), "login")
+		if got := e.Snapshot("vc.prod.example.com:443", []string{"login"})["login"]; i < 3 && got != 0 {
+			t.Fatalf("healthy target seed = %v, want 0", got)
+		}
+	}
+	e.Add("vc.prod.example.com:443", "login")
+
+	got := e.Snapshot("VC.Prod.Example.com:443", []string{"login"})["login"]
+	if got != 1 {
+		t.Fatalf("active legitimate target count = %v, want 1 after normalization", got)
+	}
+}
+
+func TestScrapeErrorsNormalizesTargetBucket(t *testing.T) {
+	e := NewScrapeErrors()
+
+	variants := []string{
+		"vc.example.com:443",
+		"VC.example.com:443",
+		"  vc.example.com:443  ",
+	}
+	for _, v := range variants {
+		e.Add(v, "login")
+	}
+
+	if e.TargetCount() != 1 {
+		t.Fatalf("TargetCount = %d, want 1 after host case/whitespace normalization", e.TargetCount())
+	}
+
+	if got := e.Snapshot("vc.example.com:443", []string{"login"})["login"]; got != 3 {
+		t.Fatalf("normalized count = %v, want 3", got)
 	}
 }
 

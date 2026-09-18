@@ -435,7 +435,7 @@ scrape_configs:
 | `-collector.max-concurrency` | int | 并发上限，同时约束三处：`CollectorSet` 层同时运行的 collector 数、esxcli 按主机 fan-out 的 goroutine 宽度，以及包装在 vim25 RoundTripper 上的**单次抓取内全局 SOAP 在飞请求数**（最后一处把"每主机 × 每网卡"嵌套 fan-out 的真实并发钉死在该值，而不是两层各自限流后最坏仍达 n×n）。设为 0 则不限制 collector 层，但 per-host fan-out 仍有内建下限。 | `8` |
 | `-web.max-scrape-inflight` | int | 同时进行的抓取数（`/metrics` 与 `/probe` 合计）。超出上限的请求直接返回 HTTP 503，而不是排队、向 vCenter 叠加更多登录与会话。设为 0 关闭。 | `4` |
 | `-scrape.inventory-cache-ttl` | duration | `/metrics` 路径上慢变清单/拓扑检索（datacenter、folder、cluster、compute resource、datastore、resource pool、vSAN 集群名发现）的复用有效期。主机/VM 的运行态以及**所有性能计数器始终实时**，不进缓存。设为 `0` 关闭缓存，回到每轮全量 ContainerView 检索（v0.1.19 及更早行为）。缓存为进程级、按 target 分桶，并且**绝不注入多租户 `/probe` 路径**——不同凭证之间不可能互相读到对方的对象清单。 | `5m` |
-| `-probe.allowed-targets` | string | `/probe` 目标 host 的可选白名单，作为 SSRF 的深度防御：以 `.` 开头按后缀匹配（`.example.com`）、含 `/` 按 CIDR 网段匹配（`10.0.0.0/8`）、其余按精确 host/IP 匹配，逗号分隔。留空（默认）允许任意 target。 | 空 |
+| `-probe.allowed-targets` | string | `/probe` 目标 host 的可选白名单，作为 SSRF 的深度防御：以 `.` 开头按后缀匹配（`.example.com`）、含 `/` 按 CIDR 网段匹配（`10.0.0.0/8`）、其余按精确 host/IP 匹配，逗号分隔。留空（默认）允许任意 target。`target` 只接受裸 `host` 或 `host:port`：userinfo（`@`）、路径、查询串、fragment 一律拒绝（400），白名单无法被绕过；`schema` 只允许 `http`/`https`；POST 请求体上限 1 MiB（超出返回 413）。 | 空 |
 
 > **取代了 `-prom.maxRequests`**：那个参数是死参数 —— 上游框架把它存进
 > `eHandler.maxRequests` 之后就再没读过，设成任何值都没有效果。现在这个值
@@ -454,7 +454,7 @@ scrape_configs:
 | 参数 | 类型 | 说明 | 默认值 |
 | :--- | :--- | :--- | :--- |
 | `-http.address` | string | Exporter 监听的 HTTP 地址和端口。 | `:9169` |
-| `-log.level` | string | 日志级别: `debug`, `info`, `warn`, `error`。 | `debug` |
+| `-log.level` | string | 日志级别: `debug`, `info`, `warn`, `error`。支持 SIGHUP 热重载。 | `info` |
 | `-log.format` | string | 日志格式: `logfmt` 或 `json`。 | `logfmt` |
 | `-file` | string | 指定配置文件的路径。 | - |
 | `-web.config.file` | string | Web 配置文件路径，用于给 exporter 自身的监听端口启用 TLS 与 HTTP Basic Auth。详见[安全加固](#安全加固)。 | - |

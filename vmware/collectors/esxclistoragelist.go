@@ -33,6 +33,9 @@ var esxclistoragelistCollectorFlag = flag.Bool("collector.esxcli.storage", colle
 
 type esxclistoragelistCollector struct {
 	logger *slog.Logger
+	// descs 跟随 collector 实例（每轮抓取新建），按 label 组合复用 Desc，
+	// 避免每个存储设备 NewDesc，见 esxcliDescCache（P-01）。
+	descs *esxcliDescCache
 }
 
 func init() {
@@ -40,7 +43,7 @@ func init() {
 }
 
 func NewesxcliStorageListCCollector(logger *slog.Logger) (collector.Collector, error) {
-	return &esxclistoragelistCollector{logger}, nil
+	return &esxclistoragelistCollector{logger: logger, descs: newEsxcliDescCache()}, nil
 }
 
 func (c *esxclistoragelistCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s *collector.Scrape) error {
@@ -67,7 +70,7 @@ func (c *esxclistoragelistCollector) Update(ctx context.Context, ch chan<- prome
 			dispatched++
 
 			g.Go(func() error {
-				esxcliStorageDriverInfo(gctx, ch, c.logger, s, host, &esxclistoragelistSubsystem)
+				esxcliStorageDriverInfo(gctx, ch, c.logger, s, host, &esxclistoragelistSubsystem, c.descs)
 				return nil
 			})
 
@@ -95,7 +98,7 @@ func (c *esxclistoragelistCollector) Update(ctx context.Context, ch chan<- prome
 }
 
 func esxcliStorageDriverInfo(ctx context.Context, ch chan<- prometheus.Metric, logger *slog.Logger,
-	s *collector.Scrape, host mo.HostSystem, subsystem *string) {
+	s *collector.Scrape, host mo.HostSystem, subsystem *string, descs *esxcliDescCache) {
 
 	var (
 		data StorageResponse
@@ -131,12 +134,23 @@ func esxcliStorageDriverInfo(ctx context.Context, ch chan<- prometheus.Metric, l
 			continue
 		}
 
-		ch <- prometheus.MustNewConstMetric(
-			prometheus.NewDesc(
-				prometheus.BuildFQName(s.Namespace, *subsystem, "driver"),
-				"Storage device driver info", nil, map[string]string{"mo": host.Self.Value, "host": host.Name, "vendor": strings.TrimSpace(storage.Vendor), "model": strings.TrimSpace(storage.Model), "revision": strings.TrimSpace(storage.Revision)},
-			), prometheus.GaugeValue, float64(1),
+		// 逐实体的 mo/host 走 variableLabels，vendor/model/revision 走
+		// constLabels（P-01）。同型号设备跨主机复用同一个 Desc；exposition 的
+		// label 名/值/基数与改前逐字一致。
+		constLabels := map[string]string{
+			"vendor":   strings.TrimSpace(storage.Vendor),
+			"model":    strings.TrimSpace(storage.Model),
+			"revision": strings.TrimSpace(storage.Revision),
+		}
+		desc := descs.get(
+			prometheus.BuildFQName(s.Namespace, *subsystem, "driver"),
+			"Storage device driver info",
+			[]string{"mo", "host"},
+			constLabels,
 		)
+		// variableLabels 传值顺序须与声明一致：mo, host。
+		ch <- prometheus.MustNewConstMetric(desc, prometheus.GaugeValue, float64(1),
+			host.Self.Value, host.Name)
 	}
 
 }

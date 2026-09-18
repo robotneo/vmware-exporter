@@ -1,24 +1,12 @@
 package main
 
-import "testing"
-
-func TestSplitHost(t *testing.T) {
-	cases := []struct {
-		in   string
-		want string
-	}{
-		{"vcenter.example.com:443", "vcenter.example.com"},
-		{"10.0.0.5:443", "10.0.0.5"},
-		{"[2001:db8::1]:443", "2001:db8::1"},
-		{"127.0.0.1", "127.0.0.1"}, // 无端口也能匹配（vcsim 风格）
-		{"VC.Corp:443", "vc.corp"}, // 小写化
-	}
-	for _, c := range cases {
-		if got := splitHost(c.in); got != c.want {
-			t.Errorf("splitHost(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
+import (
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestSplitRules(t *testing.T) {
 	got := splitRules(" .example.com , 10.0.0.0/8 ,, vc.corp ")
@@ -84,5 +72,49 @@ func TestTargetAllowedByRules(t *testing.T) {
 				t.Errorf("targetAllowedByRules(%q, %v) = %v, want %v", c.host, rules, got, c.want)
 			}
 		})
+	}
+}
+
+// TestProbeUserinfoBypassBlocked 是 S-01 的端到端回归：白名单配置后，
+// userinfo 注入等混淆 target 必须在 handler 层先被拒成 400（畸形 target），
+// 而不是靠后缀匹配放行；白名单外的正常主机仍是 403。
+func TestProbeUserinfoBypassBlocked(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	withAllowedTargetsFlag(t, ".example.com,10.0.0.0/8")
+
+	malformed := []string{
+		"allowed.example.com:443@169.254.169.254",
+		"allowed.example.com@169.254.169.254",
+		"allowed.example.com/path",
+		"allowed.example.com?x=1",
+		"allowed.example.com#@169.254.169.254",
+	}
+
+	for _, raw := range malformed {
+		req := httptest.NewRequest(http.MethodGet, "/probe?target="+raw, nil)
+		rec := httptest.NewRecorder()
+		probeHandler(rec, req, logger)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("target %q: status = %d, want %d", raw, rec.Code, http.StatusBadRequest)
+		}
+	}
+}
+
+// TestCheckTargetNormalizesAuthority 验证同一个 target 的大小写/空白差异不会
+// 形成不同的错误计数桶，且正常 host:port 能通过白名单。
+func TestCheckTargetNormalizesAuthority(t *testing.T) {
+	withAllowedTargetsFlag(t, ".example.com")
+
+	ep, ok := checkTarget("  VC.Example.com:443 ")
+	if !ok {
+		t.Fatal("normalized allowlisted target must pass")
+	}
+	if ep.Host != "vc.example.com" || ep.Authority != "vc.example.com:443" {
+		t.Fatalf("endpoint = %+v, want normalized host/authority", ep)
+	}
+
+	if _, ok := checkTarget("allowed.example.com:443@evil.example.org"); ok {
+		t.Fatal("userinfo target must be rejected")
 	}
 }
