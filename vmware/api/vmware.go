@@ -41,6 +41,12 @@ var (
 	// 0 表示不分块（v0.1.19 及更早的行为），小规模环境或 ESXi 直连可显式设 0。
 	vmwPerfChunkSize = flag.Int("vmware.perf.chunk-size", 64,
 		"Maximum number of entities (hosts/VMs/datastores) per QueryPerf SOAP request. Chunks run with bounded concurrency and merge in entity order. 0 disables chunking (single request, pre-v0.1.20 behavior).")
+
+	// counterCacheTTL 控制 PerfCounterInfo 元数据在 /metrics 路径的复用时长
+	// （P-03）。默认 10m；0 关闭、每次登录实时拉取。只在 /metrics 生效，
+	// /probe 多租户路径永不读缓存。
+	vmwCounterCacheTTL = flag.Duration("scrape.counter-cache-ttl", 10*time.Minute,
+		"How long the performance-counter metadata table (counter name to id/unit) is reused on the /metrics path. The cache key includes the target plus its vCenter About version/build, so an upgrade is picked up within one TTL. 0 fetches it on every login. Never used on the multi-tenant /probe path.")
 )
 
 // logoutTimeout 是 SOAP Logout 单独使用的超时。抓取用的 ctx 在 Logout 时
@@ -79,6 +85,11 @@ func ValidateFlags() error {
 		return fmt.Errorf("-vmware.perf.chunk-size must be greater than or equal to 0, got %d", cfg.chunkSize)
 	}
 
+	// 0 关闭计数器缓存（每次登录实时拉取），合法；拒负数。
+	if cfg.counterCacheTTL < 0 {
+		return fmt.Errorf("-scrape.counter-cache-ttl must be greater than or equal to 0, got %s", cfg.counterCacheTTL)
+	}
+
 	if cfg.schema != "http" && cfg.schema != "https" {
 		return fmt.Errorf(`-vmware.schema must be either "http" or "https", got %q`, cfg.schema)
 	}
@@ -100,15 +111,16 @@ func ValidateFlags() error {
 // interval 取新值、granularity 取旧值，算出的 samples 是任何一份配置里
 // 都不存在的数。
 type settings struct {
-	user        string
-	passwd      string
-	vcenter     string
-	schema      string
-	insecureTLS bool
-	interval    int
-	granularity int
-	timeout     int
-	chunkSize   int
+	user            string
+	passwd          string
+	vcenter         string
+	schema          string
+	insecureTLS     bool
+	interval        int
+	granularity     int
+	timeout         int
+	chunkSize       int
+	counterCacheTTL time.Duration
 }
 
 // currentSettings 在读锁保护下一次性拷出全部 vmware.* flag。
@@ -120,15 +132,16 @@ func currentSettings() settings {
 
 	config.Snapshot(func() {
 		s = settings{
-			user:        *vmwUser,
-			passwd:      *vmwPasswd,
-			vcenter:     *vCenter,
-			schema:      *vmwSchema,
-			insecureTLS: *vmwTLS,
-			interval:    *vmwInterval,
-			granularity: *vmGranularity,
-			timeout:     *vmwTimeout,
-			chunkSize:   *vmwPerfChunkSize,
+			user:            *vmwUser,
+			passwd:          *vmwPasswd,
+			vcenter:         *vCenter,
+			schema:          *vmwSchema,
+			insecureTLS:     *vmwTLS,
+			interval:        *vmwInterval,
+			granularity:     *vmGranularity,
+			timeout:         *vmwTimeout,
+			chunkSize:       *vmwPerfChunkSize,
+			counterCacheTTL: *vmwCounterCacheTTL,
 		}
 	})
 
@@ -136,7 +149,10 @@ func currentSettings() settings {
 }
 
 type VMware struct {
-	//logger log.Logger
+	// counterCache 非 nil 时（仅 /metrics 的单服务级凭证路径构造）在登录时
+	// 按 target+About 版本缓存计数器元数据（P-03）。/probe 与裸 NewAPI()
+	// 保持 nil，每请求实时拉取，与 InventoryCache 同一条越权读边界。
+	counterCache *CounterCache
 }
 
 // Credentials 存储每个 target 的凭证
@@ -153,8 +169,18 @@ type Credentials struct {
 // 改动前本包的 init() 会调用 collector.RegisterAPI(NewAPI())，把实例存进
 // 框架的一个包级私有变量。现在 CollectorSet 通过 Options.Login 显式接收
 // 实现 —— 依赖关系从「藏在 init() 里的全局副作用」变成了构造参数。
+//
+// 不带计数器缓存：/probe 多租户路径与不想要缓存的调用方用它，计数器元数据
+// 每请求实时拉取。/metrics 路径用 NewAPIWithCounterCache。
 func NewAPI() *VMware {
 	return &VMware{}
+}
+
+// NewAPIWithCounterCache 构造一个带进程级计数器元数据缓存的工厂（P-03）。
+// 只应由使用单一服务级凭证的 /metrics 路径使用；cache 为 nil 或 TTL<=0 时
+// 自动回退为与 NewAPI 相同的实时行为。
+func NewAPIWithCounterCache(cache *CounterCache) *VMware {
+	return &VMware{counterCache: cache}
 }
 
 func Load(logger *slog.Logger) {
@@ -296,7 +322,17 @@ func (vm *VMware) loginWithCredentials(ctx context.Context, creds Credentials,
 
 	perf := performance.NewManager(client)
 
-	counters, err := perf.CounterInfoByName(scrapeCtx)
+	// 计数器元数据按 target+About 版本/build 缓存（P-03），仅 /metrics 注入了
+	// counterCache。Version/Build 随 ServiceContent 在登录时已返回，取键零额外
+	// 往返；升级换 build 后第一个请求天然 miss，最多一个 TTL 生效。/probe 与
+	// NewAPI() 的 cache 为 nil，Get 直接旁路、保持每请求实时。
+	cacheKey := counterCacheKey(
+		creds.Target,
+		client.ServiceContent.About.Version,
+		client.ServiceContent.About.Build,
+	)
+
+	counters, err := vm.counterCache.Get(scrapeCtx, cacheKey, perf, cfg.counterCacheTTL, time.Now())
 	if err != nil {
 		// 这里已经登录成功了，必须走完整 cleanup 释放服务端会话。
 		cleanup()

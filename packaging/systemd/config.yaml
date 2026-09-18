@@ -76,6 +76,13 @@ vmware.perf.chunk-size: 64
 # 永远不使用本缓存。
 scrape.inventory-cache-ttl: 5m
 
+# 性能计数器元数据表（计数器名 → id/单位）的复用有效期。该表只随
+# vCenter 升级/补丁变化，缓存键含 target 与 vCenter About 版本/build，
+# 升级后最多一个 TTL 内自然刷新。不缓存时每次抓取登录都要付一次 SOAP
+# 往返 + 整表 XML 解析 + map 重建。填 0 表示每次登录实时拉取。
+# 多租户 /probe 路径永远不使用本缓存。
+scrape.counter-cache-ttl: 10m
+
 
 # ── 采集器开关 ──────────────────────────────────────────────────────────
 #

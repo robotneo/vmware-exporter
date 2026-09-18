@@ -1,0 +1,43 @@
+P-03 计数器元数据缓存：before/after 对照
+=========================================
+
+采集命令（两条 benchmark 在同一文件、同一 vcsim VPX 模型下）：
+
+  go test ./vmware/api/ -run '^$' \
+    -bench 'CounterCacheLive|CounterCacheHit' \
+    -benchmem -benchtime=300x
+
+环境：darwin/amd64, Intel Core i5-7360U @ 2.30GHz, go（本机工具链）。
+模型：simulator.VPX()，560 个 PerfCounterInfo（vcsim 默认计数器表）。
+
+结果
+----
+BenchmarkCounterCacheLive-4   300  47812893 ns/op  560 counters  10086103 B/op  203721 allocs/op
+BenchmarkCounterCacheHit-4    300       206.6 ns/op  560 counters      272 B/op       2 allocs/op
+
+解读
+----
+- Live（= P-03 之前每次抓取登录后的行为）：新建 performance.Manager 后裸调
+  CounterInfoByName，触发一次 QueryPerfProvider 无关的 perfCounter 属性 SOAP
+  往返 + 整张计数器表 XML 解析 + by-name map 重建：约 47.8 ms、10.1 MB、
+  203,721 次分配/每次登录。
+- Hit（= P-03 之后 /metrics 稳态）：TTL 内命中进程级 CounterCache，只剩一次
+  加锁读 map：约 0.21 us、272 B、2 次分配。
+- 延迟约 23 万倍、每次登录分配从 10.1 MB 降到 272 B。vcsim 是本机 loopback，
+  真实 vCenter 的 SOAP 往返是跨网络的，生产上省下的墙钟时间只会更大。
+
+方法论（为什么旧基准是错的）
+----------------------------
+govmomi 的 performance.Manager 自带实例内缓存：CounterInfo 只拉一次 perfCounter
+属性、CounterInfoByName 只建一次 by-name map，之后在「同一个 Manager 实例」上
+直接返回缓存（见 govmomi@v0.56.0 performance/manager.go）。
+
+但本 exporter 生产路径在每次登录里都 `performance.NewManager(client)`
+（vmware/api/vmware.go），Manager 随本次抓取创建、Logout 后丢弃，所以 govmomi
+的实例内缓存从不跨抓取复用 —— 每次抓取都实打实付一次 SOAP 往返。
+
+早先的基准（vmware/collectors 下的 BenchmarkCounterInfoByName，已删除）在同一个
+预先拉过计数器的 Manager 上反复循环，于是命中了 govmomi 实例内缓存，只测出
+~15 ms / 45 KB / 577 allocs 这个既非纯命中、也非真实「每次登录」的失真数字。
+正确做法是 benchmark 每轮新建 Manager（见 countercache_bench_test.go），才能
+复刻生产「每次登录」；缓存组每轮也传一个全新 Manager，以证明命中时完全不触达它。

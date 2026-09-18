@@ -126,6 +126,11 @@ var (
 // 刻意不传给 probeHandler：见 inventoryCacheTTL 的安全说明。
 var inventoryCache = collector.NewInventoryCache()
 
+// counterCache 是 /metrics 路径共享的进程级 PerfCounterInfo 缓存单例（P-03）。
+// TTL 不在构造时固定，而由 -scrape.counter-cache-ttl 的配置快照在每次登录
+// 传入，因此 SIGHUP 改值立即生效。刻意不传给 probeHandler。
+var counterCache = vmware.NewCounterCache()
+
 // HTTP server 超时。不设 WriteTimeout：一次抓取可能跑满 -vmware.timeout
 // （默认 60s），WriteTimeout 会从读完请求头开始计时并掐断正常的慢响应；
 // 抓取时长本就由 -vmware.timeout 与请求 context 兜住。
