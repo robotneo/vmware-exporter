@@ -129,6 +129,7 @@ func TestLoginFailureEmitsUpZero(t *testing.T) {
 		Target:    "vcenter.example.com",
 		Login:     login,
 		Errors:    NewScrapeErrors(),
+		SOAP:      NewSOAPStats(),
 	})
 	if err != nil {
 		t.Fatalf("NewCollectorSet failed: %s", err)
@@ -175,6 +176,7 @@ func TestCollectInjectsNamespaceAndConcurrency(t *testing.T) {
 		Login:          login,
 		MaxConcurrency: 17,
 		Errors:         NewScrapeErrors(),
+		SOAP:           NewSOAPStats(),
 	})
 	if err != nil {
 		t.Fatalf("NewCollectorSet failed: %s", err)
@@ -242,6 +244,7 @@ func TestPanickingCollectorDoesNotKillTheProcess(t *testing.T) {
 		Target:    "vcenter.example.com",
 		Login:     login,
 		Errors:    errs,
+		SOAP:      NewSOAPStats(),
 	})
 	if err != nil {
 		t.Fatalf("NewCollectorSet failed: %s", err)
@@ -346,6 +349,7 @@ func TestMaxConcurrencyRespected(t *testing.T) {
 		Login:          login,
 		MaxConcurrency: limit,
 		Errors:         NewScrapeErrors(),
+		SOAP:           NewSOAPStats(),
 	})
 	if err != nil {
 		t.Fatalf("NewCollectorSet failed: %s", err)
@@ -491,6 +495,7 @@ func TestEntityMetricsAreEmittedAfterScrape(t *testing.T) {
 		Target:    "vcenter.example.com",
 		Login:     &stubLogin{scrape: &Scrape{Target: "vcenter.example.com"}},
 		Errors:    NewScrapeErrors(),
+		SOAP:      NewSOAPStats(),
 	})
 	if err != nil {
 		t.Fatalf("NewCollectorSet failed: %s", err)

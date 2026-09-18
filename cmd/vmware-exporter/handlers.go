@@ -35,6 +35,10 @@ const maxProbeBodyBytes = 1 << 20
 // 按 target 分桶互不干扰。
 var scrapeErrors = collector.NewScrapeErrors()
 
+// soapStats 是 SOAP 往返自监控的进程级累加状态（P-09），与 scrapeErrors
+// 同生命周期、同边界：/metrics 与 /probe 共用一份，按 target 有界分桶。
+var soapStats = collector.NewSOAPStats()
+
 // scrapeInflightGate 是 /metrics 与 /probe 共用的进程级"同时抓取数"闸。
 // 只包住真正连 vCenter 的抓取；-disable.exporter.target 时 /metrics 只输出
 // exporter 自身指标（轻量、不登录），不计入闸内。
@@ -234,6 +238,7 @@ func metricsHandler(logger *slog.Logger) http.HandlerFunc {
 			InventoryCache: inventoryCache,
 			InventoryTTL:   cfg.inventoryTTL,
 			Errors:         scrapeErrors,
+			SOAP:           soapStats,
 		})
 		if err != nil {
 			logger.Error("could not create the collector set", "error", err)
@@ -374,6 +379,7 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 		Enabled:        enabledCollectors,
 		MaxConcurrency: currentMaxConcurrency(),
 		Errors:         scrapeErrors,
+		SOAP:           soapStats,
 	})
 	if err != nil {
 		logger.Error("could not create the collector set", "target", endpoint.Authority, "error", err)

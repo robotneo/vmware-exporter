@@ -10,8 +10,10 @@ change. `scripts/check_config.py` enforces it — a metric declared in the code
 but missing here (or listed here but absent from the code) fails the check.
 
 - Namespace: all metrics are prefixed `vmware_`.
-- Type: everything is a **gauge** except `vmware_scrape_errors_total`
-  (counter) and `vmware_exporter_build_info` (gauge, value always 1).
+- Type: everything is a **gauge** except the counters
+  `vmware_scrape_errors_total` and `vmware_soap_requests_total`, the
+  `vmware_soap_throttle_wait_seconds` histogram, and `vmware_exporter_build_info`
+  (gauge, value always 1).
 - `*_info` metrics always have the value `1`. They exist to carry labels, which
   you join onto the numeric series — see [Joining on `_info`
   metrics](#joining-on-_info-metrics).
@@ -48,6 +50,9 @@ distinct from whether vSphere is healthy.
 | `vmware_scrape_entities_found` | `collector`, `kind`, `vcenter` | **Gauge, per-scrape snapshot.** Entities discovered in the inventory during the last scrape, by collector and entity kind — e.g. `collector="vm", kind="vm"`. This counts *every* entity, including powered-off VMs and disconnected/maintenance hosts (see the breaking-change note below). |
 | `vmware_scrape_entities_emitted` | `collector`, `kind`, `vcenter` | **Gauge, per-scrape snapshot.** Entities for which data-plane metrics (performance counters, esxcli) were emitted. Static inventory metrics (`_info`, capacity, status) are emitted for every entity; only the perf data plane skips entities vCenter has no real-time samples for. |
 | `vmware_scrape_entities_skipped` | `collector`, `kind`, `reason`, `vcenter` | **Gauge, per-scrape snapshot.** Entities skipped by a data-plane metric during the last scrape, by reason: `powered_off`, `suspended`, `disconnected`, `not_responding`, `maintenance`, `unsupported`, `error`. Every reason a collector cares about is pre-filled with `0`, so the series set is stable and alerts need no `absent()`/`or`. An entity can match more than one reason (e.g. maintenance *and* disconnected), so summing across reasons can exceed the number of skipped entities. Alert on the raw gauge (`> 0`) or on `found - emitted`, never on `rate()` — it is not a counter. |
+| `vmware_soap_requests_total` | `vcenter`, `result` | **Counter.** Total SOAP round trips issued to the target, accumulated across scrapes. `result="ok"` / `result="error"` splits transport and SOAP-fault failures from successful calls; requests that never acquired the concurrency token are not counted. Use `rate()` to quantify the load each scrape puts on vCenter and to alert on a rising error rate. |
+| `vmware_soap_inflight` | `vcenter` | **Gauge, last-scrape snapshot.** Peak number of SOAP round trips simultaneously in flight during the last scrape. At scrape time the value in flight is always 0, so only the peak is useful; it is bounded by `-collector.max-concurrency` when that is greater than zero. Compare it against the limit to judge whether fan-out is saturating the gate. |
+| `vmware_soap_throttle_wait_seconds` | `vcenter` | **Histogram.** Time spent queued for the SOAP concurrency-limiter token before a round trip (buckets 1ms…10s). Only populated when `-collector.max-concurrency` is greater than zero. A high `rate(..._sum)/rate(..._count)` or a shift toward the upper buckets means the concurrency budget is the bottleneck, not vCenter latency. |
 | `vmware_exporter_build_info` | `version`, `revision`, `branch`, `goversion`, `goos`, `goarch`, `tags` | Always `1`. Answers "which build is this host running?" |
 | `vmware_exporter_config_last_reload_successful` | — | `1` when the last `systemctl reload` succeeded, `0` when it failed. **Worth alerting on:** `systemctl reload` exits 0 as long as the signal was delivered, so a rejected configuration is invisible otherwise. A failed reload keeps the previous configuration. |
 | `vmware_exporter_config_last_reload_success_timestamp_seconds` | — | Unix time of the last *successful* reload, or of process start if none has happened. |

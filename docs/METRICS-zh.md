@@ -9,7 +9,8 @@ flag，都必须在同一次改动里同步更新本文档。`scripts/check_conf
 代码里声明了但文档里没有（或文档里列了但代码里找不到）都会导致检查失败。
 
 - Namespace：所有指标的前缀都是 `vmware_`。
-- 类型：除 `vmware_scrape_errors_total`（counter）和 `vmware_exporter_build_info`
+- 类型：除 counter `vmware_scrape_errors_total`、`vmware_soap_requests_total`，
+  histogram `vmware_soap_throttle_wait_seconds`，以及 `vmware_exporter_build_info`
   （gauge，值恒为 1）之外，**全部是 gauge**。
 - `*_info` 指标的数值恒为 `1`，它们存在的意义是携带标签，供你 join 到数值型序列上
   —— 见 [Joining on `_info` 指标](#joining-on-_info-指标)。
@@ -45,6 +46,9 @@ flag，都必须在同一次改动里同步更新本文档。`scripts/check_conf
 | `vmware_scrape_entities_found` | `collector`, `kind`, `vcenter` | **Gauge，每轮抓取的快照。** 上一轮在清单中发现的实体数，按采集器和实体类型分维（例如 `collector="vm", kind="vm"`）。统计**所有**实体，包括关机 VM 和断连/维护中的主机（见下文破坏性变更说明）。 |
 | `vmware_scrape_entities_emitted` | `collector`, `kind`, `vcenter` | **Gauge，每轮抓取的快照。** 实际输出了数据面指标（性能计数器、esxcli）的实体数。静态清单指标（`_info`、容量、状态）对每个实体都输出；只有 perf 数据面会跳过 vCenter 没有实时采样的实体。 |
 | `vmware_scrape_entities_skipped` | `collector`, `kind`, `reason`, `vcenter` | **Gauge，每轮抓取的快照。** 上一轮被数据面指标跳过的实体数，按原因分维：`powered_off`、`suspended`、`disconnected`、`not_responding`、`maintenance`、`unsupported`、`error`。每个采集器关心的全部原因都会预填 `0` 值，序列集合稳定，告警不需要 `absent()`/`or` 兜底。同一实体可能同时命中多个原因（如既在维护中又断连），因此跨原因求和可能大于实际跳过数。请对原始 gauge（`> 0`）或 `found - emitted` 差值设告警，**不要**用 `rate()`——它不是 counter。 |
+| `vmware_soap_requests_total` | `vcenter`, `result` | **Counter。** 发往目标的 SOAP 往返总数，跨抓取累积。`result="ok"` / `result="error"` 区分成功与传输层/SOAP 故障失败；没能拿到并发令牌的请求不计入。用 `rate()` 量化每轮抓取给 vCenter 的压力，并对失败率上升设告警。 |
+| `vmware_soap_inflight` | `vcenter` | **Gauge，最近一轮快照。** 上一轮抓取中同时在飞的 SOAP 往返**峰值**。抓取时刻在飞数恒为 0，只有峰值有意义；`-collector.max-concurrency` 大于 0 时该值以其为上限。对照并发上限可判断 fan-out 是否打满了闸。 |
+| `vmware_soap_throttle_wait_seconds` | `vcenter` | **Histogram。** 每次往返发出前等待 SOAP 并发闸令牌的耗时（桶 1ms…10s）。仅在 `-collector.max-concurrency` 大于 0 时有值。若 `rate(..._sum)/rate(..._count)` 偏高或观测向高桶迁移，说明瓶颈是并发预算而非 vCenter 延迟。 |
 | `vmware_exporter_build_info` | `version`, `revision`, `branch`, `goversion`, `goos`, `goarch`, `tags` | 恒为 `1`。回答「当前宿主机跑的是哪个构建？」 |
 | `vmware_exporter_config_last_reload_successful` | — | `1` 表示上次 `systemctl reload` 成功，`0` 表示失败。**值得专门设告警：** `systemctl reload` 只要信号送达就返回 0，配置文件被拒绝时不会报错。失败的重载会保留旧配置。 |
 | `vmware_exporter_config_last_reload_success_timestamp_seconds` | — | 最后一次**成功**重载的 Unix 时间戳；如果从未重载过，则为进程启动时间。 |

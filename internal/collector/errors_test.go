@@ -37,6 +37,7 @@ func TestErrorsTotalAccumulatesAcrossScrapes(t *testing.T) {
 			Target:    "vcenter.example.com",
 			Login:     &stubLogin{scrape: &Scrape{Target: "vcenter.example.com"}},
 			Errors:    shared,
+			SOAP:      NewSOAPStats(),
 		})
 		if err != nil {
 			t.Fatalf("NewCollectorSet failed: %s", err)
@@ -73,6 +74,7 @@ func TestErrorsTotalSeedsZeroForHealthyCollectors(t *testing.T) {
 		Target:    "vcenter.example.com",
 		Login:     &stubLogin{scrape: &Scrape{Target: "vcenter.example.com"}},
 		Errors:    NewScrapeErrors(),
+		SOAP:      NewSOAPStats(),
 	})
 	if err != nil {
 		t.Fatalf("NewCollectorSet failed: %s", err)
@@ -106,6 +108,7 @@ func TestErrorsTotalCountsLoginFailure(t *testing.T) {
 		Target:    "vcenter.example.com",
 		Login:     &stubLogin{err: errors.New("invalid credentials")},
 		Errors:    NewScrapeErrors(),
+		SOAP:      NewSOAPStats(),
 	})
 	if err != nil {
 		t.Fatalf("NewCollectorSet failed: %s", err)
@@ -147,6 +150,7 @@ func TestErrorsTotalIsPerTarget(t *testing.T) {
 			Target:    target,
 			Login:     &stubLogin{scrape: &Scrape{Target: target}},
 			Errors:    shared,
+			SOAP:      NewSOAPStats(),
 		})
 		if err != nil {
 			t.Fatalf("NewCollectorSet failed: %s", err)

@@ -21,6 +21,12 @@ import (
 // 悄悄用上另一个标签值。
 const loginBucket = "login"
 
+// SOAP 请求结果标签取值（vmware_soap_requests_total{result=...}）。
+const (
+	resultLabelOK    = "ok"
+	resultLabelError = "error"
+)
+
 // ScrapeMetrics 是自监控指标的描述符集合。
 //
 // 名称与标签必须与框架产出的完全一致（框架 collector.go:84-96），
@@ -35,6 +41,9 @@ type ScrapeMetrics struct {
 	entitiesFound    *prometheus.Desc
 	entitiesEmitted  *prometheus.Desc
 	entitiesSkipped  *prometheus.Desc
+	soapRequests     *prometheus.Desc
+	soapInflight     *prometheus.Desc
+	soapWaitSeconds  *prometheus.Desc
 }
 
 // Login 抽象登录/登出，由 vmware/api 实现。
@@ -135,6 +144,31 @@ func newScrapeMetrics(namespace string) ScrapeMetrics {
 			[]string{"vcenter", "collector", "kind", "reason"},
 			nil,
 		),
+
+		// 以下三个是 SOAP 通道自监控（P-09）。前两个（请求计数、等闸耗时）是
+		// 跨轮累计的 counter/histogram，用来量化每轮给 vCenter 的往返压力与
+		// 并发闸排队成本；inflight 是「最近一轮在飞峰值」的 gauge —— 采集
+		// 时刻在飞数恒为 0，只有峰值对容量规划有意义。
+		soapRequests: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "", "soap_requests_total"),
+			"Total number of SOAP round trips issued to the target, by result. \"error\" covers transport and SOAP fault failures; requests that never acquired the concurrency token are not counted.",
+			[]string{"vcenter", "result"},
+			nil,
+		),
+
+		soapInflight: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "", "soap_inflight"),
+			"Peak number of SOAP round trips simultaneously in flight during the last scrape. Capped by -collector.max-concurrency when that is greater than zero.",
+			[]string{"vcenter"},
+			nil,
+		),
+
+		soapWaitSeconds: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "", "soap_throttle_wait_seconds"),
+			"Time spent waiting for the SOAP concurrency limiter token before a round trip. Only populated when -collector.max-concurrency is greater than zero.",
+			[]string{"vcenter"},
+			nil,
+		),
 	}
 }
 
@@ -167,6 +201,10 @@ type CollectorSet struct {
 	// 不能是本结构体拥有的状态 —— 见 errors.go 顶部关于「每请求一实例」
 	// 与 counter 单调性的说明。
 	errors *ScrapeErrors
+
+	// soap 是跨请求共享的 SOAP 往返统计，同理必须在请求外持有：请求计数是
+	// counter，放进每请求新建的 CollectorSet 会每轮归零（P-09）。
+	soap *SOAPStats
 }
 
 // Options 是构造 CollectorSet 所需的参数。
@@ -202,6 +240,9 @@ type Options struct {
 	// 安静的 counter，测试与人眼都不容易发现。宁可让忘记传的调用方
 	// 在构造时就拿到 error。
 	Errors *ScrapeErrors
+
+	// SOAP 是跨请求累积的 SOAP 往返统计（P-09）。必填，理由同 Errors。
+	SOAP *SOAPStats
 }
 
 // NewCollectorSet 按 definitions 与 opts.Enabled 构造本轮要运行的 collector 集合。
@@ -212,6 +253,10 @@ func NewCollectorSet(ctx context.Context, definitions []Definition, opts Options
 
 	if opts.Errors == nil {
 		return nil, fmt.Errorf("collector set requires a ScrapeErrors counter")
+	}
+
+	if opts.SOAP == nil {
+		return nil, fmt.Errorf("collector set requires a SOAPStats counter")
 	}
 
 	logger := opts.Logger
@@ -257,6 +302,7 @@ func NewCollectorSet(ctx context.Context, definitions []Definition, opts Options
 		logger:         logger,
 		metrics:        newScrapeMetrics(opts.Namespace),
 		errors:         opts.Errors,
+		soap:           opts.SOAP,
 	}, nil
 }
 
@@ -286,6 +332,9 @@ func (cs *CollectorSet) Describe(ch chan<- *prometheus.Desc) {
 	ch <- cs.metrics.entitiesFound
 	ch <- cs.metrics.entitiesEmitted
 	ch <- cs.metrics.entitiesSkipped
+	ch <- cs.metrics.soapRequests
+	ch <- cs.metrics.soapInflight
+	ch <- cs.metrics.soapWaitSeconds
 }
 
 // Collect 实现 prometheus.Collector：登录、并发跑所有 collector、登出。
@@ -305,6 +354,13 @@ func (cs *CollectorSet) Describe(ch chan<- *prometheus.Desc) {
 func (cs *CollectorSet) Collect(ch chan<- prometheus.Metric) {
 	begin := time.Now()
 
+	// s 在 defer 之前声明：SOAP 统计的 flush 放在最外层 defer 里，而该 defer
+	// 是本函数第一个注册的，LIFO 下**最后**执行 —— 那时 cleanup（Logout）已经
+	// 跑完，登出这次往返也已计入 recorder。登录失败或未开始时 s 为 nil，
+	// emitSOAP 仍导出零值/累计序列，保证序列不缺失。
+	var s *Scrape
+	var err error
+
 	// duration 无论走哪条路径都要产出，否则「抓取有多慢」这个问题在失败
 	// 的情况下反而没有数据 —— 而那正是最需要它的时候。
 	//
@@ -316,11 +372,13 @@ func (cs *CollectorSet) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(cs.metrics.duration, prometheus.GaugeValue, time.Since(begin).Seconds())
 
 		cs.emitErrors(ch)
+		cs.emitSOAP(ch, s)
 	}()
 
 	loginBegin := time.Now()
 
-	s, cleanup, err := cs.login.Login(cs.ctx, cs.target)
+	var cleanup func()
+	s, cleanup, err = cs.login.Login(cs.ctx, cs.target)
 	if cleanup != nil {
 		defer cleanup()
 	}
@@ -494,4 +552,31 @@ func (cs *CollectorSet) emitErrors(ch chan<- prometheus.Metric) {
 		// 不会有任何报错，只会让 promtool 的 lint 与 rate() 的语义悄悄失效。
 		ch <- prometheus.MustNewConstMetric(cs.metrics.errorsTotal, prometheus.CounterValue, count, name)
 	}
+}
+
+// emitSOAP 把本轮 recorder 的记录并入进程级 SOAPStats，并导出三个 SOAP 自监控
+// 指标（P-09）。在 Collect 的最外层 defer 里调用：那时 Logout 已完成，登出
+// 往返也被计入。
+//
+// s 为 nil（登录失败/未开始）或 soapRec 为 nil（理论上不会，ThrottleSOAP
+// 总会安装）时不写入新观测，只导出该 target 的既有累计值或零值 —— 与
+// errors_total 的 seed 同理，保证序列在「一切正常」时也存在，告警不会无数据。
+func (cs *CollectorSet) emitSOAP(ch chan<- prometheus.Metric, s *Scrape) {
+	var view SOAPView
+	if s != nil && s.soapRec != nil {
+		view = cs.soap.Observe(cs.target, s.soapRec.snapshot())
+	} else {
+		view = cs.soap.Snapshot(cs.target)
+	}
+
+	ch <- prometheus.MustNewConstMetric(cs.metrics.soapRequests, prometheus.CounterValue,
+		view.RequestsOK, cs.target, resultLabelOK)
+	ch <- prometheus.MustNewConstMetric(cs.metrics.soapRequests, prometheus.CounterValue,
+		view.RequestsFail, cs.target, resultLabelError)
+
+	ch <- prometheus.MustNewConstMetric(cs.metrics.soapInflight, prometheus.GaugeValue,
+		view.InflightPeak, cs.target)
+
+	ch <- prometheus.MustNewConstHistogram(cs.metrics.soapWaitSeconds,
+		view.WaitCount, view.WaitSum, view.WaitBuckets, cs.target)
 }

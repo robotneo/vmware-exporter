@@ -325,6 +325,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Datastore path-cleanup regexp compiled once** at package level instead of
   being recompiled on every datastore scrape.
 
+### 📊 Observability — SOAP transport metrics (batch B, P-09)
+
+- Three new self-monitoring series make the SOAP load on vCenter measurable,
+  which until now had no instrumentation at all:
+  - `vmware_soap_requests_total{vcenter,result}` — **counter**, total round
+    trips accumulated across scrapes, split into `ok`/`error`. Requests that
+    never acquired the concurrency token are not counted.
+  - `vmware_soap_inflight{vcenter}` — **gauge**, peak round trips in flight
+    during the *last* scrape (the instantaneous value is always 0 at scrape
+    time; the peak is bounded by `-collector.max-concurrency` when set).
+  - `vmware_soap_throttle_wait_seconds{vcenter}` — **histogram** of time spent
+    queued for the SOAP concurrency token (buckets 1ms–10s), populated only
+    when `-collector.max-concurrency` is greater than zero.
+  Counts and the wait histogram are process-level and accumulate per target
+  (shared across `/metrics` and `/probe`), so `rate()` works; the distinct
+  target set is LRU-bounded (1000) with the same normalization as the scrape
+  error counter, so a `/probe` caller cannot grow the map without limit.
+  Instrumentation is now installed on the SOAP transport at *any* concurrency
+  setting — at `-collector.max-concurrency=0` it is a pure pass-through wrapper
+  that still counts, with no semaphore.
+
 ### 🔧 Fixed
 
 - **systemd unit no longer kills the service on reload.** The exporter used to
