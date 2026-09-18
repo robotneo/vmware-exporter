@@ -346,6 +346,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   setting — at `-collector.max-concurrency=0` it is a pure pass-through wrapper
   that still counts, with no semaphore.
 
+### ⚡ Performance — scrape CPU/memory batch C (P-03, P-08b)
+
+- **Counter metadata is now cached on `/metrics` (P-03).** Every scrape builds
+  a fresh `performance.Manager`, so govmomi's own *per-Manager* counter cache
+  never survives a login — without this change each scrape paid a SOAP round
+  trip plus a full parse of the `perfCounter` table and a by-name map rebuild on
+  login. A new process-level `CounterCache` (singleflight-coalesced misses,
+  failures not cached, TTL supplied per lookup so SIGHUP reloads apply at once)
+  is keyed by target plus the vCenter About version/build; an upgrade is picked
+  up within one TTL. New flag `-scrape.counter-cache-ttl` (default `10m`, `0`
+  restores fetch-on-every-login). Like the inventory cache it is injected on
+  `/metrics` only and stays live on the multi-tenant `/probe` path. Measured on
+  a vcsim-sized table (560 counters) the login step goes from ~48 ms / 10 MiB /
+  ~204k allocations to a ~0.2 µs in-process map read; real vCenter saves the
+  cross-network round trip on top. Numbers and the methodology note (why a
+  reused-Manager benchmark is misleading) are in
+  `docs/perf/p03-counter-cache.txt`.
+- **Perf result-set memory hygiene (P-08b, conservative).** `rawSeries` is now
+  pre-sized to the sum of chunk lengths instead of growing via append, the
+  duplicate `parts` reference is dropped right after merging, and the raw SOAP
+  wrapper structs (`PerfEntityMetric`/`PerfMetricIntSeries`) are released as
+  soon as `ToMetricSeries` returns (the returned series only shares the int64
+  sample/SampleInfo backing arrays). This shrinks live-set during the long emit
+  phase; a controlled benchmark shows total allocs/B/op are unchanged within
+  noise (~45.4 MiB / ~848k allocs for 500 powered-on VMs) — the dominant cost is
+  govmomi SOAP XML decode plus `ToMetricSeries`, which only the higher-risk
+  streaming parse (P-08b-1, a later batch) can reduce. Metric output is
+  byte-identical (full test suite green); see
+  `docs/perf/p08b-perf-resultset.txt`.
+
 ### 🔧 Fixed
 
 - **systemd unit no longer kills the service on reload.** The exporter used to

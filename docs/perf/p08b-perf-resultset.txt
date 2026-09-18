@@ -1,0 +1,57 @@
+P-08b perf 结果集内存收敛（保守版）：before/after 对照
+========================================================
+
+采集命令：
+
+  go test ./vmware/collectors/ -run '^$' -bench 'VMPerf' \
+    -benchmem -benchtime=10x -count=2
+
+环境：darwin/amd64, Intel Core i5-7360U @ 2.30GHz。
+模型：simulator.VPX()，1 datacenter / 1 standalone host / 1 datastore /
+500 powered-on VM（见 perfbench_test.go 的 benchModel）。
+
+结果（只取 metrics/iter 相同、可直接比较的 5500 行）
+-----------------------------------------------------
+before  BenchmarkVMPerfScrape-4  10  140968520 ns/op  5500 metrics/iter  45386334 B/op  848190 allocs/op
+after   BenchmarkVMPerfScrape-4  10  169064530 ns/op  5500 metrics/iter  45376028 B/op  848443 allocs/op
+
+差异：B/op -0.02%，allocs/op +0.03% —— 都在运行噪声内。延迟两次运行本身
+就在 141~194ms 间抖动，无可测差异。
+
+改动内容（vmware/collectors/scrape.go::scrapePerformance）
+----------------------------------------------------------
+1. rawSeries 从「nil + append 翻倍扩容」改为按各分块长度之和预分配容量，
+   消除几千实体合并时的十几次重新分配与被丢弃的旧 backing array。
+2. 合并完成后立即 parts = nil：parts 与 rawSeries 双重持有同一批接口头，
+   合并后 parts 这一路不再需要。
+3. perfManager.ToMetricSeries 返回后立即 rawSeries = nil（含出错路径）：
+   返回的 []EntityMetric 只与入参共享 int64 样本与 SampleInfo 的底层数组，
+   PerfEntityMetric / PerfMetricIntSeries 等 SOAP 包装结构体在转换后即可释放，
+   不必一直活到 emit 结束。
+
+为什么 benchmem 看不到收益（重要的诚实结论）
+--------------------------------------------
+- B/op 与 allocs/op 度量的是「整轮总共分配了多少」，而本改动缩短的是对象
+  「存活时间」、消除的是少量翻倍扩容的中间垃圾，二者本来就不在总量上显形。
+- 45 MB / 84.8 万次分配的绝对大头在 govmomi 的 SOAP XML 反序列化
+  （Query 返回值解码出完整 PerfEntityMetric 对象图）与 ToMetricSeries 的
+  逐层 []interface{} 类型断言/切片重建；这些在本次保守改造范围之外。
+- 我们自己的热路径此前已经做过预分配：每分块 specs、supportedCounters、
+  metricIDs、每条指标的 labelValues 都带容量；perfDesc 也早在 P2-4 做了
+  进程级 Desc 缓存（热路径只是值类型 key 查表）。所以「内层 slice 预分配」
+  这一项在现状代码里几乎没有剩下的空间。
+
+结论与后续
+----------
+保守 P-08b 是零风险的内存卫生改进（消除中间垃圾 + 尽早断开双重持有，压的是
+单次大抓取的理论存活堆峰值），全量测试指标输出逐字不变，值得保留；但不要
+期待它在总分配/延迟数字上带来可测收益。
+
+要实质削减这 45 MB / 85 万次分配，唯一的杠杆是 P-08b-1：在分块内对
+QueryPerf 响应做流式 XML 解析、边解码边发指标，不再先把整块对象图收集进
+parts/rawSeries 再统一转换。那会改动经过正确性修正的聚合（delta 求和 vs
+absolute 求平均）与尾部截断路径，属高风险项，需独立批次 + vcsim 逐指标
+golden 对照后才能合并，不在本保守版内。
+
+注：metrics/iter 在不同 vcsim 模型实例间偶发 5500/6000（计数器实例维度可用性
+差异），前后对比时取相同的 5500 行；模型规模（500 powered-on VM）恒定。

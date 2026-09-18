@@ -229,7 +229,7 @@ func metricsHandler(logger *slog.Logger) http.HandlerFunc {
 		cs, err := collector.NewCollectorSet(r.Context(), vmwareCollectors.Definitions(), collector.Options{
 			Namespace:      namespace,
 			Target:         "", // 空表示用 -vmware.vcenter
-			Login:          vmware.NewAPI(),
+			Login:          vmware.NewAPIWithCounterCache(counterCache),
 			Logger:         logger,
 			Enabled:        collector.Registered(),
 			MaxConcurrency: cfg.maxConcurrency,

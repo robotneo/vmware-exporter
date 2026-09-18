@@ -338,10 +338,22 @@ func scrapePerformance(ctx context.Context, ch chan<- prometheus.Metric, logger 
 		return
 	}
 
-	var rawSeries []types.BasePerfEntityMetricBase
+	// 二次合并成一条完整序列。预分配到各分块长度之和：目标实体可能因无可读
+	// 样本而缺测，所以按上界分配、实际可能略短，但这消除了从 nil 开始 append
+	// 的翻倍扩容（几千实体会触发十几次重新分配，旧 backing array 在 GC 前
+	// 一直计入峰值）。
+	totalSeries := 0
+	for _, part := range parts {
+		totalSeries += len(part)
+	}
+	rawSeries := make([]types.BasePerfEntityMetricBase, 0, totalSeries)
 	for _, part := range parts {
 		rawSeries = append(rawSeries, part...)
 	}
+	// parts 与 rawSeries 此刻双重持有同一批接口头；合并已完成，立即断掉 parts
+	// 这一路引用，让分块切片头数组可以回收（真正的指标结构体仍由 rawSeries
+	// 持有，下面转换完才释放）。
+	parts = nil
 
 	// 复刻 govmomi SampleByName 对历史查询的尾部截断：2× 窗口可能取回多于
 	// MaxSample 的点，只保留最后 MaxSample 个。不做这一步，datastore 的 300s
@@ -351,6 +363,12 @@ func scrapePerformance(ctx context.Context, ch chan<- prometheus.Metric, logger 
 	}
 
 	metrics, err := perfManager.ToMetricSeries(ctx, rawSeries)
+
+	// ToMetricSeries 的返回值只共享 int64 样本与 SampleInfo 的底层数组，
+	// PerfEntityMetric / PerfMetricIntSeries 这些 SOAP 包装结构体不再被需要。
+	// 转换一结束（含出错）就断开 rawSeries，让包装层在发指标这段最久的区间里
+	// 可被回收，压低单次大抓取的存活堆峰值。值数组仍由 metrics 持有到 emit 完。
+	rawSeries = nil
 	if err != nil {
 		logger.Error("error converting perf samples to metric series", "error", err, "type", moType)
 		return
