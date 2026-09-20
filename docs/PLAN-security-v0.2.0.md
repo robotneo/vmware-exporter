@@ -31,9 +31,9 @@
 | S-03 | P2 | systemd 下含密码 config.yaml 被迫 0644，本机任意用户可读 | packaging/systemd | ✅ 已修（S2：静态系统账号 + 0600；弃用 LoadCredential 以保 SIGHUP 热重载） |
 | S-04 | P2 | 容器镜像以 root 运行（FROM scratch 无 USER） | Dockerfile:64 | ✅ 已修（S2：USER 65534 + compose 加固） |
 | S-05 | P3 | `schema` 参数无白名单，可强制 http 明文传凭证 | handlers.go:293 | ✅ 已修（S1，http/https 白名单） |
-| S-06 | P3 | 白名单只做字符串匹配不做 DNS 解析（rebinding/主机名绕过残留） | targetfilter.go | 待修（建议与 S-01 合并） |
-| S-07 | P3 | 仍接受 GET 查询串里的 password（代理日志/Referer 泄漏面） | handlers.go:277 | 可选开关 |
-| S-08 | P3 | 默认无认证、debug 控制台默认开、无统一安全响应头 | main.go/ui.go | 待加固 |
+| S-06 | P3 | 白名单只做字符串匹配不做 DNS 解析（rebinding/主机名绕过残留） | targetfilter.go | ✅ 已修（S4：`internal/safedial` 在 govmomi transport 的 DialContext **与** DialTLSContext 上按 connect 前实际 IP 复核；默认拦链路本地/未指定，`-vmware.deny-private-addresses=true` 加严到环回/私网） |
+| S-07 | P3 | 仍接受 GET 查询串里的 password（代理日志/Referer 泄漏面） | handlers.go:277 | 可选开关（未做） |
+| S-08 | P3 | 默认无认证、debug 控制台默认开、无统一安全响应头 | main.go/ui.go | ✅ 已加固（S3：安全响应头 + 非回环无认证启动 warning；debug 控制台保留默认开，可用 `-web.debug-console=false` 关） |
 | S-09 | 信息 | 1 个间接依赖漏洞不可达；CI 已含 govulncheck；toolchain 钉 1.26.6 | go.mod / CI | 无需动作 |
 
 ### 2.2 内存溢出 / 无界状态增长（本轮新增）
@@ -41,9 +41,9 @@
 | 编号 | 级别 | 问题 | 位置 | 说明 |
 |---|---|---|---|---|
 | M-01 | P2 | `ScrapeErrors.counts` 的 key 含 **target**，/probe 接受任意 target 且白名单默认为空 → 未授权方可用海量不同 target 字符串让 map 无界增长（内存慢漏） | internal/collector/errors.go:23 | 本轮新排查重点 |
-| M-02 | P3 | `InventoryCache.entries` 按 target 分桶，过期项只在**再次访问同 key** 时删除；/metrics 为单一 target 实际有界，但无容量上限/兜底清扫，异常 target 形态下存在残留 | inventorycache.go:30 | 低风险，建议加防御 |
+| M-02 | P3 | `InventoryCache.entries` 按 target 分桶，过期项只在**再次访问同 key** 时删除；/metrics 为单一 target 实际有界，但无容量上限/兜底清扫，异常 target 形态下存在残留 | inventorycache.go:30 | ✅ 已修（S3：默认 4096 上限，put 先按各 entry 自身 TTL 清扫、超容量淘汰最旧） |
 | M-03 | P3 | SOAP/XML 与 perf 结果、vsanperf CSV 为整串/整块读入；受 in-flight 闸与 chunk 约束，规模有界，但单 target 超大 inventory 时仍可能高水位 | vmware/esxcli、collectors/scrape.go、vsanperf.go | 已有四层闸+分块，记录残余面 |
-| M-04 | P3 | esxcli `ConfigArguments` 把参数直接拼进 XML 字符串（`<nicname>值</nicname>`），依赖 govmomi 编码转义；值来源为内部 nic.Name，但属应显式核实的注入面 | vmware/esxcli/esxcli.go:74 | 需核实转义，非自由用户输入 |
+| M-04 | P3 | esxcli `ConfigArguments` 把参数直接拼进 XML 字符串（`<nicname>值</nicname>`），依赖 govmomi 编码转义；值来源为内部 nic.Name，但属应显式核实的注入面 | vmware/esxcli/esxcli.go:74 | ✅ 已核实（S3：注入探针单测证明 `encoding/xml` 转义 `<>&`，无需生产改动） |
 
 > 未发现可被未授权远程直接触发的「内存崩坏/越界」类漏洞（Go 内存安全）；真实内存风险集中在 **M-01 这种由外部输入控制 map key 的无界增长**，以及 S-02 的 body 读入。这两项构成本轮「内存溢出」维度的主要修复对象。
 
@@ -118,9 +118,11 @@
 
 `schema` 仅允许 `http`/`https`，其余 **400**；更严格默认拒绝 http（如需明文另设显式开关）。至少做到白名单 + 拒绝未知值，补单测。
 
-### S-06（P3）拨号侧 IP 复核 —— 与 S-01 合并实现
+### S-06（P3）拨号侧 IP 复核 —— ✅ 已实现（S4）
 
 见 S-01 第 4 点：解析最终 IP 后复核 CIDR，可选阻断保留/环回/链路本地地址（含 `169.254.169.254` 云元数据），并解析一次即锁定 IP（防 DNS rebinding 的「校验时一个地址、拨号时另一个」——必须在同一 DialContext 内基于实际拨号 IP 判定，而非预先解析）。
+
+**实现（`internal/safedial`）**：通过 `cache.Session.Login` 的 `config func(*soap.Client)` 回调，在 govmomi 建好 SOAP client 后给其内部 transport 同时安装受控的 `DialContext` 与 `DialTLSContext`——govmomi 对 HTTPS 自设 `DialTLSContext`（内部 `tls.Dial` 绕过 `DialContext`），只覆盖明文路径对真实 vCenter 不会生效，故两条路径都收敛到同一个 `net.Dialer.Control`：先建过 IP 复核的 TCP，再在该连接上握 TLS。默认策略仅拦链路本地/未指定（对 RFC1918 vCenter 零误伤），`-vmware.deny-private-addresses=true` 加拦环回/私网。vcsim 集成测试钉住「默认放行环回、Strict 拦截」。
 
 ### S-07（P3）查询串凭证开关
 

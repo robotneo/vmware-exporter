@@ -139,6 +139,7 @@ The options available are:
 >
 > `scripts/check_config.py` now fails on any flag that appears in these tables
 > without being registered, so this class of drift cannot come back.
+| -vmware.deny-private-addresses | SSRF hardening for the outbound vCenter connection (default **false**). The dialer always rejects link-local destinations (including the `169.254.169.254` cloud metadata endpoint) and the unspecified addresses `0.0.0.0`/`::`, checked against the concrete IP at the moment `connect(2)` is issued so DNS rebinding has no window. Set this to `true` to **also** reject loopback and RFC1918/ULA private ranges - only do so when vCenter is reached over routable addresses; an on-LAN vCenter (the common case) or a `127.0.0.1` sidecar proxy must keep it false |
 | -vmware.granularity | Time granularity of the sampled data in seconds. Must be > 0 and no greater than -vmware.interval (default 20) |
 | -vmware.insecureTLS | Trust insecure TLS certificates (true) or verify them (default). ESXi hosts ship self-signed certificates, so this is usually needed for direct collection |
 | -vmware.interval | PerfManager sampling window in seconds. This is a *request* - the effective interval is decided by the server's PerfProviderSummary.RefreshRate. No longer used for timeout calculation (default 20) |

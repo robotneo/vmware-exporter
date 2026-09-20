@@ -48,6 +48,14 @@ vmware.insecureTLS: true
 # https 或 http
 vmware.schema: https
 
+# SSRF 拨号护栏（默认 false，绝大多数部署保持 false）。
+# 无论本项取何值，连接 vCenter 时拨号器都会在真正 connect 前按本次实际解析
+# 出的 IP 拒绝链路本地（含云元数据 169.254.169.254）与未指定地址，堵住 DNS
+# rebinding。只有当 exporter 经【可路由地址】访问 vCenter 时才设 true，它会
+# 额外拒绝环回与 RFC1918/ULA 私网；vCenter 在局域网内（最常见）务必保持
+# false，否则会连不上目标。
+#vmware.deny-private-addresses: false
+
 
 # ── 超时与采样 ──────────────────────────────────────────────────────────
 

@@ -363,6 +363,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   round-trips back to the exact original string). No production change was
   needed.
 
+### 🔐 Security — outbound SSRF dial guard (S4: S-06)
+
+- **The vCenter connection is now checked at the socket against DNS rebinding
+  and metadata-endpoint SSRF (S-06).** The allowlist (`-probe.allowed-targets`)
+  and the shared target parser only compare strings/parse the URL; an attacker
+  who controls a whitelisted name's DNS can still return different addresses to
+  the validation lookup and the real connection (TOCTOU), or a name can resolve
+  to a link-local address the string check never sees. A new internal `safedial`
+  package installs a `net.Dialer.Control` hook on the govmomi SOAP transport that
+  runs after Go has resolved the name but immediately before `connect(2)`, so the
+  IP checked and the IP connected are literally the same one — there is no
+  rebinding window. **Both** dial paths are covered, which matters because
+  govmomi sets its own `http.Transport.DialTLSContext` for HTTPS (vCenter is
+  effectively always HTTPS) and that implementation calls `tls.Dial` directly,
+  bypassing `DialContext`; a DialContext-only guard would never have fired in
+  production. The replacement dials the guarded TCP connection first and then
+  performs the TLS handshake on that exact connection.
+  - **Default policy (zero false positives):** always reject link-local
+    destinations — including the cloud metadata endpoint `169.254.169.254` —
+    and the unspecified addresses `0.0.0.0`/`::`. Loopback and RFC1918/ULA
+    private ranges are still allowed, because vCenter/ESXi overwhelmingly runs
+    on the LAN and vcsim/`127.0.0.1` sidecar proxies use loopback.
+  - **New opt-in flag `-vmware.deny-private-addresses`** (default `false`): when
+    `true`, also reject loopback and private ranges. Enable only when the
+    exporter reaches vCenter over routable addresses; enabling it for an on-LAN
+    vCenter or a local sidecar proxy makes every login fail. The flag is part of
+    the per-scrape settings snapshot and hot-reloads on SIGHUP.
+  - The login error is now wrapped with `%w` (was `%s`), so callers can
+    `errors.Is(err, safedial.ErrBlockedAddress)`; the rendered error text is
+    unchanged.
+  - Coverage: `internal/safedial` unit tests for every range boundary, the
+    Control callback and both guarded dial paths (including an end-to-end HTTPS
+    handshake through the guarded transport), plus two govmomi/vcsim login tests
+    proving a loopback vcsim login succeeds by default and is rejected with the
+    sentinel under the strict policy.
+
 ### ⚡ Performance — scrape CPU/memory batch A
 
 - **Default log level is now `info` instead of `debug`.** At `debug` every
