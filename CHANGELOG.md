@@ -332,6 +332,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   env-flag credentials (out of `docker inspect`/`ps`) with the same flags.
   Expose it across hosts only behind a TLS+auth reverse proxy.
 
+### 🔐 Security — defence in depth (S3 partial: S-08, M-02, M-04)
+
+- **Security response headers on every reply (S-08).** All HTTP responses now
+  carry `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`
+  via a wrapper around the mux (covers `/metrics`, `/probe`, `/debug`, `/config`
+  and the landing page). These matter when the interactive pages are opened in
+  a browser.
+- **Startup warning for unauthenticated non-loopback exposure (S-08).** When
+  `-http.address` binds beyond loopback (e.g. `:9169` / `0.0.0.0`) **and**
+  `-web.config.file` is unset (no TLS/Basic auth), the exporter logs a prominent
+  warning that `/probe` credentials travel in clear text and the port is
+  reachable without authentication. It is advisory only and does not stop
+  startup (a loopback bind behind a reverse proxy remains the common valid case).
+  Loopback (`127.0.0.0/8`, `::1`, `localhost`) and any deployment that supplies
+  a web config stay silent.
+- **Inventory cache is capacity-bounded (M-02).** `/metrics` normally holds a
+  tiny, finite set of keys (managed-object type set × property set), but the
+  cache previously had no hard ceiling and only removed expired entries when the
+  same key was revisited, so a never-revisited stale key lingered. There is now
+  a default cap (4096, far above normal key counts): a `put` first reaps each
+  entry past its own TTL, then evicts the oldest entries if the cap is exceeded.
+  TTL/singleflight semantics are unchanged and `/probe` still never receives the
+  cache.
+- **esxcli XML escaping verified by test (M-04).** esxcli parameter values/names
+  are placed into the SOAP `val` element, which is a normal `encoding/xml`
+  content field, so `<`, `>` and `&` in a value are entity-escaped at
+  serialisation and cannot inject live XML elements. This was previously an
+  implicit assumption; it is now an explicit regression test (injection probe
+  round-trips back to the exact original string). No production change was
+  needed.
+
 ### ⚡ Performance — scrape CPU/memory batch A
 
 - **Default log level is now `info` instead of `debug`.** At `debug` every

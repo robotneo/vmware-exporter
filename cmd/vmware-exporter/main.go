@@ -274,7 +274,20 @@ func main() {
 
 	logger.Info("Starting "+exporterName, "listening_on", *listenAddress)
 
+	// 无鉴权暴露告警（S-08）。监听非回环接口、又没配 web.config.file（TLS/Basic
+	// Auth）时，/probe 接收的 vCenter 凭证在网络上是明文，且任何能连到该端口
+	// 的人都能驱动 exporter 去抓 vCenter。这只是显著提示、不阻止启动 —— 内网
+	// 受控环境 + 前置反代是常见合法形态。
+	if listenExposedWithoutAuth(*listenAddress, *webConfigFile) {
+		logger.Warn("listening on a non-loopback address without -web.config.file: " +
+			"the HTTP interface has no TLS or authentication, and /probe credentials travel in clear text. " +
+			"Bind to 127.0.0.1 behind a reverse proxy, or configure -web.config.file " +
+			"(see exporter-toolkit web-configuration). Set -web.debug-console=false for untrusted networks.")
+	}
+
 	server := newHTTPServer()
+	// 统一安全响应头（S-08），包住整个 mux，/metrics、/probe、UI 全覆盖。
+	server.Handler = securityHeaders(http.DefaultServeMux)
 
 	if err := web.ListenAndServe(server, webConfig(listenAddress), logger); err != nil {
 		logger.Error("listen and serve failed", "error", err)

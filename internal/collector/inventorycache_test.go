@@ -309,3 +309,92 @@ func TestCollectorSetInjectsInventoryCache(t *testing.T) {
 		t.Errorf("probe path got a non-nil inventory cache: cross-credential reads would be possible")
 	}
 }
+
+// TestInventoryCacheEvictsOldestOverLimit 验证 M-02 的硬容量兜底：distinct key
+// 超过 maxEntries 时淘汰 fetchedAt 最旧的条目，map 大小被钉在上限。
+//
+// 直接调 put 并 sleep 拉开 fetchedAt，避免依赖 TTL 过期路径。
+func TestInventoryCacheEvictsOldestOverLimit(t *testing.T) {
+	const limit = 3
+	cache := NewInventoryCacheWithLimit(limit)
+	const ttl = time.Hour // 远大于测试时长，保证不是 TTL 过期在删除
+
+	cache.put("a", []string{"a"}, ttl)
+	time.Sleep(2 * time.Millisecond)
+	cache.put("b", []string{"b"}, ttl)
+	time.Sleep(2 * time.Millisecond)
+	cache.put("c", []string{"c"}, ttl)
+	time.Sleep(2 * time.Millisecond)
+
+	// 第 4 个 key 触发淘汰；a 最旧，应被移除。
+	cache.put("d", []string{"d"}, ttl)
+
+	cache.mu.Lock()
+	n := len(cache.entries)
+	_, aExists := cache.entries["a"]
+	_, dExists := cache.entries["d"]
+	cache.mu.Unlock()
+
+	if n != limit {
+		t.Errorf("entries = %d, want bounded at %d", n, limit)
+	}
+	if aExists {
+		t.Errorf("oldest key %q survived eviction", "a")
+	}
+	if !dExists {
+		t.Errorf("newly written key %q was evicted over an older one", "d")
+	}
+
+	// 再写一个，应继续淘汰当前最旧的 b，大小保持上限。
+	time.Sleep(2 * time.Millisecond)
+	cache.put("e", []string{"e"}, ttl)
+	cache.mu.Lock()
+	_, bExists := cache.entries["b"]
+	gotSize := len(cache.entries)
+	cache.mu.Unlock()
+	if bExists {
+		t.Errorf("oldest key %q survived the second eviction", "b")
+	}
+	if gotSize != limit {
+		t.Errorf("entries = %d after second eviction, want %d", gotSize, limit)
+	}
+}
+
+// TestInventoryCachePutReapsNeverRevisitedExpired 验证 M-02 的兜底清扫：一个
+// 永不再被 get 访问的 key 不会因为惰性删除够不到而永驻 map —— 后续任意一次
+// put 都会回收它。
+func TestInventoryCachePutReapsNeverRevisitedExpired(t *testing.T) {
+	cache := NewInventoryCacheWithLimit(4096)
+
+	cache.put("expired-key", []string{"x"}, 5*time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
+
+	// 写一个不相关的新 key，应顺手回收已过期的旧 key。
+	cache.put("fresh-key", []string{"y"}, time.Hour)
+
+	cache.mu.Lock()
+	_, staleExists := cache.entries["expired-key"]
+	_, freshExists := cache.entries["fresh-key"]
+	cache.mu.Unlock()
+
+	if staleExists {
+		t.Errorf("expired never-revisited key survived a put (no low-frequency sweep bound)")
+	}
+	if !freshExists {
+		t.Errorf("fresh key missing after reaping")
+	}
+}
+
+// TestInventoryCacheDefaultLimitSane 钉住默认上限是一个"远大于正常 key 数"的
+// 有限正值，防止有人把它改成 0（=退化为仅限容量的关闭态）或无界。
+func TestInventoryCacheDefaultLimitSane(t *testing.T) {
+	cache := NewInventoryCache()
+	if cache.maxEntries <= 0 {
+		t.Fatalf("default maxEntries = %d, want a positive bound", cache.maxEntries)
+	}
+	// 单 target 的正常 key 是 mo 类型集 × 属性集的组合，几十量级；默认上限应
+	// 远在其上，正常部署绝不触发淘汰。
+	if cache.maxEntries < 256 {
+		t.Errorf("default maxEntries = %d unexpectedly small; normal scrapes could evict live entries", cache.maxEntries)
+	}
+}
