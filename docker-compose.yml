@@ -45,6 +45,13 @@ services:
       - ALL                  # it needs no Linux capabilities
     security_opt:
       - no-new-privileges:true
+    # The heap holds vCenter credentials and session cookies; forbid writing a
+    # core dump on crash so they never reach disk via a container core file.
+    # Go panic/SIGQUIT stacks still go to the container logs (stderr).
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
 
 # Direct collection from a standalone ESXi host (no vCenter).
 # The exporter detects the target type automatically via
@@ -75,3 +82,7 @@ services:
 #      - ALL
 #    security_opt:
 #      - no-new-privileges:true
+#    ulimits:
+#      core:
+#        soft: 0
+#        hard: 0

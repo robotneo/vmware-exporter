@@ -415,6 +415,25 @@ sets the loopback bind, read-only root filesystem, dropped capabilities and
 `no-new-privileges`. The exporter has no built-in authentication, so reach it
 across hosts only through a reverse proxy that adds TLS + auth.
 
+### Preventing core dumps from leaking in-memory credentials
+
+The process keeps vCenter credentials in heap memory: the `-file` service
+password, per-request `/probe` credentials, and the session cookie after login.
+A core dump on a crash would write that plaintext to disk regardless of the
+unprivileged run account, since cores are typically collected centrally
+(`systemd-coredump`) under `/var/lib/systemd/coredump/`. Both shipped deployments
+therefore disable core dumps:
+
+- **systemd** unit: `LimitCORE=0` (kernel `RLIMIT_CORE` = 0 for the service).
+- **docker-compose**: `ulimits: core: { soft: 0, hard: 0 }`; with `docker run`
+  pass `--ulimit core=0:0`.
+
+This does not hinder debugging — Go `panic` goroutine stacks and `SIGQUIT` full
+stacks go to **stderr** (journal/container logs), and the static, CGO-free binary
+carries no local debug symbols that a core would add. To capture a one-off core
+for a hard crash, override `LimitCORE` via `systemctl edit` (or the docker ulimit)
+temporarily and point the core collector at a protected directory.
+
 ### systemd deployment
 
 The release tarball ships the binary together with a `systemd/` directory that

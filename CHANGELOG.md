@@ -416,6 +416,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   query credentials, GET and POST), the two allowed channels (POST body, Basic
   Auth) and the default-compatible GET path.
 
+### 🔐 Security — core dumps disabled so heap credentials never hit disk
+
+- **Shipped deployments now forbid core dumps.** The process holds vCenter
+  credentials in heap memory (the `-file` service password, per-request `/probe`
+  credentials, and the post-login session cookie); a crash core dump would write
+  that plaintext to disk regardless of the unprivileged run account, since cores
+  are centrally collected by `systemd-coredump` under
+  `/var/lib/systemd/coredump/`. The systemd unit now sets `LimitCORE=0`
+  explicitly (previously it relied on the host default and only carried a comment
+  about the old `LimitCORE=infinity` hazard), and `docker-compose.yml` sets
+  `ulimits: core: { soft: 0, hard: 0 }` (use `--ulimit core=0:0` with
+  `docker run`). Debugging is unaffected: Go `panic`/`SIGQUIT` stacks still go to
+  stderr (journal/container logs), and the static CGO-free binary carries no
+  local symbols a core would add. DEPLOY-zh.md and both READMEs document the
+  rationale, how to verify (`systemctl show -p LimitCORE`), and the temporary
+  `systemctl edit` override for capturing a one-off core.
+
 ### ⚡ Performance — scrape CPU/memory batch A
 
 - **Default log level is now `info` instead of `debug`.** At `debug` every

@@ -728,6 +728,15 @@ systemd 部署时，密码写在 `/etc/vmware-exporter/config.yaml`（由 unit �
 
 **建议使用只读的 vCenter 服务账号。** exporter 只读取属性和性能计数器，从不写入。
 
+### 防止 core dump 泄漏内存中的凭证
+
+进程运行期会把 **vCenter 凭证留在堆内存**：`-file` 读入的服务级密码、`/probe` 每个请求的用户名密码、登录后的会话 cookie。崩溃一旦产生 core dump，这些明文会随整份内存镜像落盘——即便运行账号是非特权账号，core 通常也会被 `systemd-coredump` 集中收到 `/var/lib/systemd/coredump/` 之类的全局目录。两套随仓库发布的部署都已默认禁用 core dump：
+
+- **systemd** unit：`LimitCORE=0`（服务的内核 `RLIMIT_CORE` 为 0）；
+- **docker-compose**：`ulimits: core: { soft: 0, hard: 0 }`；直接 `docker run` 则加 `--ulimit core=0:0`。
+
+这**不影响排障**——Go 的 `panic` goroutine 栈与 `SIGQUIT` 全量栈都打到 **stderr**（journal/容器日志），而且静态、无 cgo 的二进制不带本地调试符号，core 对应用层问题没有额外价值。确实需要为某次疑难崩溃临时抓 core 时，用 `systemctl edit` 覆盖 `LimitCORE`（或临时放开 docker ulimit），并把 coredump 收集目录设为受保护路径，抓完恢复。完整说明见 `packaging/systemd/DEPLOY-zh.md`。
+
 ---
 
 ## 启动示例

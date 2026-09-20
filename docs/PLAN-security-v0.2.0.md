@@ -171,7 +171,7 @@ perf 已分块（64）+ 有界并发；inflight 闸限 4。残余面是单个分
 | **S1（安全快修，强烈建议先做）** | S-01 URL 规范化+拒 userinfo/path/query + 绕过用例；S-02 MaxBytesReader 413；M-01 target 归一化 + 错误计数桶有界化；S-05 schema 白名单 | 全部向后兼容（仅拒绝此前能蒙混的畸形输入） | 低-中，均有单测 |
 | **S2（部署加固）** | S-03 systemd LoadCredential + 配置 0600（install/uninstall/DEPLOY/check_config 联动）；S-04 容器非特权 + compose 加固 | systemd 调用方式微调（-file 路径改 $CREDENTIALS_DIRECTORY），需文档；容器 uid 变化 | 中（部署形态，需在脚本/文档回归） |
 | **S3（纵深与收敛）** | S-06 拨号侧 IP 复核（与 S-01 同改）；S-08 无认证 warning + 安全头；M-02 缓存容量兜底；M-04 esxcli 转义核实测试 | 增量/默认兼容 | 低-中 |
-| **S4（可选）** | ✅ S-07 `-probe.deny-query-credentials` 开关（已实现，默认关纯增量）；另注：S-06 拨号复核也已落地（见上）。⏳ core dump 文档化仍未做 | 默认关，纯增量 | 低 |
+| **S4（可选）** | ✅ S-07 `-probe.deny-query-credentials` 开关（默认关纯增量）；✅ core dump 收敛（unit `LimitCORE=0` + compose `ulimits core=0`，DEPLOY/README 文档化）；另注：S-06 拨号复核也已落地（见上） | 默认关/默认禁 core，纯增量 | 低 |
 
 每批独立 dev 分支、`--no-ff` 合 master，不 push、不打 tag，除非明确要求。S1 必须先于其余代码批次，因为它修的是「唯一被实际绕过的安全控制 + 唯一未授权无界内存增长」。
 
