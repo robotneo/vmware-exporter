@@ -15,8 +15,11 @@
 # 但下面三项是例外，改了必须 restart：
 #   http.address / web.config.file / log.format
 #
-# 权限必须是 0644。不要改成 0600 —— DynamicUser 分配的临时 uid 读不了
-# root:root 0600 的文件，服务会起不来。
+# 权限由 install.sh 设为 vmware-exporter:vmware-exporter 0600：本文件含
+# vCenter 明文密码，必须只有服务账号（exporter 以此身份运行）能读、同机其他
+# 用户读不到。手工排障时用：
+#   sudo chown vmware-exporter:vmware-exporter /etc/vmware-exporter/config.yaml
+#   sudo chmod 0600 /etc/vmware-exporter/config.yaml
 
 
 # ── 必填 ────────────────────────────────────────────────────────────────

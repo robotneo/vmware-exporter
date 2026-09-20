@@ -306,6 +306,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`schema` parameter restricted to `http`/`https`** (400 otherwise), so a
   request cannot force an arbitrary scheme. Legitimate inputs are unchanged.
 
+### 🔐 Security — deployment hardening (S2: S-03, S-04)
+
+- **systemd config containing the vCenter password is no longer world-readable
+  (S-03).** The unit previously ran under `DynamicUser=yes`, whose ephemeral uid
+  cannot read a root-owned `0600` file, so `install.sh` had to ship `config.yaml`
+  as `0644` — any local user on the host could `cat` the vCenter credentials.
+  The unit now runs as a static, non-login system account
+  (`User=`/`Group=vmware-exporter`), which `install.sh` creates idempotently,
+  and the config is installed `vmware-exporter:vmware-exporter 0600`; upgrades
+  tighten a legacy `0644` file back to `0600`. The static account also keeps
+  `-file` pointing at the real file, so SIGHUP hot-reload still works (a
+  `LoadCredential=` design was evaluated and rejected: it hands the process a
+  boot-time read-only snapshot, which would silently break reload and needs
+  systemd 248+). The DynamicUser/systemd-232 requirement is gone; standard
+  `User=` works on any supported systemd. DEPLOY-zh.md, both READMEs and the
+  config template were updated.
+- **Container image runs as an unprivileged user (S-04).** The `scratch` image
+  now ships a minimal `/etc/passwd` for uid/gid `65534` (nobody) and declares
+  `USER 65534:65534` — it previously ran as root. The binary is static, listens
+  on an unprivileged port and writes nothing to disk (assets are go:embed-ed),
+  so this is drop-in. `docker-compose.yml` is hardened to match the systemd unit:
+  loopback-only bind (`127.0.0.1:9169`), `read_only: true`, `cap_drop: [ALL]`
+  and `no-new-privileges:true`; the README docker examples were switched to
+  env-flag credentials (out of `docker inspect`/`ps`) with the same flags.
+  Expose it across hosts only behind a TLS+auth reverse proxy.
+
 ### ⚡ Performance — scrape CPU/memory batch A
 
 - **Default log level is now `info` instead of `debug`.** At `debug` every

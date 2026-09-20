@@ -107,40 +107,42 @@ sudo systemctl reload vmware-exporter
 - `log.level` 内置默认与模板一致都是 **info**；排查单次抓取问题时可临时在
   `config.yaml` 改成 `debug`，SIGHUP 热重载生效，无需重启
 
-## 权限：config.yaml 必须是 0644
+## 权限：config.yaml 必须是 0600，属主为服务账号
 
-这一条值得单独说，因为改错了服务直接起不来。
+配置里有 vCenter 明文密码，因此它必须 **0600、属主 `vmware-exporter:vmware-exporter`**：
+exporter 进程以该系统账号运行、读得了，**同机其他用户读不到密码**。
 
-配置文件是 **exporter 进程自己读**的，而此时 `DynamicUser=yes` 已经生效，
-进程用的是 systemd 分配的临时 uid。`0600 root:root` 它读不了，会得到：
+`install.sh` 会自动把这一切处理好：
+
+- 幂等创建无家目录、不可登录的系统账号 `vmware-exporter`
+  （`useradd --system --no-create-home --shell /usr/sbin/nologin`，已存在则不重建）
+- 全新安装时把 config.yaml 装成 `vmware-exporter:vmware-exporter` 0600
+- 升级时即使旧包遗留的是 0644（老版本 DynamicUser 时代的权限），也会纠正回 0600 并改属主
+
+手工排障时若服务起不来、日志是：
 
 ```
 cannot read config file: permission denied
 ```
 
-所以必须 `0644 root:root`。`install.sh` 每次都会把权限修正回来。
-
-（对比：老版本用 `EnvironmentFile` 的包可以 0600，因为那是 systemd 以 root
-读完再传给进程的。换成 `-file` 之后这个前提就不成立了。）
-
-## 老版本 systemd
-
-unit 里用了 `DynamicUser=yes`，需要 systemd **232+**（2016 年）。
-安装脚本检测到更老的版本会告警。这种情况下手工改：
+修正：
 
 ```bash
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin vmware-exporter
-sudo vi /etc/systemd/system/vmware-exporter.service
+sudo chown vmware-exporter:vmware-exporter /etc/vmware-exporter/config.yaml
+sudo chmod 0600 /etc/vmware-exporter/config.yaml
+sudo systemctl restart vmware-exporter
 ```
 
-删掉 `DynamicUser=yes`，加上：
+> 为什么不用 DynamicUser + 0644？DynamicUser 的临时 uid 读不了 root:root 0600，
+> 旧包为此被迫把配置放开到 0644，等于本机任意登录用户都能 `cat` 出 vCenter 密码。
+> 改用固定系统账号后，配置可以收 0600，而且 `-file` 直接读磁盘文件，
+> SIGHUP 热重载照常工作（不像 systemd `LoadCredential` 那样拿启动快照、reload 失效）。
 
-```ini
-User=vmware-exporter
-Group=vmware-exporter
-```
+## systemd 版本
 
-然后 `sudo systemctl daemon-reload && sudo systemctl restart vmware-exporter`。
+unit 使用标准的 `User=`/`Group=`，**任何受支持的 systemd 版本均可**，不再依赖
+DynamicUser（旧包要求 systemd 232+）。服务账号由 `install.sh` 自动创建，无需手工
+`useradd`。
 
 ## Prometheus 抓取配置
 
@@ -182,7 +184,7 @@ curl -s localhost:9169/metrics | grep vmware_exporter_build_info
 
 常见问题：
 
-- **启动就退出，日志说 permission denied** —— config.yaml 权限不是 0644，见上文
+- **启动就退出，日志说 permission denied** —— config.yaml 权限或属主不对，应为 `vmware-exporter:vmware-exporter` 0600，见上文「权限」一节
 - **unknown flag** —— 配置里有拼错的键名，报错信息里有具体是哪个
 - **登录失败** —— 检查 `vmware.vcenter` 填的是不是 vCenter 本身
   （不是 5480 端口的 Management Console）；自签证书需要 `vmware.insecureTLS: true`

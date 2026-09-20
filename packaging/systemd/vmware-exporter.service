@@ -14,10 +14,11 @@ Type=simple
 #
 # 优先级：命令行 > -file > 环境变量（见 internal/config/config.go）。
 #
-# 注意 config.yaml 必须是 0644，不能是 0600。EnvironmentFile 由 systemd
-# 以 root 读取，所以那种方式可以 0600；而 -file 是 exporter 进程自己读，
-# 此时 DynamicUser=yes 已经生效，用的是临时 uid，读 0600 root:root 会得到
-# "cannot read config file: permission denied" 然后启动失败。
+# config.yaml 由 install.sh 安装为 vmware-exporter:vmware-exporter 0600，
+# 下面以该静态系统账号运行，进程正好能读、同机其他用户读不到密码。
+# 不用 DynamicUser：临时 uid 读不了 root:root 0600，而把配置放开到 0644
+# 会让本机任意用户 cat 到 vCenter 密码（这正是本次修复的漏洞）。静态账号
+# 同时完整保留 SIGHUP 原地热重载（-file 直接读磁盘上的文件）。
 ExecStart=/usr/bin/vmware-exporter -file=/etc/vmware-exporter/config.yaml
 
 # SIGHUP 原地重载配置。
@@ -48,14 +49,14 @@ RestartSec=5
 
 # ── 安全加固 ────────────────────────────────────────────────────────────
 #
-# DynamicUser 在启动时分配一个临时的非特权 uid/gid，停止时释放，不用维护
-# 长期账号。需要 systemd 232+（2016 年）。更老的版本请删掉这行，改用真实
-# 账号：
-#
-#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin vmware-exporter
-#
-# 然后在这里加 User=vmware-exporter 和 Group=vmware-exporter。
-DynamicUser=yes
+# 以一个无家目录、不可登录的静态系统账号运行。install.sh 用
+# `useradd --system` 保证幂等（已存在则不重建）。静态账号而非 DynamicUser
+# 的原因：config.yaml 含 vCenter 密码，必须 0600；DynamicUser 的临时 uid
+# 读不了 root:root 0600，逼出的 0644 是本机任意用户可读的泄密口。固定 uid
+# 后 install.sh 把配置 chown 给该账号、权限收 0600，进程读得了、别人读不了，
+# 而且 -file 直接读磁盘，SIGHUP 热重载不受影响。
+User=vmware-exporter
+Group=vmware-exporter
 
 # exporter 只需要一个出站 TCP 连接和一个监听 socket，从不写盘，所以整个
 # 文件系统可以只读。

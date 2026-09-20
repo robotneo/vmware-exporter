@@ -43,10 +43,11 @@ sudo systemctl start vmware-exporter
 `/proc/<pid>/cmdline`。配置格式、升级、卸载与排障的完整说明见
 `packaging/systemd/DEPLOY-zh.md`。
 
-> **注意文件权限。** `EnvironmentFile` 是 systemd 以 root 读取，可以 `0600`；但
-> `-file` 是 exporter 进程在 `DynamicUser=yes` 生效后自己打开的，所以 `config.yaml`
-> 必须是 `0644 root:root`，否则报 `cannot read config file: permission denied`。
-> `install.sh` 每次运行都会把权限修正回来。
+> **注意文件权限。** `config.yaml` 里有 vCenter 密码，因此 `install.sh` 会创建一个
+> 不可登录的系统账号 `vmware-exporter`，并把配置装成 `vmware-exporter:vmware-exporter`
+> 的 `0600` —— exporter 以该账号运行、读得了，同机其他用户读不到密码。升级时若旧包
+> 遗留的是世界可读的 `0644`，脚本也会收紧回 `0600` 并改属主。用固定账号（而非
+> DynamicUser）也让 `-file` 直接读磁盘文件，SIGHUP 热重载照常工作。
 > 环境变量（`-envflag.*`）作为独立的配置来源仍然支持，详见后文
 > [环境变量名的大小写](#环境变量名的大小写容易踩坑)。
 
@@ -92,20 +93,14 @@ curl -s localhost:9169/metrics | grep '^vmware_up'
 ```
 
 <details>
-<summary>systemd 版本低于 232（CentOS 7 等）</summary>
+<summary>老版本 systemd（CentOS 7 等）</summary>
 
-unit 用了 `DynamicUser=yes`，它需要 systemd 232+。旧系统上改用真实账号：
-
-```bash
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin vmware-exporter
-sudo sed -i 's/^DynamicUser=yes/User=vmware-exporter\nGroup=vmware-exporter/' \
-  /etc/systemd/system/vmware-exporter.service
-sudo systemctl daemon-reload && sudo systemctl restart vmware-exporter
-```
-
-同时可能需要删掉旧版 systemd 不认识的加固项（`ProtectKernelLogs`、
-`ProtectClock`、`RestrictSUIDSGID` 等）—— 它们会被记为警告并忽略，不影响启动。
-用 `systemd-analyze verify /etc/systemd/system/vmware-exporter.service` 可以确认。
+unit 现在用静态 `User=`/`Group=` 账号（由 `install.sh` 创建），不再依赖
+DynamicUser，也没有 systemd 232 的版本门槛。老系统上个别加固项
+（`ProtectKernelLogs`、`ProtectClock`、`RestrictSUIDSGID` 等）可能不被认识 ——
+它们会被记为警告并忽略，不影响启动。用
+`systemd-analyze verify /etc/systemd/system/vmware-exporter.service` 确认，
+必要时删掉本机 systemd 拒绝的指令。
 
 </details>
 
@@ -114,15 +109,19 @@ sudo systemctl daemon-reload && sudo systemctl restart vmware-exporter
 - 前提：安装 Docker
 - Docker 运行
 
+镜像以非特权用户 `65534` 运行、无需写盘。下面示例把凭证放进环境变量（不进
+命令行，避免 `ps` / `docker inspect` / `/proc` 泄漏），端口只绑回环；先
+`export VMWARE_vmware_username=... VMWARE_vmware_password=... VMWARE_vmware_vcenter=<VCENTER_HOST>`：
+
 ```bash
 docker run -d \
   --name vmware-exporter \
   --hostname vmware-exporter \
-  -p 9169:9169 \
+  -p 127.0.0.1:9169:9169 \
+  --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  -e VMWARE_vmware_username -e VMWARE_vmware_password -e VMWARE_vmware_vcenter \
   meisite/vmware-exporter:latest \
-  -vmware.username=administrator@vsphere.local \
-  -vmware.password=<VCENTER_PASSWORD> \
-  -vmware.vcenter=<VCENTER_HOST> \
+  -envflag.enable -envflag.prefix=VMWARE_ \
   -vmware.granularity=20 \
   -vmware.interval=20 \
   -vmware.insecureTLS
@@ -705,16 +704,22 @@ scrape_configs:
 用 `-vmware.password=...` 传入的密码，主机上任何能读 `/proc` 的人都能看到，容器内 `ps` 能看到，`docker inspect` 也能看到。改用环境变量传：
 
 ```bash
-docker run -d --name vmware-exporter -p 9169:9169 \
+docker run -d --name vmware-exporter \
+  -p 127.0.0.1:9169:9169 \
+  --read-only --cap-drop ALL --security-opt no-new-privileges:true \
   -e VMWARE_vmware_username -e VMWARE_vmware_password -e VMWARE_vmware_vcenter \
   meisite/vmware-exporter:latest \
   -envflag.enable -envflag.prefix=VMWARE_ -vmware.insecureTLS
 ```
 
+镜像内以非特权用户 `65534` 运行，`docker-compose.yml` 已内置上述加固
+（回环绑定、只读根文件系统、丢弃全部 capability、`no-new-privileges`）。
+exporter 自身不带鉴权，跨主机抓取请前置带 TLS + 认证的反向代理。
+
 systemd 部署时，密码写在 `/etc/vmware-exporter/config.yaml`（由 unit 用
-`-file` 加载），而不是 `ExecStart` 命令行，因此同样不进 cmdline。注意这个文件由
-exporter 进程在降权后自己读取，权限必须是 `0644`（与 systemd 以 root 读取的
-`EnvironmentFile` 不同）。详见[二进制运行](#二进制运行)与
+`-file` 加载），而不是 `ExecStart` 命令行，因此同样不进 cmdline。该文件由
+`install.sh` 装成 `vmware-exporter:vmware-exporter` 的 `0600`，exporter 以该
+系统账号运行、读得了，同机其他用户读不到密码。详见[二进制运行](#二进制运行)与
 `packaging/systemd/DEPLOY-zh.md`。
 
 用 file_sd 做多凭证（`__meta_password`）时，凭证是明文写在 target 文件里的 —— 那个文件同样要 `chmod 600` 并限制属主。
