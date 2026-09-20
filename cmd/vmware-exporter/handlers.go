@@ -282,6 +282,22 @@ func probeHandler(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 
 	params := r.Form
 
+	// S-07：开启 -probe.deny-query-credentials 后，凭证不得出现在 URL 查询串
+	// 里 —— 那会让它落进访问日志、Referer、浏览器历史与链路追踪。这里只看
+	// 查询串本身（r.URL.Query），与 HTTP 方法无关，因此 GET 携带凭证、以及
+	// "POST 却把凭证写进 URL、body 放别的字段"两种形态都被挡。POST 表单体
+	// 与 Basic Auth 不受影响。默认 false，保持旧的 GET 抓取行为。
+	//
+	// 放在 target 校验之前：与目标是否合法无关，先确保凭证不被带进后续逻辑。
+	if currentDenyQueryCredentials() {
+		query := r.URL.Query()
+		if query.Get("username") != "" || query.Get("password") != "" {
+			http.Error(w, "credentials in the URL query string are rejected by -probe.deny-query-credentials; send them via the POST form body or HTTP Basic Auth", http.StatusBadRequest)
+			logger.Warn("probe request rejected: credentials present in URL query string")
+			return
+		}
+	}
+
 	rawTarget := params.Get("target")
 
 	// target 先规范化再做任何后续动作。它只允许是 host 或 host:port，拒绝

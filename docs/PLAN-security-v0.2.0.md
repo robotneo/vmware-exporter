@@ -32,7 +32,7 @@
 | S-04 | P2 | 容器镜像以 root 运行（FROM scratch 无 USER） | Dockerfile:64 | ✅ 已修（S2：USER 65534 + compose 加固） |
 | S-05 | P3 | `schema` 参数无白名单，可强制 http 明文传凭证 | handlers.go:293 | ✅ 已修（S1，http/https 白名单） |
 | S-06 | P3 | 白名单只做字符串匹配不做 DNS 解析（rebinding/主机名绕过残留） | targetfilter.go | ✅ 已修（S4：`internal/safedial` 在 govmomi transport 的 DialContext **与** DialTLSContext 上按 connect 前实际 IP 复核；默认拦链路本地/未指定，`-vmware.deny-private-addresses=true` 加严到环回/私网） |
-| S-07 | P3 | 仍接受 GET 查询串里的 password（代理日志/Referer 泄漏面） | handlers.go:277 | 可选开关（未做） |
+| S-07 | P3 | 仍接受 GET 查询串里的 password（代理日志/Referer 泄漏面） | handlers.go:277 | ✅ 已修（S4：opt-in `-probe.deny-query-credentials`，默认 false 保兼容；开启后查询串带 username/password 一律 400，只收 POST body/Basic Auth，判定只看查询串与方法无关，SIGHUP 热重载） |
 | S-08 | P3 | 默认无认证、debug 控制台默认开、无统一安全响应头 | main.go/ui.go | ✅ 已加固（S3：安全响应头 + 非回环无认证启动 warning；debug 控制台保留默认开，可用 `-web.debug-console=false` 关） |
 | S-09 | 信息 | 1 个间接依赖漏洞不可达；CI 已含 govulncheck；toolchain 钉 1.26.6 | go.mod / CI | 无需动作 |
 
@@ -124,9 +124,11 @@
 
 **实现（`internal/safedial`）**：通过 `cache.Session.Login` 的 `config func(*soap.Client)` 回调，在 govmomi 建好 SOAP client 后给其内部 transport 同时安装受控的 `DialContext` 与 `DialTLSContext`——govmomi 对 HTTPS 自设 `DialTLSContext`（内部 `tls.Dial` 绕过 `DialContext`），只覆盖明文路径对真实 vCenter 不会生效，故两条路径都收敛到同一个 `net.Dialer.Control`：先建过 IP 复核的 TCP，再在该连接上握 TLS。默认策略仅拦链路本地/未指定（对 RFC1918 vCenter 零误伤），`-vmware.deny-private-addresses=true` 加拦环回/私网。vcsim 集成测试钉住「默认放行环回、Strict 拦截」。
 
-### S-07（P3）查询串凭证开关
+### S-07（P3）查询串凭证开关 —— ✅ 已实现（S4）
 
-新增 `-probe.deny-query-credentials`（默认 false 保持兼容），开启后 password 只接受 Basic Auth/POST body，GET 携带则 400。文档持续警示 URL/Referer/代理日志泄漏面。低优先。
+新增 `-probe.deny-query-credentials`（默认 false 保持兼容），开启后凭证只接受 Basic Auth/POST body，URL 查询串带 username/password 一律 400，堵住 URL/Referer/代理日志/浏览器历史/链路追踪的泄漏面。
+
+**实现要点**：判定只看 `r.URL.Query()`（查询串本身）、与 HTTP 方法无关 —— 这样既挡传统的 GET `?username=&password=`，也挡「POST 却把凭证写进 URL、body 放别的字段」的绕过；POST 表单体凭证不经过查询串，照常放行。开关经 settings 快照读取，随 SIGHUP 热重载。默认 false，旧抓取配置零改动。测试覆盖：GET/POST 查询串拒绝、半个凭证（仅 username 或仅 password）拒绝、POST body/Basic Auth 放行、默认 false 兼容。
 
 ### S-08（P3）默认收敛与安全头
 
@@ -169,7 +171,7 @@ perf 已分块（64）+ 有界并发；inflight 闸限 4。残余面是单个分
 | **S1（安全快修，强烈建议先做）** | S-01 URL 规范化+拒 userinfo/path/query + 绕过用例；S-02 MaxBytesReader 413；M-01 target 归一化 + 错误计数桶有界化；S-05 schema 白名单 | 全部向后兼容（仅拒绝此前能蒙混的畸形输入） | 低-中，均有单测 |
 | **S2（部署加固）** | S-03 systemd LoadCredential + 配置 0600（install/uninstall/DEPLOY/check_config 联动）；S-04 容器非特权 + compose 加固 | systemd 调用方式微调（-file 路径改 $CREDENTIALS_DIRECTORY），需文档；容器 uid 变化 | 中（部署形态，需在脚本/文档回归） |
 | **S3（纵深与收敛）** | S-06 拨号侧 IP 复核（与 S-01 同改）；S-08 无认证 warning + 安全头；M-02 缓存容量兜底；M-04 esxcli 转义核实测试 | 增量/默认兼容 | 低-中 |
-| **S4（可选）** | S-07 `-probe.deny-query-credentials` 开关；core dump 文档化 | 默认关，纯增量 | 低 |
+| **S4（可选）** | ✅ S-07 `-probe.deny-query-credentials` 开关（已实现，默认关纯增量）；另注：S-06 拨号复核也已落地（见上）。⏳ core dump 文档化仍未做 | 默认关，纯增量 | 低 |
 
 每批独立 dev 分支、`--no-ff` 合 master，不 push、不打 tag，除非明确要求。S1 必须先于其余代码批次，因为它修的是「唯一被实际绕过的安全控制 + 唯一未授权无界内存增长」。
 

@@ -399,6 +399,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     proving a loopback vcsim login succeeds by default and is rejected with the
     sentinel under the strict policy.
 
+### 🔐 Security — query-string credentials opt-out (S4: S-07)
+
+- **New opt-in flag `-probe.deny-query-credentials` (default `false`).** `/probe`
+  has always accepted `?username=&password=` in the URL, the style the bundled
+  Prometheus scrape configs use; the cost is that those credentials land in
+  exporter and reverse-proxy access logs, the `Referer` header, browser history
+  and tracing spans. With this flag enabled, any `/probe` request carrying
+  `username` or `password` in the URL query string is rejected with 400 before
+  the target is even parsed; credentials must then come from the POST form body
+  or HTTP Basic Auth. The decision inspects only the query string and is
+  independent of HTTP method, so a POST that still embeds credentials in the URL
+  is rejected as well. Default `false` keeps the legacy GET-with-credentials
+  behaviour byte-for-byte; the flag is read through the per-request settings
+  snapshot and hot-reloads on SIGHUP. Tests cover rejection (full and partial
+  query credentials, GET and POST), the two allowed channels (POST body, Basic
+  Auth) and the default-compatible GET path.
+
 ### ⚡ Performance — scrape CPU/memory batch A
 
 - **Default log level is now `info` instead of `debug`.** At `debug` every

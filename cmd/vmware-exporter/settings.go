@@ -72,3 +72,16 @@ func currentScrapeInflight() int {
 
 	return v
 }
+
+// currentDenyQueryCredentials 是 -probe.deny-query-credentials（S-07）的窄口径
+// 快照，供 probeHandler 在请求路径上读取。SIGHUP 会裸写该 bool flag，必须走
+// Snapshot 而不能直接解引用，与同文件其它读取点同理。
+func currentDenyQueryCredentials() bool {
+	var v bool
+
+	config.Snapshot(func() {
+		v = *probeDenyQueryCredentials
+	})
+
+	return v
+}
