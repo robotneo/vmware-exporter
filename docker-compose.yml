@@ -22,8 +22,11 @@ services:
     image: meisite/vmware-exporter:latest
     container_name: vmware-exporter
     hostname: vmware-exporter
+    # Bind to loopback only. The exporter ships no authentication of its own;
+    # expose it to Prometheus over a reverse proxy (with TLS + auth) or a
+    # private network. Change to "9169:9169" only if you understand the exposure.
     ports:
-      - 9169:9169
+      - "127.0.0.1:9169:9169"
     environment:
       - VMWARE_vmware_username
       - VMWARE_vmware_password
@@ -34,6 +37,14 @@ services:
       - "-vmware.granularity=15"
       - "-vmware.interval=15"
     restart: always
+    # ── Hardening, aligned with the systemd unit ───────────────────────────
+    # The image already runs as uid 65534; stating it here makes it explicit.
+    user: "65534:65534"
+    read_only: true          # the static binary writes nothing to disk
+    cap_drop:
+      - ALL                  # it needs no Linux capabilities
+    security_opt:
+      - no-new-privileges:true
 
 # Direct collection from a standalone ESXi host (no vCenter).
 # The exporter detects the target type automatically via
@@ -44,7 +55,7 @@ services:
 #    container_name: vmware-exporter-esxi
 #    hostname: vmware-exporter-esxi
 #    ports:
-#      - 9170:9169
+#      - "127.0.0.1:9170:9169"
 #    environment:
 #      # -vmware.vcenter accepts an ESXi address; the flag name is kept for
 #      # backwards compatibility.
@@ -58,3 +69,9 @@ services:
 #      - "-vmware.interval=20"
 #      - "-vmware.granularity=20"
 #    restart: always
+#    user: "65534:65534"
+#    read_only: true
+#    cap_drop:
+#      - ALL
+#    security_opt:
+#      - no-new-privileges:true

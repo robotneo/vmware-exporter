@@ -14,6 +14,9 @@
 set -euo pipefail
 
 BIN_NAME="vmware-exporter"
+# 服务以这个静态系统账号运行；config.yaml（含 vCenter 密码）chown 给它并收
+# 0600，进程读得了、同机其他用户读不到。
+SERVICE_USER="vmware-exporter"
 
 # DESTDIR 只为自动化测试而存在：把所有写入重定向到一个沙箱目录，
 # 这样安装流程可以在没有 root、没有 systemd 的机器上被完整验证。
@@ -56,15 +59,13 @@ for f in "${BIN_NAME}" "${BIN_NAME}.service" "config.yaml"; do
   [[ -f "${SRC_DIR}/${f}" ]] || die "包内缺少 ${f}，解压是否完整？"
 done
 
-# systemd 版本检查。service 里用了 DynamicUser=yes，需要 232+。
+# ── 服务账号 ────────────────────────────────────────────────────────────
 #
-# 版本号解析不能用 awk '{print $2}'：真实世界里会遇到 252~rc1、
-# 255.4-1ubuntu8、249.11-0ubuntu3.12 这些格式，取出来是脏值。
-sd_ver="$(systemctl --version 2>/dev/null | head -1 | grep -oE '[0-9]+' | head -1 || true)"
-if [[ -n "${sd_ver}" ]] && (( sd_ver < 232 )); then
-  echo "警告：systemd ${sd_ver} 不支持 DynamicUser=yes（需要 232+）。" >&2
-  echo "      安装后请手工编辑 ${UNIT_DST}：删掉 DynamicUser=yes，" >&2
-  echo "      创建专用账号并改用 User=/Group=。详见 DEPLOY-zh.md。" >&2
+# config.yaml 含 vCenter 密码，必须 0600，因此需要一个固定属主让进程能读。
+# 幂等：账号已存在（升级、或管理员预先建好）则不动它。DESTDIR 沙箱里不建。
+if [[ -z "${DESTDIR}" ]] && ! id "${SERVICE_USER}" >/dev/null 2>&1; then
+  info "创建系统账号 ${SERVICE_USER}"
+  useradd --system --no-create-home --shell /usr/sbin/nologin "${SERVICE_USER}"
 fi
 
 # ── 判断是全新安装还是升级 ──────────────────────────────────────────────
@@ -101,20 +102,27 @@ mv -f "${BIN_DST}.new" "${BIN_DST}"
 
 install -d -m 0755 ${OWNER} "${CONF_DIR}"
 
+# 配置文件含 vCenter 密码：属主为服务账号、0600 —— exporter 进程（以该账号
+# 运行）读得了，同机其他用户读不到。DESTDIR 沙箱里没有服务账号，只设 0600、
+# 不指定属主（root 创建即 root 所有，模拟环境只验证权限位与产物布局）。
+CONF_OWNER=""
+if [[ -z "${DESTDIR}" ]]; then
+  CONF_OWNER="-o ${SERVICE_USER} -g ${SERVICE_USER}"
+fi
+
 if [[ -f "${CONF_DST}" ]]; then
   info "保留已有配置 ${CONF_DST}"
-  # 顺手修正权限。0600 会让 DynamicUser 起不来，这个坑值得每次都堵一下。
-  chmod 0644 "${CONF_DST}"
+  # 顺手把权限收紧到新形态：老包装的是 0644（DynamicUser 时代的世界可读），
+  # 每次升级都纠正成 0600 + 服务账号，这个历史泄密口值得反复堵。
   if [[ -z "${DESTDIR}" ]]; then
-    chown root:root "${CONF_DST}"
+    chown "${SERVICE_USER}:${SERVICE_USER}" "${CONF_DST}"
   fi
-  # 新版本可能加了配置项，把模板留在旁边供对照。
+  chmod 0600 "${CONF_DST}"
+  # 新版本可能加了配置项，把模板留在旁边供对照（模板无密码，保持 0644）。
   install -m 0644 ${OWNER} "${SRC_DIR}/config.yaml" "${CONF_DST}.example"
   info "本版本的配置模板已放在 ${CONF_DST}.example"
 else
-  # 0644 而不是 0600：这个文件由 exporter 进程自己读，而 DynamicUser=yes
-  # 分配的临时 uid 读不了 root:root 0600。
-  install -m 0644 ${OWNER} "${SRC_DIR}/config.yaml" "${CONF_DST}"
+  install -m 0600 ${CONF_OWNER} "${SRC_DIR}/config.yaml" "${CONF_DST}"
   info "已写入配置模板 ${CONF_DST}"
 fi
 

@@ -26,11 +26,11 @@
 
 | 编号 | 级别 | 问题 | 位置 | 状态 |
 |---|---|---|---|---|
-| S-01 | **P1** | SSRF 白名单可被 userinfo 注入绕过，并把 Basic 凭证转发给攻击者主机（已用 govmomi 实证） | targetfilter.go:47 | 待修，最高优先 |
-| S-02 | P2 | `/probe` POST 表单体无大小上限 → 未授权内存型 DoS | handlers.go:253 | 待修 |
-| S-03 | P2 | systemd 下含密码 config.yaml 被迫 0644，本机任意用户可读 | packaging/systemd | 待修 |
-| S-04 | P2 | 容器镜像以 root 运行（FROM scratch 无 USER） | Dockerfile:64 | 待修 |
-| S-05 | P3 | `schema` 参数无白名单，可强制 http 明文传凭证 | handlers.go:293 | 待修 |
+| S-01 | **P1** | SSRF 白名单可被 userinfo 注入绕过，并把 Basic 凭证转发给攻击者主机（已用 govmomi 实证） | targetfilter.go:47 | ✅ 已修（S1） |
+| S-02 | P2 | `/probe` POST 表单体无大小上限 → 未授权内存型 DoS | handlers.go:253 | ✅ 已修（S1，1MiB/413） |
+| S-03 | P2 | systemd 下含密码 config.yaml 被迫 0644，本机任意用户可读 | packaging/systemd | ✅ 已修（S2：静态系统账号 + 0600；弃用 LoadCredential 以保 SIGHUP 热重载） |
+| S-04 | P2 | 容器镜像以 root 运行（FROM scratch 无 USER） | Dockerfile:64 | ✅ 已修（S2：USER 65534 + compose 加固） |
+| S-05 | P3 | `schema` 参数无白名单，可强制 http 明文传凭证 | handlers.go:293 | ✅ 已修（S1，http/https 白名单） |
 | S-06 | P3 | 白名单只做字符串匹配不做 DNS 解析（rebinding/主机名绕过残留） | targetfilter.go | 待修（建议与 S-01 合并） |
 | S-07 | P3 | 仍接受 GET 查询串里的 password（代理日志/Referer 泄漏面） | handlers.go:277 | 可选开关 |
 | S-08 | P3 | 默认无认证、debug 控制台默认开、无统一安全响应头 | main.go/ui.go | 待加固 |

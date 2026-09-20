@@ -400,11 +400,18 @@ A password passed as `-vmware.password=...` is visible to anyone who can read
 through the environment instead:
 
 ```bash
-docker run -d --name vmware-exporter -p 9169:9169 \
+docker run -d --name vmware-exporter \
+  -p 127.0.0.1:9169:9169 \
+  --read-only --cap-drop ALL --security-opt no-new-privileges:true \
   -e VMWARE_vmware_username -e VMWARE_vmware_password -e VMWARE_vmware_vcenter \
   meisite/vmware-exporter:latest \
   -envflag.enable -envflag.prefix=VMWARE_ -vmware.insecureTLS
 ```
+
+The image runs as the unprivileged uid `65534`, and `docker-compose.yml` already
+sets the loopback bind, read-only root filesystem, dropped capabilities and
+`no-new-privileges`. The exporter has no built-in authentication, so reach it
+across hosts only through a reverse proxy that adds TLS + auth.
 
 ### systemd deployment
 
@@ -441,10 +448,13 @@ so the password never lands in `/proc/<pid>/cmdline`. The config is a flat
 `flag-name: value` mapping; full details, upgrades, uninstall and troubleshooting
 live in `packaging/systemd/DEPLOY-zh.md`.
 
-> **Note on permissions.** Unlike an `EnvironmentFile` (which systemd reads as
-> root), `-file` is opened by the exporter itself after `DynamicUser=yes` takes
-> effect, so `config.yaml` must be `0644 root:root`, not `0600`. `install.sh`
-> corrects this on every run.
+> **Note on permissions.** `config.yaml` contains the vCenter password, so
+> `install.sh` creates a non-login system account `vmware-exporter` and installs
+> the file as `vmware-exporter:vmware-exporter` with mode `0600` — the exporter
+> runs under that account and can read it, while other local users cannot
+> `cat` the password. On upgrade a legacy world-readable `0644` file is
+> tightened back to `0600`. The static account (rather than `DynamicUser`) also
+> keeps `-file` on the real file, so SIGHUP reload keeps working.
 
 **`reload` applies configuration changes without dropping metrics.** The
 exporter handles SIGHUP by re-reading `-file` and the environment variables and
@@ -492,22 +502,14 @@ curl -s localhost:9169/metrics | grep '^vmware_up'
 ```
 
 <details>
-<summary>systemd < 232 (CentOS 7, etc.)</summary>
+<summary>Older systemd (CentOS 7, etc.)</summary>
 
-The unit uses `DynamicUser=yes`, which requires systemd 232+. On older systems
-create a real account instead:
-
-```bash
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin vmware-exporter
-sudo sed -i 's/^DynamicUser=yes/User=vmware-exporter\nGroup=vmware-exporter/' \
-  /etc/systemd/system/vmware-exporter.service
-sudo systemctl daemon-reload && sudo systemctl restart vmware-exporter
-```
-
-Some hardening directives (`ProtectKernelLogs`, `ProtectClock`,
-`RestrictSUIDSGID`, etc.) may be unknown to older systemd versions — they
-produce warnings but are safely ignored. Run `systemd-analyze verify` to
-confirm.
+The unit runs under a static `User=`/`Group=` account that `install.sh` creates,
+so there is no DynamicUser / systemd 232 requirement anymore. On older systems
+some hardening directives (`ProtectKernelLogs`, `ProtectClock`,
+`RestrictSUIDSGID`, etc.) may be unknown — they produce warnings but are safely
+ignored. Run `systemd-analyze verify` to confirm, and delete any directive your
+systemd rejects.
 
 </details>
 

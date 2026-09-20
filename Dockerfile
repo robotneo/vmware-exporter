@@ -61,9 +61,21 @@ RUN go mod download && \
       -X github.com/prometheus/common/version.BuildUser=docker" \
       -o vmware-exporter ./cmd/vmware-exporter
 
+# Minimal passwd carrying only the unprivileged runtime user (uid/gid 65534,
+# the conventional "nobody"). A bare `USER 65534:65534` would run without an
+# /etc/passwd entry; shipping one means the uid resolves to a name in logs and
+# any os/user lookup succeeds. Generated in the builder (scratch has no shell).
+RUN printf 'nobody:x:65534:65534:Nobody:/:/sbin/nologin\n' > /tmp/passwd-nobody
+
 FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=builder /tmp/passwd-nobody /etc/passwd
 COPY --from=builder /build/vmware-exporter /bin/vmware-exporter
+
+# Run as an unprivileged, non-login user. The binary is static, serves one
+# high port (9169), and writes nothing to disk (all assets are go:embed-ed),
+# so dropping root is safe; pair with read_only/cap_drop in docker-compose.
+USER 65534:65534
 
 EXPOSE 9169
 
