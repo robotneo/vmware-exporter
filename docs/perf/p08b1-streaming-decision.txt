@@ -1,0 +1,89 @@
+P-08b-1 块内即解析即发 / 流式 XML：测量后的决策（D 批评估）
+============================================================
+
+日期：2026-09-18
+模型：simulator.VPX()，1 datacenter / 1 standalone host / 1 datastore /
+      500 powered-on VM（perfbench_test.go::benchModel）。
+采集：临时对照实验（评估后已删除，未改任何生产代码），正常 GC（GOGC=100），
+      后台每 ~200µs 采样 runtime.MemStats，A/B 各预热 1 轮再交替 5 轮。
+
+----------------------------------------------------------------------
+一、D 批范围核对
+----------------------------------------------------------------------
+原计划 D 批 = P-08a（VM 数据面实体裁剪）+ P-08b-1（块内即解析即发）。
+
+- P-08a 已在更早批次落地：vm.go:177 构造 perf refs 前已按
+  runtime.powerState != poweredOn 跳过（suspended 单独记 reason），并经
+  RecordEntities 上报 skipped/powered_off，可观测性齐备。D 批实际只剩
+  P-08b-1。
+
+----------------------------------------------------------------------
+二、两个关键的代码事实
+----------------------------------------------------------------------
+1. perf 结果的"重活"发生在 govmomi performance.Manager.Query 内部：
+   methods.QueryPerf -> vim25 XML 反射反序列化，产出完整
+   []BasePerfEntityMetricBase 对象图（PerfEntityMetric / PerfMetricIntSeries
+   等包装层 + int64 值数组）。这一步我们无法通过改 parts/rawSeries 的形状
+   影响 —— Query 一返回，整块的 XML 解码垃圾已经产生。
+
+2. ToMetricSeries 是"浅"转换：它重建 EntityMetric/MetricSeries 结构，但
+   MetricSeries.Value 直接复用 PerfMetricIntSeries.Value 的底层 int64 数组
+   （manager.go:459，`Value: v.Value`，不拷贝）。所以跨块的 rawSeries
+   总集只是一层接口头/包装引用，不是 44MB 的主体；真正的大头 int64 负载
+   在两种结构下都必须存活到 emit。
+
+----------------------------------------------------------------------
+三、A/B 实测（baseline=现状，streamed=每块独立 ToMetricSeries、去 rawSeries 总集）
+----------------------------------------------------------------------
+（单位 KB；peakInuse=抓取期间观测到的 HeapInuse 增量高水位，gc=该轮新增 GC 次数）
+
+round   baseline peak / gc / totalAlloc        streamed peak / gc / totalAlloc
+  0     22520 / 2 / 44279                      23448 / 2 / 44290
+  1     23912 / 2 / 44213                      23200 / 2 / 44242
+  2     21000 / 2 / 44735                      22960 / 2 / 44764
+  3     21808 / 2 / 44753                      21624 / 2 / 44726
+  4     22920 / 2 / 44763                      21664 / 2 / 44788
+
+另（关 GC 的存活测量，见上一阶段诊断）：
+  500 VM 一次抓取 totalAlloc≈44MB；关 GC 峰值存活=44MB；强制 GC 后
+  残留≈0（实测 -344KB，基线噪声）。=> 无泄漏，44MB 是单轮瞬态垃圾。
+
+结论：
+- peak inuse 两条路径都在 ~21–24MB 区间互相重叠，差异在采样噪声内，
+  无可测收益。
+- 每轮新增 GC 都是 2 次，无差异。
+- totalAlloc 都是 ~44MB，无差异（证明去掉的只是接口头总集，负载与 XML
+  解码垃圾一两都没少）。
+
+----------------------------------------------------------------------
+四、决策：D 批现在不实施
+----------------------------------------------------------------------
+P-08b-1 有两条可能的实现路线，测量后两条都不值得现在做：
+
+路线 A（中风险）：块内即 Query -> ToMetricSeries -> emit，去掉 parts/rawSeries
+  跨块总集。
+  - 本实验已直接证明：正常 GC 下 peak inuse / NumGC / totalAlloc 全部无可测
+    改善。原因是分配大头是 Query 内部的 XML 反射解码垃圾，逐块产生、逐块
+    可回收，与是否保留跨块总集无关；而 int64 负载本来就必须活到 emit。
+  - 代价是重排经过正确性修正的聚合（delta 求和 / absolute 求平均）、历史
+    尾部截断、全有或全无与输出顺序契约。零收益换真实风险，不做。
+
+路线 B（高风险）：手写流式 XML 解码器，绕开 govmomi Query 的整图反射，
+  边解析边发指标。这是唯一能削减 ~44MB totalAlloc 的杠杆。
+  - 但这 44MB 已被实测证明是"单轮瞬态、GC 后零残留"，发生在 ~140–190ms
+    的一次抓取内（500 VM），稳态 RSS 不累积。为瞬态垃圾重写并长期维护一份
+    vSphere SOAP perf 响应解析器（要自己跟 govmomi 的类型映射、截断、
+    StatsType 聚合保持一致），还要逐指标 golden 对照，风险/回报严重不匹配。
+
+----------------------------------------------------------------------
+五、什么信号出现才重启 D 批
+----------------------------------------------------------------------
+按性能计划"用数据决定"的原则，只有当出现真实的大环境压力信号时才重启：
+- P-09 SOAP/堆自监控（或现场 gctrace / OOM）显示 2000+ VM、多 collector
+  并发时单次抓取的堆峰值逼近 cgroup/容器内存上限，或 GC 占用 CPU 明显；
+- 届时优先做路线 B，但必须：独立 dev 分支 + vcsim 逐指标 golden（排序后
+  集合比对，含 delta 求和/absolute 平均/历史尾部截断三类用例）+ -race，
+  并把前后 peak inuse / NumGC / totalAlloc 贴进 PR 描述作为合并门槛。
+
+现状已有的内存卫生（P-08b 保守版，已合入）保留：rawSeries 按上界预分配、
+合并后 parts=nil、ToMetricSeries 后 rawSeries=nil。

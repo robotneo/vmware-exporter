@@ -503,6 +503,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   byte-identical (full test suite green); see
   `docs/perf/p08b-perf-resultset.txt`.
 
+### ⚡ Performance — batch D evaluated, deliberately not implemented
+
+- **Streaming/chunk-local perf processing (P-08b-1) was benchmarked and parked.**
+  The batch's other half, P-08a (skip non-powered-on VMs for the perf data
+  plane), had already shipped. For P-08b-1 a vcsim 500-VM A/B test compared the
+  current "collect every chunk → merge → one `ToMetricSeries` → emit" path
+  against a chunk-local variant with no cross-chunk `rawSeries` aggregate: under
+  normal GC the peak `HeapInuse` (~21–24 MiB), GC count (2/scrape) and total
+  alloc (~44 MiB) all overlap within sampling noise. A GC-off run confirms the
+  ~44 MiB is per-scrape transient garbage (govmomi's reflective SOAP XML decode
+  inside `Query`) with ~zero retained heap after GC — not a leak. The only lever
+  that cuts the total, a hand-written streaming XML decoder, is high-risk for no
+  steady-state gain, so it is deferred until real large-fleet pressure
+  (2000+ VMs approaching the memory limit / GC CPU) justifies it; restart
+  criteria and the gate (separate branch, per-metric golden compare, `-race`,
+  before/after numbers) are recorded in
+  `docs/perf/p08b1-streaming-decision.txt`. No production code changed.
+
 ### 🔧 Fixed
 
 - **systemd unit no longer kills the service on reload.** The exporter used to
