@@ -138,6 +138,50 @@ sudo systemctl restart vmware-exporter
 > 改用固定系统账号后，配置可以收 0600，而且 `-file` 直接读磁盘文件，
 > SIGHUP 热重载照常工作（不像 systemd `LoadCredential` 那样拿启动快照、reload 失效）。
 
+## 防止 core dump 把内存里的凭证写到磁盘
+
+exporter 进程在运行期会把 **vCenter 凭证留在堆内存里**：`-file` 读入的服务级密码、
+`/probe` 每个请求的用户名密码、登录后的会话 cookie。一旦进程因崩溃被内核转储（core
+dump），这些明文会随整份内存镜像落盘——即使运行账号是无权的 `vmware-exporter`，core
+文件通常被 `systemd-coredump` 收进全局目录（如 `/var/lib/systemd/coredump/`），可能
+被排障流程、备份或别的账号接触到。
+
+本包的 unit 已**显式禁止 core dump**，无需手工配置：
+
+```ini
+LimitCORE=0
+```
+
+这让内核对该服务的 `RLIMIT_CORE` 软/硬上限都为 0，崩溃时不产生 core 文件。它**不影响
+排障**：
+
+- Go 程序 `panic` 的 goroutine 栈、以及 `SIGQUIT` 触发的全量栈，都打印到 **stderr**，
+  本服务的 stderr 进 journal（`journalctl -u vmware-exporter`），不依赖 core 文件；
+- 二进制是 `CGO_ENABLED=0` 的静态构建、不带本地调试符号，core 对应用层问题本就没有
+  额外价值。
+
+确认生效（`Max CORE` 应为 `0`）：
+
+```bash
+systemctl show vmware-exporter -p LimitCORE
+cat /proc/$(pidof vmware-exporter)/limits | grep -i core
+```
+
+若某次疑难崩溃确实需要临时抓 core，用覆盖片段而不是改主 unit，并配好受保护的
+coredump 目录：
+
+```bash
+sudo systemctl edit vmware-exporter
+# 加：[Service]
+#     LimitCORE=1G
+sudo systemctl daemon-reload && sudo systemctl restart vmware-exporter
+# 抓完务必删掉覆盖、恢复 LimitCORE=0
+```
+
+> 容器部署同理：`docker-compose.yml` 已设置 `ulimits: core: {soft: 0, hard: 0}`。
+> 直接 `docker run` 时可加 `--ulimit core=0:0`。注意节点级 `/proc/sys/kernel/core_pattern`
+> 若被设成把 core 送到管道/守护进程，仍可能绕开容器限制，需要节点侧一并收敛。
+
 ## systemd 版本
 
 unit 使用标准的 `User=`/`Group=`，**任何受支持的 systemd 版本均可**，不再依赖

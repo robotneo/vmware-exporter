@@ -90,6 +90,17 @@ ReadOnlyPaths=/etc/vmware-exporter
 # 和 LimitCORE=infinity 一起意味着一次崩溃能 dump 出好几个 GB 的 core。
 LimitNOFILE=65536
 
+# 进程堆里常驻 vCenter 凭证（-file 读入的密码、/probe 每请求凭证、会话 cookie），
+# 一旦崩溃产生 core dump，这些明文会随内存镜像落盘 —— 即便运行账号是
+# vmware-exporter，core 文件也可能被 systemd-coredump 收进全局目录、被 root 之外
+# 的排障流程拷走。显式 LimitCORE=0 直接禁止内核写 core。
+#
+# 不影响排障：Go panic 与 SIGQUIT 的 goroutine 栈都打到 stderr（即 journal），
+# 本二进制 CGO_ENABLED=0 静态构建、无可加载的本地符号，core 对应用层排错本就
+# 没有额外价值。如需临时为某次崩溃抓 core，用
+# `systemctl edit vmware-exporter` 覆盖本值并配好受保护的 coredump 目录。
+LimitCORE=0
+
 # 日志进 journal。StandardOutput=syslog 从 systemd 246 起已废弃，而且
 # syslog= 本来也是路由到 journal 的。
 StandardOutput=journal
