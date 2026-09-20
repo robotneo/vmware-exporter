@@ -74,17 +74,21 @@
 
 这是默认路径在大环境（2000 VM）下 CPU/内存的主要来源，分两个子项：
 
-**P-08a：跳过明确无实时数据的实体**
-- 现状：host collector 已用 `hostDataPlaneEligible`（开机+connected+非维护）裁剪主机；但 **VM 侧** perf 查询是否对「 poweredOff / 不存在于实时统计的 VM」也做了等价裁剪需要核对（vm.go）。若仍向关机/模板/孤立 VM 发 PerfMetricId，vCenter 对这些实体返回空，浪费请求体积与合并期分配。
-- 方案：对齐 host 的做法，构造 perf refs 前按 runtime.powerState（必要时加 connection/template 判定）过滤 VM，被过滤实体计入 `RecordEntities(skipped, powered_off)`（reason 常量已有），保证「为什么没指标」可观测。
-- 风险：中。必须用 vcsim + 真实语义验证「不支持实时」的判定，避免把「开机但短暂无采样」的 VM 误裁（那种情况应保留查询，只是本轮无样本）。**这一项需要先在 vcsim 建对照实验确认收益与正确性，再决定是否动。**
+**P-08a：跳过明确无实时数据的实体** —— ✅ 已落地（vm.go:177）
+- 构造 perf refs 前已按 `runtime.powerState != poweredOn` 跳过（suspended 单独记 reason），
+  并经 `RecordEntities(skipped, powered_off/suspended)` 上报，可观测性齐备。
+- 仅 perf 计数器按电源态跳过；拓扑/生命周期指标仍对全部 VM 输出（快照等不依赖实时采样）。
 
 **P-08b：perf 结果中间切片的容量与生命周期**
 - 现状：`parts := make([][]BasePerfEntityMetricBase, len(chunks))` 保留全部分块结果到 `g.Wait()` 后统一合并输出；2000 VM × 多计数器 × 多样本时，parts 与其内联的 value 数组在合并完成前全部常驻。
 - 可选优化（二选一或都做）：
-  1. **块内即解析即发指标**：每个 chunk goroutine 拿到 series 后直接转换成 metric 并发到 ch（ch 由 promhttp 消费，天然背压），不再保留 parts 总集。代价：输出顺序与「按实体顺序合并」的既有契约变化——需确认是否有测试/用户依赖输出顺序（Prometheus 文本协议不依赖顺序，registry 排序在编码层，理论安全，但要用 golden 测试证明序列集合逐字一致）。
+  1. **块内即解析即发指标**（P-08b-1）：每个 chunk goroutine 拿到 series 后直接转换成 metric 并发到 ch（ch 由 promhttp 消费，天然背压），不再保留 parts 总集。
   2. 保守版：保留 parts，但给每个内层 slice 预分配容量、合并后及时 `parts[i]=nil` 帮助 GC，不改变顺序。
-- 建议：先做 (2)（零行为风险），把 (1) 作为经基准证明收益足够后的可选项单独审批。
+- 进展：(2) 已合入。(1) 经 2026-09-18 的 vcsim 500-VM A/B 实测后**决定暂缓**——正常 GC 下
+  peak HeapInuse / NumGC / totalAlloc 与现状全部在噪声内（XML 反射解码垃圾逐块产生、逐块可回收，
+  int64 负载本就要存活到 emit；44MB totalAlloc 是单轮瞬态、GC 后零残留，非泄漏）。唯一能砍总量的
+  手写流式 XML 解码器属高风险、零稳态收益，不值得现在维护。证据与重启信号见
+  `docs/perf/p08b1-streaming-decision.txt`。
 
 **验证**：vcsim 2000-VM 场景 gctrace 对比堆峰值与单轮耗时；perfchunk 现有测试 + 新增「裁剪计数」「序列集合等价（排序后比对）」测试。
 **风险**：(a) 中（误裁风险）；(b-1) 中（顺序契约）、(b-2) 低。
@@ -155,7 +159,7 @@
 | A（低风险快赢） | P-07 包级正则；P-01 esxcli Desc 按组合缓存；P-04 默认 info（含 check_config/README 联动） | 无（输出逐字一致），仅默认日志级别变化 | 低 | 全量 test + gctrace 对比 + golden |
 | B（度量先行） | P-09 SOAP 往返/在飞/等待指标 | 仅新增指标 | 低 | promlint + 新指标文档（METRICS.md/zh） |
 | C（主收益，需实验） | P-03 计数器元数据 TTL 缓存（仅 /metrics，按 target+版本）；P-08b parts 容量/及时释放 | 无（仅内存/往返） | 低-中 | vcsim 大 inventory 基准 + 缓存边界测试 |
-| D（高收益但高风险，单独审批） | P-08a VM 数据面实体裁剪；P-08b-1 块内即解析即发（去 parts 总集） | 可能影响无数据实体的查询/输出顺序 | 中 | 必须先 vcsim 对照实验证明正确且等价，再动 |
+| D（经测量暂缓） | ~~P-08a VM 数据面实体裁剪~~（已落地）；P-08b-1 块内即解析即发 | P-08b-1 A/B 实测无可测收益，暂不实施 | — | 已做 vcsim 500-VM A/B；见 docs/perf/p08b1-streaming-decision.txt，待大环境信号重启 |
 | 暂不做 | P-05 esxcli 协议级降往返、P-02、P-06(默认)、P-10 | — | — | 用 P-09 数据决定是否重启 |
 
 每个批次独立成一个 dev 分支，按项目约定 `--no-ff` 合 master，不 push、不打 tag，除非明确要求。批次 C/D 必须有「前后基准数字」贴进 PR 描述，否则不合并。
