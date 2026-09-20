@@ -101,6 +101,20 @@ var (
 	probeAllowedTargets = flag.String("probe.allowed-targets", "",
 		"Comma-separated allowlist for the /probe target host: suffixes starting with '.', CIDRs containing '/', or exact host/IP matches. Empty (default) allows any target.")
 
+	// probeDenyQueryCredentials 是 S-07 的凭证收敛开关（默认 false 保持兼容）。
+	//
+	// /probe 长期接受把 username/password 放进 URL 查询串
+	// （/probe?target=...&username=u&password=p），Prometheus 的标准抓取配置
+	// 也常用这种形态。代价是凭证会出现在：exporter/反代的访问日志、
+	// Referer 头、浏览器历史、APM 链路追踪里。置 true 后，凡 URL 查询串带
+	// username/password 一律 400，凭证只接受 POST 表单体或 HTTP Basic Auth。
+	//
+	// 判定针对查询串本身（r.URL.Query），与 HTTP 方法无关 —— 所以"POST 却
+	// 把凭证写在 URL 里、body 放别的字段"这种绕过也一并挡掉。该 flag 在请求
+	// 路径上经快照读取，随 SIGHUP 热重载。
+	probeDenyQueryCredentials = flag.Bool("probe.deny-query-credentials", false,
+		"Reject (400) any /probe request whose URL query string carries username/password. When enabled, credentials are accepted only from the POST form body or HTTP Basic Auth, keeping them out of access logs, Referer headers and browser history. Default false preserves the legacy GET-with-credentials behaviour.")
+
 	// inventoryCacheTTL 控制进程级清单缓存的有效期。
 	//
 	// 缓存只覆盖慢变的拓扑/容量面（datacenter、folder、cluster、compute
