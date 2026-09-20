@@ -10,6 +10,7 @@ import (
 
 	"github.com/prezhdarov/vmware-exporter/internal/collector"
 	"github.com/prezhdarov/vmware-exporter/internal/config"
+	"github.com/prezhdarov/vmware-exporter/internal/safedial"
 	"github.com/prezhdarov/vmware-exporter/internal/target"
 
 	"github.com/vmware/govmomi/performance"
@@ -47,6 +48,16 @@ var (
 	// /probe 多租户路径永不读缓存。
 	vmwCounterCacheTTL = flag.Duration("scrape.counter-cache-ttl", 10*time.Minute,
 		"How long the performance-counter metadata table (counter name to id/unit) is reused on the /metrics path. The cache key includes the target plus its vCenter About version/build, so an upgrade is picked up within one TTL. 0 fetches it on every login. Never used on the multi-tenant /probe path.")
+
+	// vmwDenyPrivate 是 S-06 拨号侧 IP 复核的加严开关。
+	//
+	// 默认（false）只阻断链路本地（含云元数据 169.254.169.254）与未指定地址，
+	// 对跑在 RFC1918 内网的 vCenter/ESXi（最常见形态）零误伤；置 true 后再
+	// 一并阻断环回与私网，适用于 exporter 与 vCenter 走可路由地址、或要求强
+	// 隔离的部署。两种模式都在真正 connect(2) 前按本次实际解析出的 IP 判定，
+	// 堵住 DNS rebinding。详见 internal/safedial。
+	vmwDenyPrivate = flag.Bool("vmware.deny-private-addresses", false,
+		"Also reject dialing loopback and RFC1918/ULA private addresses when connecting to vCenter, in addition to the always-blocked link-local (incl. 169.254.169.254 cloud metadata) and unspecified addresses. Enable only when vCenter is reached over routable addresses; do NOT enable for an on-LAN vCenter or a 127.0.0.1 sidecar proxy.")
 )
 
 // logoutTimeout 是 SOAP Logout 单独使用的超时。抓取用的 ctx 在 Logout 时
@@ -121,6 +132,7 @@ type settings struct {
 	timeout         int
 	chunkSize       int
 	counterCacheTTL time.Duration
+	denyPrivate     bool
 }
 
 // currentSettings 在读锁保护下一次性拷出全部 vmware.* flag。
@@ -142,6 +154,7 @@ func currentSettings() settings {
 			timeout:         *vmwTimeout,
 			chunkSize:       *vmwPerfChunkSize,
 			counterCacheTTL: *vmwCounterCacheTTL,
+			denyPrivate:     *vmwDenyPrivate,
 		}
 	})
 
@@ -314,10 +327,21 @@ func (vm *VMware) loginWithCredentials(ctx context.Context, creds Credentials,
 		cancel()
 	}
 
-	if err := session.Login(scrapeCtx, client, nil); err != nil {
+	// 拨号侧 IP 复核（S-06）。govmomi 的 config 回调在它 NewClient 之后、发出
+	// 任何请求之前调用一次，这里把内部 transport 的明文/TLS 两条拨号路径都换成
+	// 经 safedial 校验的版本 —— 在 connect 前按「本次实际解析到的 IP」判定，
+	// 堵住 DNS rebinding 与「字符串白名单放行但 IP 落在元数据/内网」的残留面。
+	// 必须在 transport 层而不是预先 net.LookupIP：那两者之间存在 TOCTOU 窗口。
+	dialPolicy := safedial.PolicyForFlag(cfg.denyPrivate)
+	soapConfig := func(sc *soap.Client) error {
+		safedial.GuardTransport(sc.DefaultTransport(), dialPolicy)
+		return nil
+	}
+
+	if err := session.Login(scrapeCtx, client, soapConfig); err != nil {
 		// 登录本身失败时没有服务端会话可登出，只释放本地资源。
 		cancel()
-		return nil, noop, fmt.Errorf("login err: %s", err)
+		return nil, noop, fmt.Errorf("login err: %w", err)
 	}
 
 	perf := performance.NewManager(client)
