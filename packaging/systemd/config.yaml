@@ -137,6 +137,14 @@ collector.max-concurrency: 8
 # 可达，请设为 false。
 web.debug-console: true
 
+# 运行时剖析端点 /debug/pprof/（CPU、堆、goroutine、执行轨迹）。排查高 CPU
+# 或内存问题时临时设为 true，抓完 profile 再改回 false。默认关闭：这些端点
+# 会暴露 goroutine 栈并产生采样开销，不要在不可信网络上长期开启。
+# 注意：该开关只在进程启动时挂载，改这里后必须 systemctl restart（SIGHUP
+# 热重载不会生效）。抓 CPU profile：
+#   go tool pprof http://127.0.0.1:9169/debug/pprof/profile?seconds=60
+web.enable-pprof: false
+
 # 同时输出重命名前的旧指标名。只有当你的仪表盘或告警规则还在引用旧名字
 # 时才需要打开。
 metrics.legacy: false
