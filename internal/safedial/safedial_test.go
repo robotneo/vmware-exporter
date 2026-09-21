@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -97,7 +96,6 @@ func TestIsPrivateBoundaries(t *testing.T) {
 
 func TestControlCallback(t *testing.T) {
 	cb := Control(PolicyDefault)
-	var _ func(network, address string, c syscall.RawConn) error = cb
 
 	// 实际地址形如 ip:port，命中链路本地即拦截，且错误可被 errors.Is 识别。
 	if err := cb("tcp", "169.254.169.254:80", nil); !errors.Is(err, ErrBlockedAddress) {
@@ -208,7 +206,7 @@ func TestGuardTransportHTTPSHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET through guarded TLS transport: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}

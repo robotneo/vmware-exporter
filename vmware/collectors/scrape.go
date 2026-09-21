@@ -366,9 +366,10 @@ func scrapePerformance(ctx context.Context, ch chan<- prometheus.Metric, logger 
 
 	// ToMetricSeries 的返回值只共享 int64 样本与 SampleInfo 的底层数组，
 	// PerfEntityMetric / PerfMetricIntSeries 这些 SOAP 包装结构体不再被需要。
-	// 转换一结束（含出错）就断开 rawSeries，让包装层在发指标这段最久的区间里
-	// 可被回收，压低单次大抓取的存活堆峰值。值数组仍由 metrics 持有到 emit 完。
-	rawSeries = nil
+	// 这里无需手动 `rawSeries = nil`：rawSeries 在上面这行之后再无读取，Go
+	// 编译器的精确栈活性分析已让包装层从这里起（含出错返回）即可回收，不必等到
+	// 函数返回；手动置 nil 只会被 ineffassign 标记为无效赋值。值数组仍由 metrics
+	// 持有到 emit 完成。
 	if err != nil {
 		logger.Error("error converting perf samples to metric series", "error", err, "type", moType)
 		return

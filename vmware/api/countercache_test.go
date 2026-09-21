@@ -2,6 +2,7 @@ package vmware
 
 import (
 	"errors"
+	"reflect"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -55,8 +56,9 @@ func TestCounterCacheHitsWithinTTL(t *testing.T) {
 	if got := atomic.LoadInt32(&fetches); got != 1 {
 		t.Fatalf("fetches = %d, want 1 (second Get must be a cache hit)", got)
 	}
-	// 返回的必须是同一只读实例（共享 map，不复制）。
-	if &first == nil || len(first) != len(second) {
+	// 返回的必须是同一只读实例（共享 map，不复制）。map 不可直接用 == 比较，
+	// 用 reflect.Value.Pointer() 取底层 map 指针确认是同一个实例。
+	if reflect.ValueOf(first).Pointer() != reflect.ValueOf(second).Pointer() || len(first) != len(second) {
 		t.Fatal("cached map must be the same instance")
 	}
 }
