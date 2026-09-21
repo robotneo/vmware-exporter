@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🩺 Diagnostics
+
+- **On-demand runtime profiling endpoint (`-web.enable-pprof`, default off).**
+  Reports of the exporter's CPU climbing over time — eventually raising the host
+  temperature — could not be localised from source alone: static review shows a
+  sound concurrency model (bounded errgroup fan-out, LRU-bounded per-target
+  state maps, paired login/logout, no busy-wait), so the cause has to be captured
+  from a live process. The exporter now mounts the standard `net/http/pprof`
+  handlers under `/debug/pprof/` only when explicitly enabled, giving CPU, heap,
+  goroutine and execution-trace profiles via
+  `go tool pprof http://<host>:9169/debug/pprof/profile?seconds=30`. It is off
+  by default (unlike the harmless debug console) because the endpoints expose
+  goroutine stacks and drive sampling overhead; enable it while reproducing the
+  high-CPU condition, capture a profile, then disable it again.
+
 ## [v0.2.0] - 2026-09-21
 
 ### ✨ Added

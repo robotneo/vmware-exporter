@@ -74,6 +74,15 @@ var (
 	debugConsole = flag.Bool("web.debug-console", true,
 		"Serve the interactive debug console on /debug. Disable it for deployments where the exporter's HTTP interface is reachable by untrusted users.")
 
+	// enablePprof 控制 /debug/pprof/ 运行时剖析端点。
+	//
+	// 与 -web.debug-console 的关键差别是默认值：调试页是无害的只读页面、
+	// 默认开；profiling 端点会暴露全部 goroutine 栈并能驱动 CPU/trace 采样、
+	// 产生真实开销，默认必须关。只在排查 CPU/内存问题时临时打开
+	// （启动加该 flag），抓到 profile 后关掉重启。详见 diagnostics.go。
+	enablePprof = flag.Bool("web.enable-pprof", false,
+		"Expose Go runtime profiling endpoints on /debug/pprof/ (CPU, heap, goroutine, trace). Disabled by default; enable temporarily to diagnose high CPU or memory usage, then disable again.")
+
 	// scrapeInflight 限制同时进行的抓取数。
 	//
 	// -collector.max-concurrency 限的是**单次抓取内部**同时跑多少个
@@ -269,6 +278,11 @@ func main() {
 		logger.Error("could not register the web UI", "error", err)
 		os.Exit(1)
 	}
+
+	// 运行时剖析端点（默认关闭）。启动期裸读 *enablePprof，与上面的
+	// *debugConsole 同属「只在启动读一次」的刻意用法；reload goroutine 在
+	// 这之后才启动（见下方 handleReloadSignals），故不构成竞争窗口。
+	registerDiagnostics(http.DefaultServeMux, *enablePprof)
 
 	// SIGHUP -> 重新读 -file 与环境变量。
 	//
