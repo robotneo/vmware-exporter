@@ -9,18 +9,19 @@
       "pluginName": "VictoriaMetrics"
     }
   ],
+  "__elements": {},
   "__requires": [
+    {
+      "type": "panel",
+      "id": "gauge",
+      "name": "Gauge",
+      "version": ""
+    },
     {
       "type": "grafana",
       "id": "grafana",
       "name": "Grafana",
-      "version": "10.4.0"
-    },
-    {
-      "type": "datasource",
-      "id": "victoriametrics-metrics-datasource",
-      "name": "VictoriaMetrics",
-      "version": "0.13.3"
+      "version": "12.1.1"
     },
     {
       "type": "panel",
@@ -30,21 +31,15 @@
     },
     {
       "type": "panel",
-      "id": "gauge",
-      "name": "Gauge",
-      "version": ""
-    },
-    {
-      "type": "panel",
       "id": "timeseries",
       "name": "Time series",
       "version": ""
     },
     {
-      "type": "panel",
-      "id": "row",
-      "name": "Row",
-      "version": ""
+      "type": "datasource",
+      "id": "victoriametrics-metrics-datasource",
+      "name": "VictoriaMetrics",
+      "version": "0.18.3"
     }
   ],
   "annotations": {
@@ -84,32 +79,46 @@
       "url": ""
     }
   ],
-  "liveNow": false,
   "panels": [
     {
-      "id": 301,
-      "type": "row",
-      "title": "虚拟机概览 · VM Overview",
       "collapsed": false,
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-      },
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 0
       },
-      "panels": []
+      "id": 301,
+      "panels": [],
+      "title": "虚拟机概览 · VM Overview",
+      "type": "row"
     },
     {
-      "id": 302,
-      "type": "stat",
-      "title": "虚拟机 · Virtual Machine",
       "datasource": {
         "type": "victoriametrics-metrics-datasource",
         "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#F8FAFC",
+            "mode": "fixed"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "—",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
       },
       "gridPos": {
         "h": 4,
@@ -117,6 +126,30 @@
         "x": 0,
         "y": 1
       },
+      "id": 302,
+      "options": {
+        "colorMode": "none",
+        "content": "",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "mode": "markdown",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "text": {
+          "valueSize": 16
+        },
+        "textMode": "name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -130,67 +163,35 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "name",
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "percentChangeColorMode": "standard",
-        "content": "",
-        "mode": "markdown",
-        "text": {
-          "valueSize": 16
-        }
+      "title": "虚拟机 · Virtual Machine",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
+          "color": {
+            "fixedColor": "#38BDF8",
+            "mode": "fixed"
+          },
           "decimals": 0,
           "mappings": [],
           "noValue": "—",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#F8FAFC"
-          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "blue",
-                "value": null
+                "value": 0
               }
             ]
           },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          }
+          "unit": "none"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 303,
-      "type": "stat",
-      "title": "Guest IP",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 4,
@@ -198,6 +199,30 @@
         "x": 8,
         "y": 1
       },
+      "id": 303,
+      "options": {
+        "colorMode": "none",
+        "content": "",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "mode": "markdown",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "text": {
+          "valueSize": 16
+        },
+        "textMode": "name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -211,67 +236,35 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "name",
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "percentChangeColorMode": "standard",
-        "content": "",
-        "mode": "markdown",
-        "text": {
-          "valueSize": 16
-        }
+      "title": "Guest IP",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
+          "color": {
+            "fixedColor": "#34D399",
+            "mode": "fixed"
+          },
           "decimals": 0,
           "mappings": [],
           "noValue": "—",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#38BDF8"
-          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "blue",
-                "value": null
+                "value": 0
               }
             ]
           },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          }
+          "unit": "none"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 304,
-      "type": "stat",
-      "title": "集群 · Cluster",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 4,
@@ -279,6 +272,30 @@
         "x": 11,
         "y": 1
       },
+      "id": 304,
+      "options": {
+        "colorMode": "none",
+        "content": "",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "mode": "markdown",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "text": {
+          "valueSize": 16
+        },
+        "textMode": "name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -292,67 +309,35 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "name",
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "percentChangeColorMode": "standard",
-        "content": "",
-        "mode": "markdown",
-        "text": {
-          "valueSize": 16
-        }
+      "title": "集群 · Cluster",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
+          "color": {
+            "fixedColor": "#38BDF8",
+            "mode": "fixed"
+          },
           "decimals": 0,
           "mappings": [],
           "noValue": "—",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#34D399"
-          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "blue",
-                "value": null
+                "value": 0
               }
             ]
           },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          }
+          "unit": "none"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 305,
-      "type": "stat",
-      "title": "所在主机 · Host",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 4,
@@ -360,6 +345,30 @@
         "x": 15,
         "y": 1
       },
+      "id": 305,
+      "options": {
+        "colorMode": "none",
+        "content": "",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "mode": "markdown",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "text": {
+          "valueSize": 15
+        },
+        "textMode": "name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -373,67 +382,35 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "name",
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "percentChangeColorMode": "standard",
-        "content": "",
-        "mode": "markdown",
-        "text": {
-          "valueSize": 15
-        }
+      "title": "所在主机 · Host",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
+          "color": {
+            "fixedColor": "#34D399",
+            "mode": "fixed"
+          },
           "decimals": 0,
           "mappings": [],
           "noValue": "—",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#38BDF8"
-          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "blue",
-                "value": null
+                "value": 0
               }
             ]
           },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          }
+          "unit": "s"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 306,
-      "type": "stat",
-      "title": "运行时长 · Uptime",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 4,
@@ -441,6 +418,27 @@
         "x": 18,
         "y": 1
       },
+      "id": 306,
+      "options": {
+        "colorMode": "value",
+        "content": "",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "mode": "markdown",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -454,64 +452,35 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "percentChangeColorMode": "standard",
-        "content": "",
-        "mode": "markdown"
+      "title": "运行时长 · Uptime",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
-          "decimals": 0,
+          "color": {
+            "fixedColor": "#FBBF24",
+            "mode": "fixed"
+          },
+          "decimals": 1,
           "mappings": [],
           "noValue": "—",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#34D399"
-          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "blue",
-                "value": null
+                "value": 0
               }
             ]
           },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          }
+          "unit": "bytes"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 307,
-      "type": "stat",
-      "title": "磁盘占用 · On Disk",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 4,
@@ -519,6 +488,27 @@
         "x": 21,
         "y": 1
       },
+      "id": 307,
+      "options": {
+        "colorMode": "value",
+        "content": "",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "mode": "markdown",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -532,64 +522,43 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "percentChangeColorMode": "standard",
-        "content": "",
-        "mode": "markdown"
+      "title": "磁盘占用 · On Disk",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes",
+          "color": {
+            "mode": "thresholds"
+          },
           "decimals": 1,
           "mappings": [],
-          "noValue": "—",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#FBBF24"
-          },
+          "max": 100,
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "blue",
-                "value": null
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "orange",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 90
               }
             ]
           },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          }
+          "unit": "percent"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 308,
-      "type": "gauge",
-      "title": "CPU 使用率 · CPU Usage",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 7,
@@ -597,6 +566,23 @@
         "x": 0,
         "y": 5
       },
+      "id": 308,
+      "options": {
+        "minVizHeight": 75,
+        "minVizWidth": 75,
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "auto"
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -610,34 +596,29 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showThresholdLabels": false,
-        "showThresholdMarkers": true,
-        "orientation": "auto"
+      "title": "CPU 使用率 · CPU Usage",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "percent",
-          "decimals": 1,
-          "min": 0,
-          "max": 100,
           "color": {
             "mode": "thresholds"
           },
+          "decimals": 1,
+          "mappings": [],
+          "max": 100,
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
-                "value": null
+                "value": 0
               },
               {
                 "color": "orange",
@@ -649,19 +630,9 @@
               }
             ]
           },
-          "custom": {},
-          "mappings": []
+          "unit": "percent"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 309,
-      "type": "gauge",
-      "title": "内存活动率 · Memory Active",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 7,
@@ -669,6 +640,23 @@
         "x": 6,
         "y": 5
       },
+      "id": 309,
+      "options": {
+        "minVizHeight": 75,
+        "minVizWidth": 75,
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "auto"
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -682,58 +670,35 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showThresholdLabels": false,
-        "showThresholdMarkers": true,
-        "orientation": "auto"
+      "title": "内存活动率 · Memory Active",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "percent",
-          "decimals": 1,
-          "min": 0,
-          "max": 100,
           "color": {
-            "mode": "thresholds"
+            "fixedColor": "#60A5FA",
+            "mode": "fixed"
           },
+          "decimals": 1,
+          "mappings": [],
+          "noValue": "—",
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 70
-              },
-              {
-                "color": "red",
-                "value": 90
+                "color": "blue",
+                "value": 0
               }
             ]
           },
-          "custom": {},
-          "mappings": []
+          "unit": "hertz"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 310,
-      "type": "stat",
-      "title": "CPU 使用",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 7,
@@ -741,6 +706,27 @@
         "x": 12,
         "y": 5
       },
+      "id": 310,
+      "options": {
+        "colorMode": "value",
+        "content": "",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "mode": "markdown",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -754,64 +740,44 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "percentChangeColorMode": "standard",
-        "content": "",
-        "mode": "markdown"
+      "title": "CPU 使用",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "hertz",
-          "decimals": 1,
-          "mappings": [],
-          "noValue": "—",
           "color": {
-            "mode": "fixed",
-            "fixedColor": "#60A5FA"
+            "mode": "thresholds"
           },
+          "decimals": 2,
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "noValue": "—",
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "blue",
-                "value": null
+                "color": "#34D399",
+                "value": 0
+              },
+              {
+                "color": "orange",
+                "value": 3
+              },
+              {
+                "color": "red",
+                "value": 10
               }
             ]
           },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          }
+          "unit": "percent"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 311,
-      "type": "stat",
-      "title": "调度延迟",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 7,
@@ -819,6 +785,27 @@
         "x": 15,
         "y": 5
       },
+      "id": 311,
+      "options": {
+        "colorMode": "value",
+        "content": "",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "mode": "markdown",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -832,45 +819,34 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "percentChangeColorMode": "standard",
-        "content": "",
-        "mode": "markdown"
+      "title": "调度延迟",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "percent",
-          "decimals": 2,
-          "mappings": [],
-          "noValue": "—",
           "color": {
             "mode": "thresholds"
           },
+          "decimals": 2,
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "noValue": "—",
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "#34D399",
-                "value": null
+                "value": 0
               },
               {
                 "color": "orange",
-                "value": 3
+                "value": 5
               },
               {
                 "color": "red",
@@ -878,25 +854,9 @@
               }
             ]
           },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          }
+          "unit": "percent"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 312,
-      "type": "stat",
-      "title": "就绪 Ready",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 7,
@@ -904,6 +864,27 @@
         "x": 18,
         "y": 5
       },
+      "id": 312,
+      "options": {
+        "colorMode": "value",
+        "content": "",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "mode": "markdown",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -917,71 +898,42 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "percentChangeColorMode": "standard",
-        "content": "",
-        "mode": "markdown"
+      "title": "就绪 Ready",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "percent",
-          "decimals": 2,
-          "mappings": [],
-          "noValue": "—",
           "color": {
             "mode": "thresholds"
           },
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "—",
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "#34D399",
-                "value": null
+                "value": 0
               },
               {
                 "color": "orange",
-                "value": 5
+                "value": 1
               },
               {
                 "color": "red",
-                "value": 10
+                "value": 1.5
               }
             ]
           },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          }
+          "unit": "none"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 313,
-      "type": "stat",
-      "title": "CPU 压力",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 7,
@@ -989,6 +941,27 @@
         "x": 21,
         "y": 5
       },
+      "id": 313,
+      "options": {
+        "colorMode": "value",
+        "content": "",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "mode": "markdown",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -1002,71 +975,35 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "percentChangeColorMode": "standard",
-        "content": "",
-        "mode": "markdown"
+      "title": "CPU 压力",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
-          "decimals": 2,
+          "color": {
+            "fixedColor": "#60A5FA",
+            "mode": "fixed"
+          },
+          "decimals": 0,
           "mappings": [],
           "noValue": "—",
-          "color": {
-            "mode": "thresholds"
-          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "#34D399",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 1.5
+                "color": "blue",
+                "value": 0
               }
             ]
           },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          }
+          "unit": "short"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 314,
-      "type": "stat",
-      "title": "vCPU 核数",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 4,
@@ -1074,6 +1011,27 @@
         "x": 0,
         "y": 12
       },
+      "id": 314,
+      "options": {
+        "colorMode": "value",
+        "content": "",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "mode": "markdown",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -1087,64 +1045,35 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "percentChangeColorMode": "standard",
-        "content": "",
-        "mode": "markdown"
+      "title": "vCPU 核数",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
-          "decimals": 0,
+          "color": {
+            "fixedColor": "#22D3EE",
+            "mode": "fixed"
+          },
+          "decimals": 1,
           "mappings": [],
           "noValue": "—",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#60A5FA"
-          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "blue",
-                "value": null
+                "value": 0
               }
             ]
           },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          }
+          "unit": "bytes"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 315,
-      "type": "stat",
-      "title": "配置内存",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 4,
@@ -1152,6 +1081,27 @@
         "x": 3,
         "y": 12
       },
+      "id": 315,
+      "options": {
+        "colorMode": "value",
+        "content": "",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "mode": "markdown",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -1165,64 +1115,35 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "percentChangeColorMode": "standard",
-        "content": "",
-        "mode": "markdown"
+      "title": "配置内存",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes",
+          "color": {
+            "fixedColor": "#A78BFA",
+            "mode": "fixed"
+          },
           "decimals": 1,
           "mappings": [],
           "noValue": "—",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#22D3EE"
-          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "blue",
-                "value": null
+                "value": 0
               }
             ]
           },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          }
+          "unit": "bytes"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 316,
-      "type": "stat",
-      "title": "已分配 Consumed",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 4,
@@ -1230,6 +1151,27 @@
         "x": 6,
         "y": 12
       },
+      "id": 316,
+      "options": {
+        "colorMode": "value",
+        "content": "",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "mode": "markdown",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -1243,64 +1185,35 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "percentChangeColorMode": "standard",
-        "content": "",
-        "mode": "markdown"
+      "title": "已分配 Consumed",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes",
+          "color": {
+            "fixedColor": "#22D3EE",
+            "mode": "fixed"
+          },
           "decimals": 1,
           "mappings": [],
           "noValue": "—",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#A78BFA"
-          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "blue",
-                "value": null
+                "value": 0
               }
             ]
           },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          }
+          "unit": "bytes"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 317,
-      "type": "stat",
-      "title": "活动 Active",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 4,
@@ -1308,6 +1221,27 @@
         "x": 9,
         "y": 12
       },
+      "id": 317,
+      "options": {
+        "colorMode": "value",
+        "content": "",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "mode": "markdown",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -1321,64 +1255,42 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "percentChangeColorMode": "standard",
-        "content": "",
-        "mode": "markdown"
+      "title": "活动 Active",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes",
+          "color": {
+            "mode": "thresholds"
+          },
           "decimals": 1,
           "mappings": [],
           "noValue": "—",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#22D3EE"
-          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "blue",
-                "value": null
+                "color": "#22D3EE",
+                "value": 0
+              },
+              {
+                "color": "orange",
+                "value": 104857600
+              },
+              {
+                "color": "red",
+                "value": 1073741824
               }
             ]
           },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          }
+          "unit": "bytes"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 318,
-      "type": "stat",
-      "title": "内存膨胀 Balloon",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 4,
@@ -1386,6 +1298,27 @@
         "x": 12,
         "y": 12
       },
+      "id": 318,
+      "options": {
+        "colorMode": "value",
+        "content": "",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "mode": "markdown",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -1399,41 +1332,28 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "percentChangeColorMode": "standard",
-        "content": "",
-        "mode": "markdown"
+      "title": "内存膨胀 Balloon",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes",
-          "decimals": 1,
-          "mappings": [],
-          "noValue": "—",
           "color": {
             "mode": "thresholds"
           },
+          "decimals": 1,
+          "mappings": [],
+          "noValue": "—",
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "#22D3EE",
-                "value": null
+                "value": 0
               },
               {
                 "color": "orange",
@@ -1445,25 +1365,9 @@
               }
             ]
           },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          }
+          "unit": "bytes"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 319,
-      "type": "stat",
-      "title": "内存交换 Swapped",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 4,
@@ -1471,6 +1375,27 @@
         "x": 15,
         "y": 12
       },
+      "id": 319,
+      "options": {
+        "colorMode": "value",
+        "content": "",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "mode": "markdown",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -1484,71 +1409,35 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "percentChangeColorMode": "standard",
-        "content": "",
-        "mode": "markdown"
+      "title": "内存交换 Swapped",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes",
+          "color": {
+            "fixedColor": "#22D3EE",
+            "mode": "fixed"
+          },
           "decimals": 1,
           "mappings": [],
           "noValue": "—",
-          "color": {
-            "mode": "thresholds"
-          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "#22D3EE",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 104857600
-              },
-              {
-                "color": "red",
-                "value": 1073741824
+                "color": "blue",
+                "value": 0
               }
             ]
           },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          }
+          "unit": "bytes"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 320,
-      "type": "stat",
-      "title": "共享 Shared",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 4,
@@ -1556,6 +1445,27 @@
         "x": 18,
         "y": 12
       },
+      "id": 320,
+      "options": {
+        "colorMode": "value",
+        "content": "",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "mode": "markdown",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -1569,64 +1479,35 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "percentChangeColorMode": "standard",
-        "content": "",
-        "mode": "markdown"
+      "title": "共享 Shared",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-metrics-datasource",
+        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes",
+          "color": {
+            "fixedColor": "#A78BFA",
+            "mode": "fixed"
+          },
           "decimals": 1,
           "mappings": [],
           "noValue": "—",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#22D3EE"
-          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "blue",
-                "value": null
+                "value": 0
               }
             ]
           },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          }
+          "unit": "bytes"
         },
         "overrides": []
-      }
-    },
-    {
-      "id": 321,
-      "type": "stat",
-      "title": "授权 Entitlement",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
       },
       "gridPos": {
         "h": 4,
@@ -1634,6 +1515,27 @@
         "x": 21,
         "y": 12
       },
+      "id": 321,
+      "options": {
+        "colorMode": "value",
+        "content": "",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "mode": "markdown",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.1.1",
       "targets": [
         {
           "datasource": {
@@ -1647,723 +1549,159 @@
           "refId": "A"
         }
       ],
-      "transparent": false,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "percentChangeColorMode": "standard",
-        "content": "",
-        "mode": "markdown"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "decimals": 1,
-          "mappings": [],
-          "noValue": "—",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#A78BFA"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          }
-        },
-        "overrides": []
-      }
+      "title": "授权 Entitlement",
+      "type": "stat"
     },
     {
-      "id": 322,
-      "type": "row",
-      "title": "CPU 与内存趋势 · CPU & Memory Trends",
-      "collapsed": false,
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-      },
+      "collapsed": true,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 16
       },
-      "panels": []
-    },
-    {
-      "id": 323,
-      "type": "timeseries",
-      "title": "CPU 使用率 · 延迟 · 就绪 · Usage / Latency / Ready",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 17
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "victoriametrics-metrics-datasource",
-            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-          },
-          "editorMode": "code",
-          "expr": "label_set(100 * sum(vmware_vm_cpu_usage_hertz{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}) / (sum(vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\"} * on(hostmo) group_left() max by(hostmo)(vmware_vm_info{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"})) * sum(vmware_vm_cpu_corecount{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"})),\"m\",\"使用率 Usage\") or label_set(100 * vmware_vm_cpu_latency_ratio{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"},\"m\",\"调度延迟 Latency\") or label_set(100 * vmware_vm_cpu_readiness_ratio{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"},\"m\",\"就绪 Ready\")",
-          "legendFormat": "{{m}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "transparent": false,
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc",
-          "hideZeros": false
-        },
-        "legend": {
-          "showLegend": true,
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "decimals": 2,
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "fillOpacity": 8,
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "barAlignment": 0,
-            "lineWidth": 2,
-            "spanNulls": true,
-            "showPoints": "never",
-            "pointSize": 5,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "gradientMode": "opacity",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "tooltip": false,
-              "viz": false,
-              "legend": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            },
-            "insertNulls": false
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "使用率"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#3B82F6"
-                }
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 8
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "调度延迟"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#EF4444"
-                }
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 8
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "就绪"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#F59E0B"
-                }
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 8
-              }
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "id": 324,
-      "type": "timeseries",
-      "title": "CPU 使用 / 需求 / 授权 · Used / Demand / Entitled",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 17
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "victoriametrics-metrics-datasource",
-            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-          },
-          "editorMode": "code",
-          "expr": "label_set(sum(vmware_vm_cpu_usage_hertz{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"已用 Used\") or label_set(sum(vmware_vm_cpu_demand_hertz{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"需求 Demand\") or label_set(sum(vmware_vm_cpu_entitlement_hertz{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"授权 Entitled\")",
-          "legendFormat": "{{m}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "transparent": false,
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc",
-          "hideZeros": false
-        },
-        "legend": {
-          "showLegend": true,
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "hertz",
-          "decimals": 1,
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "fillOpacity": 10,
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "barAlignment": 0,
-            "lineWidth": 2,
-            "spanNulls": true,
-            "showPoints": "never",
-            "pointSize": 5,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "gradientMode": "opacity",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "tooltip": false,
-              "viz": false,
-              "legend": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            },
-            "insertNulls": false
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "已用"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#3B82F6"
-                }
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 10
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "需求"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#F59E0B"
-                }
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 10
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "授权"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#10B981"
-                }
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 10
-              }
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "id": 325,
-      "type": "timeseries",
-      "title": "内存占比 · 已分配/活动/授权/共享",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 25
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "victoriametrics-metrics-datasource",
-            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-          },
-          "editorMode": "code",
-          "expr": "label_set(100 * sum(vmware_vm_mem_consumed_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}) / sum(vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"已分配 Consumed\") or label_set(100 * sum(vmware_vm_mem_active_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}) / sum(vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"活动 Active\") or label_set(100 * sum(vmware_vm_mem_entitlement_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}) / sum(vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"授权 Entitled\") or label_set(100 * sum(vmware_vm_mem_shared_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}) / sum(vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"共享 Shared\")",
-          "legendFormat": "{{m}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "transparent": false,
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc",
-          "hideZeros": false
-        },
-        "legend": {
-          "showLegend": true,
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "decimals": 1,
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "fillOpacity": 10,
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "barAlignment": 0,
-            "lineWidth": 2,
-            "spanNulls": true,
-            "showPoints": "never",
-            "pointSize": 5,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "gradientMode": "opacity",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "tooltip": false,
-              "viz": false,
-              "legend": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            },
-            "insertNulls": false
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "已分配"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#3B82F6"
-                }
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 10
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "活动"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#10B981"
-                }
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 10
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "授权"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#F59E0B"
-                }
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 10
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "共享"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#06B6D4"
-                }
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 10
-              }
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "id": 326,
-      "type": "timeseries",
-      "title": "内存压力 · 膨胀与交换 Balloon & Swap",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 25
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "victoriametrics-metrics-datasource",
-            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-          },
-          "editorMode": "code",
-          "expr": "label_set(sum(vmware_vm_mem_balloon_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"膨胀 Balloon(vmmemctl)\") or label_set(sum(vmware_vm_mem_swapped_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"交换 Swapped\") or label_set(sum(vmware_vm_mem_active_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"活动 Active\")",
-          "legendFormat": "{{m}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "transparent": false,
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc",
-          "hideZeros": false
-        },
-        "legend": {
-          "showLegend": true,
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "decimals": 1,
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "fillOpacity": 12,
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "barAlignment": 0,
-            "lineWidth": 2,
-            "spanNulls": true,
-            "showPoints": "never",
-            "pointSize": 5,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "gradientMode": "opacity",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "tooltip": false,
-              "viz": false,
-              "legend": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            },
-            "insertNulls": false
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "膨胀"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#F59E0B"
-                }
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 12
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "交换"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#EF4444"
-                }
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 12
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "活动"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#10B981"
-                }
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 12
-              }
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "id": 327,
-      "type": "row",
-      "title": "网络流量 · Network",
-      "collapsed": true,
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-      },
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 33
-      },
+      "id": 322,
       "panels": [
         {
-          "id": 328,
-          "type": "timeseries",
-          "title": "网络总吞吐 · Total Throughput (Rx/Tx)",
           "datasource": {
             "type": "victoriametrics-metrics-datasource",
             "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 8,
+                "gradientMode": "opacity",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "never",
+                "spanNulls": true,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "decimals": 2,
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              },
+              "unit": "percent"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "使用率"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#3B82F6",
+                      "mode": "fixed"
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 8
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "调度延迟"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#EF4444",
+                      "mode": "fixed"
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 8
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "就绪"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#F59E0B",
+                      "mode": "fixed"
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 8
+                  }
+                ]
+              }
+            ]
           },
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 34
+            "y": 41
           },
+          "id": 323,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ],
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "pluginVersion": "12.1.1",
           "targets": [
             {
               "datasource": {
@@ -2371,73 +1709,571 @@
                 "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
               },
               "editorMode": "code",
-              "expr": "label_set(sum(vmware_vm_net_receive_bytes_per_second{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\",pfinstance=~\"vmnic.*\"}),\"m\",\"接收 Rx\") or label_set(sum(vmware_vm_net_transmit_bytes_per_second{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\",pfinstance=~\"vmnic.*\"}),\"m\",\"发送 Tx\")",
+              "expr": "label_set(100 * sum(vmware_vm_cpu_usage_hertz{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}) / (sum(vmware_host_cpu_capacity_hertz{vcenter=~\"$vcenter\"} * on(hostmo) group_left() max by(hostmo)(vmware_vm_info{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"})) * sum(vmware_vm_cpu_corecount{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"})),\"m\",\"使用率 Usage\") or label_set(100 * vmware_vm_cpu_latency_ratio{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"},\"m\",\"调度延迟 Latency\") or label_set(100 * vmware_vm_cpu_readiness_ratio{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"},\"m\",\"就绪 Ready\")",
               "legendFormat": "{{m}}",
               "range": true,
               "refId": "A"
             }
           ],
-          "transparent": false,
-          "options": {
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc",
-              "hideZeros": false
-            },
-            "legend": {
-              "showLegend": true,
-              "displayMode": "table",
-              "placement": "bottom",
-              "calcs": [
-                "lastNotNull",
-                "max"
-              ]
-            }
+          "title": "CPU 使用率 · 延迟 · 就绪 · Usage / Latency / Ready",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
           },
           "fieldConfig": {
             "defaults": {
-              "unit": "Bps",
-              "decimals": 1,
               "color": {
                 "mode": "palette-classic"
               },
               "custom": {
-                "fillOpacity": 12,
-                "drawStyle": "line",
-                "lineInterpolation": "smooth",
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
                 "barAlignment": 0,
-                "lineWidth": 2,
-                "spanNulls": true,
-                "showPoints": "never",
-                "pointSize": 5,
-                "stacking": {
-                  "mode": "none",
-                  "group": "A"
-                },
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 10,
                 "gradientMode": "opacity",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
                 "scaleDistribution": {
                   "type": "linear"
                 },
-                "hideFrom": {
-                  "tooltip": false,
-                  "viz": false,
-                  "legend": false
+                "showPoints": "never",
+                "spanNulls": true,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
                 },
                 "thresholdsStyle": {
                   "mode": "off"
-                },
-                "insertNulls": false
+                }
               },
+              "decimals": 1,
               "mappings": [],
               "thresholds": {
                 "mode": "absolute",
                 "steps": [
                   {
                     "color": "green",
-                    "value": null
+                    "value": 0
+                  }
+                ]
+              },
+              "unit": "hertz"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "已用"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#3B82F6",
+                      "mode": "fixed"
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 10
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "需求"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#F59E0B",
+                      "mode": "fixed"
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 10
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "授权"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#10B981",
+                      "mode": "fixed"
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 10
                   }
                 ]
               }
+            ]
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 41
+          },
+          "id": 324,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ],
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "pluginVersion": "12.1.1",
+          "targets": [
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+              },
+              "editorMode": "code",
+              "expr": "label_set(sum(vmware_vm_cpu_usage_hertz{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"已用 Used\") or label_set(sum(vmware_vm_cpu_demand_hertz{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"需求 Demand\") or label_set(sum(vmware_vm_cpu_entitlement_hertz{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"授权 Entitled\")",
+              "legendFormat": "{{m}}",
+              "range": true,
+              "refId": "A"
+            }
+          ],
+          "title": "CPU 使用 / 需求 / 授权 · Used / Demand / Entitled",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "opacity",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "never",
+                "spanNulls": true,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "decimals": 1,
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              },
+              "unit": "percent"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "已分配"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#3B82F6",
+                      "mode": "fixed"
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 10
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "活动"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#10B981",
+                      "mode": "fixed"
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 10
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "授权"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#F59E0B",
+                      "mode": "fixed"
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 10
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "共享"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#06B6D4",
+                      "mode": "fixed"
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 10
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 73
+          },
+          "id": 325,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ],
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "pluginVersion": "12.1.1",
+          "targets": [
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+              },
+              "editorMode": "code",
+              "expr": "label_set(100 * sum(vmware_vm_mem_consumed_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}) / sum(vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"已分配 Consumed\") or label_set(100 * sum(vmware_vm_mem_active_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}) / sum(vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"活动 Active\") or label_set(100 * sum(vmware_vm_mem_entitlement_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}) / sum(vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"授权 Entitled\") or label_set(100 * sum(vmware_vm_mem_shared_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}) / sum(vmware_vm_mem_capacity_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"共享 Shared\")",
+              "legendFormat": "{{m}}",
+              "range": true,
+              "refId": "A"
+            }
+          ],
+          "title": "内存占比 · 已分配/活动/授权/共享",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 12,
+                "gradientMode": "opacity",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "never",
+                "spanNulls": true,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "decimals": 1,
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              },
+              "unit": "bytes"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "膨胀"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#F59E0B",
+                      "mode": "fixed"
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 12
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "交换"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#EF4444",
+                      "mode": "fixed"
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 12
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "活动"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#10B981",
+                      "mode": "fixed"
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 12
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 73
+          },
+          "id": 326,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ],
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "pluginVersion": "12.1.1",
+          "targets": [
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+              },
+              "editorMode": "code",
+              "expr": "label_set(sum(vmware_vm_mem_balloon_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"膨胀 Balloon(vmmemctl)\") or label_set(sum(vmware_vm_mem_swapped_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"交换 Swapped\") or label_set(sum(vmware_vm_mem_active_bytes{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"}),\"m\",\"活动 Active\")",
+              "legendFormat": "{{m}}",
+              "range": true,
+              "refId": "A"
+            }
+          ],
+          "title": "内存压力 · 膨胀与交换 Balloon & Swap",
+          "type": "timeseries"
+        }
+      ],
+      "title": "CPU 与内存趋势 · CPU & Memory Trends",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 327,
+      "panels": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 12,
+                "gradientMode": "opacity",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "never",
+                "spanNulls": true,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "decimals": 1,
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              },
+              "unit": "Bps"
             },
             "overrides": [
               {
@@ -2449,8 +2285,8 @@
                   {
                     "id": "color",
                     "value": {
-                      "mode": "fixed",
-                      "fixedColor": "#3B82F6"
+                      "fixedColor": "#3B82F6",
+                      "mode": "fixed"
                     }
                   },
                   {
@@ -2468,8 +2304,8 @@
                   {
                     "id": "color",
                     "value": {
-                      "mode": "fixed",
-                      "fixedColor": "#10B981"
+                      "fixedColor": "#10B981",
+                      "mode": "fixed"
                     }
                   },
                   {
@@ -2479,22 +2315,31 @@
                 ]
               }
             ]
-          }
-        },
-        {
-          "id": 329,
-          "type": "timeseries",
-          "title": "各虚拟网卡吞吐 · Per vNIC",
-          "datasource": {
-            "type": "victoriametrics-metrics-datasource",
-            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
           },
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 12,
-            "y": 34
+            "x": 0,
+            "y": 42
           },
+          "id": 328,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ],
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "pluginVersion": "12.1.1",
           "targets": [
             {
               "datasource": {
@@ -2502,73 +2347,70 @@
                 "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
               },
               "editorMode": "code",
-              "expr": "label_set(label_replace(sum by(pfinstance)(vmware_vm_net_receive_bytes_per_second{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\",pfinstance=~\"vmnic.*\"}),\"nic\",\"vNIC$1\",\"pfinstance\",\"vmnic([0-9]+)$\"),\"dir\",\"接收 Rx\") or label_set(label_replace(sum by(pfinstance)(vmware_vm_net_transmit_bytes_per_second{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\",pfinstance=~\"vmnic.*\"}),\"nic\",\"vNIC$1\",\"pfinstance\",\"vmnic([0-9]+)$\"),\"dir\",\"发送 Tx\")",
-              "legendFormat": "{{dir}} {{nic}}",
+              "expr": "label_set(sum(vmware_vm_net_receive_bytes_per_second{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\",pfinstance=~\"vmnic.*\"}),\"m\",\"接收 Rx\") or label_set(sum(vmware_vm_net_transmit_bytes_per_second{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\",pfinstance=~\"vmnic.*\"}),\"m\",\"发送 Tx\")",
+              "legendFormat": "{{m}}",
               "range": true,
               "refId": "A"
             }
           ],
-          "transparent": false,
-          "options": {
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc",
-              "hideZeros": false
-            },
-            "legend": {
-              "showLegend": true,
-              "displayMode": "table",
-              "placement": "bottom",
-              "calcs": [
-                "lastNotNull",
-                "max"
-              ]
-            }
+          "title": "网络总吞吐 · Total Throughput (Rx/Tx)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
           },
           "fieldConfig": {
             "defaults": {
-              "unit": "Bps",
-              "decimals": 1,
               "color": {
                 "mode": "palette-classic"
               },
               "custom": {
-                "fillOpacity": 8,
-                "drawStyle": "line",
-                "lineInterpolation": "smooth",
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
                 "barAlignment": 0,
-                "lineWidth": 2,
-                "spanNulls": true,
-                "showPoints": "never",
-                "pointSize": 5,
-                "stacking": {
-                  "mode": "none",
-                  "group": "A"
-                },
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 8,
                 "gradientMode": "opacity",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
                 "scaleDistribution": {
                   "type": "linear"
                 },
-                "hideFrom": {
-                  "tooltip": false,
-                  "viz": false,
-                  "legend": false
+                "showPoints": "never",
+                "spanNulls": true,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
                 },
                 "thresholdsStyle": {
                   "mode": "off"
-                },
-                "insertNulls": false
+                }
               },
+              "decimals": 1,
               "mappings": [],
               "thresholds": {
                 "mode": "absolute",
                 "steps": [
                   {
                     "color": "green",
-                    "value": null
+                    "value": 0
                   }
                 ]
-              }
+              },
+              "unit": "Bps"
             },
             "overrides": [
               {
@@ -2580,8 +2422,8 @@
                   {
                     "id": "color",
                     "value": {
-                      "mode": "fixed",
-                      "fixedColor": "#3B82F6"
+                      "fixedColor": "#3B82F6",
+                      "mode": "fixed"
                     }
                   },
                   {
@@ -2599,8 +2441,8 @@
                   {
                     "id": "color",
                     "value": {
-                      "mode": "fixed",
-                      "fixedColor": "#10B981"
+                      "fixedColor": "#10B981",
+                      "mode": "fixed"
                     }
                   },
                   {
@@ -2610,33 +2452,157 @@
                 ]
               }
             ]
-          }
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 42
+          },
+          "id": 329,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ],
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "pluginVersion": "12.1.1",
+          "targets": [
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+              },
+              "editorMode": "code",
+              "expr": "label_set(label_replace(sum by(pfinstance)(vmware_vm_net_receive_bytes_per_second{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\",pfinstance=~\"vmnic.*\"}),\"nic\",\"vNIC$1\",\"pfinstance\",\"vmnic([0-9]+)$\"),\"dir\",\"接收 Rx\") or label_set(label_replace(sum by(pfinstance)(vmware_vm_net_transmit_bytes_per_second{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\",pfinstance=~\"vmnic.*\"}),\"nic\",\"vNIC$1\",\"pfinstance\",\"vmnic([0-9]+)$\"),\"dir\",\"发送 Tx\")",
+              "legendFormat": "{{dir}} {{nic}}",
+              "range": true,
+              "refId": "A"
+            }
+          ],
+          "title": "各虚拟网卡吞吐 · Per vNIC",
+          "type": "timeseries"
         }
-      ]
+      ],
+      "title": "网络流量 · Network",
+      "type": "row"
     },
     {
-      "id": 330,
-      "type": "row",
-      "title": "存储性能 · Datastore",
       "collapsed": true,
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-      },
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 42
+        "y": 18
       },
+      "id": 330,
       "panels": [
         {
-          "id": 331,
-          "type": "timeseries",
-          "title": "磁盘延迟 · Latency",
           "datasource": {
             "type": "victoriametrics-metrics-datasource",
             "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 8,
+                "gradientMode": "opacity",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "never",
+                "spanNulls": true,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "decimals": 2,
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              },
+              "unit": "ms"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "^读"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#3B82F6",
+                      "mode": "fixed"
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 8
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "^写"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#EF4444",
+                      "mode": "fixed"
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 8
+                  }
+                ]
+              }
+            ]
           },
           "gridPos": {
             "h": 8,
@@ -2644,6 +2610,24 @@
             "x": 0,
             "y": 43
           },
+          "id": 331,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ],
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "pluginVersion": "12.1.1",
           "targets": [
             {
               "datasource": {
@@ -2657,67 +2641,64 @@
               "refId": "A"
             }
           ],
-          "transparent": false,
-          "options": {
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc",
-              "hideZeros": false
-            },
-            "legend": {
-              "showLegend": true,
-              "displayMode": "table",
-              "placement": "bottom",
-              "calcs": [
-                "lastNotNull",
-                "max"
-              ]
-            }
+          "title": "磁盘延迟 · Latency",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
           },
           "fieldConfig": {
             "defaults": {
-              "unit": "ms",
-              "decimals": 2,
               "color": {
                 "mode": "palette-classic"
               },
               "custom": {
-                "fillOpacity": 8,
-                "drawStyle": "line",
-                "lineInterpolation": "smooth",
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
                 "barAlignment": 0,
-                "lineWidth": 2,
-                "spanNulls": true,
-                "showPoints": "never",
-                "pointSize": 5,
-                "stacking": {
-                  "mode": "none",
-                  "group": "A"
-                },
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 10,
                 "gradientMode": "opacity",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
                 "scaleDistribution": {
                   "type": "linear"
                 },
-                "hideFrom": {
-                  "tooltip": false,
-                  "viz": false,
-                  "legend": false
+                "showPoints": "never",
+                "spanNulls": true,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
                 },
                 "thresholdsStyle": {
                   "mode": "off"
-                },
-                "insertNulls": false
+                }
               },
+              "decimals": 1,
               "mappings": [],
               "thresholds": {
                 "mode": "absolute",
                 "steps": [
                   {
                     "color": "green",
-                    "value": null
+                    "value": 0
                   }
                 ]
-              }
+              },
+              "unit": "Bps"
             },
             "overrides": [
               {
@@ -2729,13 +2710,13 @@
                   {
                     "id": "color",
                     "value": {
-                      "mode": "fixed",
-                      "fixedColor": "#3B82F6"
+                      "fixedColor": "#3B82F6",
+                      "mode": "fixed"
                     }
                   },
                   {
                     "id": "custom.fillOpacity",
-                    "value": 8
+                    "value": 10
                   }
                 ]
               },
@@ -2748,26 +2729,17 @@
                   {
                     "id": "color",
                     "value": {
-                      "mode": "fixed",
-                      "fixedColor": "#EF4444"
+                      "fixedColor": "#F59E0B",
+                      "mode": "fixed"
                     }
                   },
                   {
                     "id": "custom.fillOpacity",
-                    "value": 8
+                    "value": 10
                   }
                 ]
               }
             ]
-          }
-        },
-        {
-          "id": 332,
-          "type": "timeseries",
-          "title": "磁盘吞吐 · Throughput",
-          "datasource": {
-            "type": "victoriametrics-metrics-datasource",
-            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
           },
           "gridPos": {
             "h": 8,
@@ -2775,6 +2747,24 @@
             "x": 8,
             "y": 43
           },
+          "id": 332,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ],
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "pluginVersion": "12.1.1",
           "targets": [
             {
               "datasource": {
@@ -2788,67 +2778,64 @@
               "refId": "A"
             }
           ],
-          "transparent": false,
-          "options": {
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc",
-              "hideZeros": false
-            },
-            "legend": {
-              "showLegend": true,
-              "displayMode": "table",
-              "placement": "bottom",
-              "calcs": [
-                "lastNotNull",
-                "max"
-              ]
-            }
+          "title": "磁盘吞吐 · Throughput",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
           },
           "fieldConfig": {
             "defaults": {
-              "unit": "Bps",
-              "decimals": 1,
               "color": {
                 "mode": "palette-classic"
               },
               "custom": {
-                "fillOpacity": 10,
-                "drawStyle": "line",
-                "lineInterpolation": "smooth",
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
                 "barAlignment": 0,
-                "lineWidth": 2,
-                "spanNulls": true,
-                "showPoints": "never",
-                "pointSize": 5,
-                "stacking": {
-                  "mode": "none",
-                  "group": "A"
-                },
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 10,
                 "gradientMode": "opacity",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
                 "scaleDistribution": {
                   "type": "linear"
                 },
-                "hideFrom": {
-                  "tooltip": false,
-                  "viz": false,
-                  "legend": false
+                "showPoints": "never",
+                "spanNulls": true,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
                 },
                 "thresholdsStyle": {
                   "mode": "off"
-                },
-                "insertNulls": false
+                }
               },
+              "decimals": 0,
               "mappings": [],
               "thresholds": {
                 "mode": "absolute",
                 "steps": [
                   {
                     "color": "green",
-                    "value": null
+                    "value": 0
                   }
                 ]
-              }
+              },
+              "unit": "iops"
             },
             "overrides": [
               {
@@ -2860,8 +2847,8 @@
                   {
                     "id": "color",
                     "value": {
-                      "mode": "fixed",
-                      "fixedColor": "#3B82F6"
+                      "fixedColor": "#3B82F6",
+                      "mode": "fixed"
                     }
                   },
                   {
@@ -2879,8 +2866,8 @@
                   {
                     "id": "color",
                     "value": {
-                      "mode": "fixed",
-                      "fixedColor": "#F59E0B"
+                      "fixedColor": "#10B981",
+                      "mode": "fixed"
                     }
                   },
                   {
@@ -2890,15 +2877,6 @@
                 ]
               }
             ]
-          }
-        },
-        {
-          "id": 333,
-          "type": "timeseries",
-          "title": "磁盘 IOPS · Operations",
-          "datasource": {
-            "type": "victoriametrics-metrics-datasource",
-            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
           },
           "gridPos": {
             "h": 8,
@@ -2906,6 +2884,24 @@
             "x": 16,
             "y": 43
           },
+          "id": 333,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ],
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "pluginVersion": "12.1.1",
           "targets": [
             {
               "datasource": {
@@ -2919,56 +2915,209 @@
               "refId": "A"
             }
           ],
-          "transparent": false,
-          "options": {
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc",
-              "hideZeros": false
-            },
-            "legend": {
-              "showLegend": true,
-              "displayMode": "table",
-              "placement": "bottom",
-              "calcs": [
-                "lastNotNull",
-                "max"
-              ]
-            }
+          "title": "磁盘 IOPS · Operations",
+          "type": "timeseries"
+        }
+      ],
+      "title": "存储性能 · Datastore",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "id": 900,
+      "panels": [
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
           },
           "fieldConfig": {
             "defaults": {
-              "unit": "iops",
-              "decimals": 0,
+              "displayName": "${__field.labels.state}",
+              "mappings": [
+                {
+                  "options": {
+                    "poweredOff": {
+                      "color": "red",
+                      "text": "已关机 poweredOff"
+                    },
+                    "poweredOn": {
+                      "color": "green",
+                      "text": "已开机 poweredOn"
+                    },
+                    "suspended": {
+                      "color": "yellow",
+                      "text": "挂起 suspended"
+                    }
+                  },
+                  "type": "value"
+                }
+              ],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 0,
+            "y": 44
+          },
+          "id": 901,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "horizontal",
+            "percentChangeColorMode": "standard",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "showPercentChange": false,
+            "textMode": "auto",
+            "wideLayout": true
+          },
+          "pluginVersion": "12.1.1",
+          "targets": [
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+              },
+              "expr": "max by(state)(vmware_vm_power_state{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"})",
+              "format": "time_series",
+              "instant": false,
+              "range": true,
+              "refId": "A"
+            }
+          ],
+          "title": "电源状态 · Power State",
+          "type": "stat"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "displayName": "${__field.labels.status}",
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 6,
+            "y": 44
+          },
+          "id": 902,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "horizontal",
+            "percentChangeColorMode": "standard",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "showPercentChange": false,
+            "textMode": "auto",
+            "wideLayout": true
+          },
+          "pluginVersion": "12.1.1",
+          "targets": [
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+              },
+              "expr": "max by(status)(vmware_vm_overall_status{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"})",
+              "format": "time_series",
+              "instant": false,
+              "range": true,
+              "refId": "A"
+            }
+          ],
+          "title": "整体健康 · Overall Status",
+          "type": "stat"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+          },
+          "fieldConfig": {
+            "defaults": {
               "color": {
                 "mode": "palette-classic"
               },
               "custom": {
-                "fillOpacity": 10,
-                "drawStyle": "line",
-                "lineInterpolation": "smooth",
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
                 "barAlignment": 0,
-                "lineWidth": 2,
-                "spanNulls": true,
-                "showPoints": "never",
-                "pointSize": 5,
-                "stacking": {
-                  "mode": "none",
-                  "group": "A"
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 12,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
                 },
-                "gradientMode": "opacity",
+                "insertNulls": false,
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
                 "scaleDistribution": {
                   "type": "linear"
                 },
-                "hideFrom": {
-                  "tooltip": false,
-                  "viz": false,
-                  "legend": false
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
                 },
                 "thresholdsStyle": {
                   "mode": "off"
-                },
-                "insertNulls": false
+                }
               },
               "mappings": [],
               "thresholds": {
@@ -2976,273 +3125,65 @@
                 "steps": [
                   {
                     "color": "green",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byRegexp",
-                  "options": "^读"
-                },
-                "properties": [
-                  {
-                    "id": "color",
-                    "value": {
-                      "mode": "fixed",
-                      "fixedColor": "#3B82F6"
-                    }
+                    "value": 0
                   },
                   {
-                    "id": "custom.fillOpacity",
-                    "value": 10
+                    "color": "red",
+                    "value": 80
                   }
                 ]
               },
-              {
-                "matcher": {
-                  "id": "byRegexp",
-                  "options": "^写"
-                },
-                "properties": [
-                  {
-                    "id": "color",
-                    "value": {
-                      "mode": "fixed",
-                      "fixedColor": "#10B981"
-                    }
-                  },
-                  {
-                    "id": "custom.fillOpacity",
-                    "value": 10
-                  }
-                ]
-              }
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "id": 900,
-      "type": "row",
-      "title": "生命周期 · Lifecycle",
-      "collapsed": false,
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-      },
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 52
-      },
-      "panels": []
-    },
-    {
-      "id": 901,
-      "type": "stat",
-      "title": "电源状态 · Power State",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 0,
-        "y": 53
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "victoriametrics-metrics-datasource",
-            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+              "unit": "short"
+            },
+            "overrides": []
           },
-          "expr": "max by(state)(vmware_vm_power_state{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"})",
-          "refId": "A",
-          "format": "time_series",
-          "instant": false,
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "mappings": [
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 44
+          },
+          "id": 903,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "pluginVersion": "12.1.1",
+          "targets": [
             {
-              "type": "value",
-              "options": {
-                "poweredOn": {
-                  "text": "已开机 poweredOn",
-                  "color": "green"
-                },
-                "poweredOff": {
-                  "text": "已关机 poweredOff",
-                  "color": "red"
-                },
-                "suspended": {
-                  "text": "挂起 suspended",
-                  "color": "yellow"
-                }
-              }
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
+              },
+              "expr": "sum by(reason)(vmware_scrape_entities_skipped{vcenter=~\"$vcenter\",collector=\"vm\"})",
+              "format": "time_series",
+              "instant": false,
+              "legendFormat": "{{reason}}",
+              "range": true,
+              "refId": "A"
             }
           ],
-          "unit": "short",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "displayName": "${__field.labels.state}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto",
-        "showPercentChange": false
-      }
-    },
-    {
-      "id": 902,
-      "type": "stat",
-      "title": "整体健康 · Overall Status",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
-        "y": 53
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "victoriametrics-metrics-datasource",
-            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-          },
-          "expr": "max by(status)(vmware_vm_overall_status{vcenter=~\"$vcenter\",vmmo=~\"$vmmo\"})",
-          "refId": "A",
-          "format": "time_series",
-          "instant": false,
-          "range": true
+          "title": "VM 抓取跳过原因（本 vCenter）",
+          "type": "timeseries"
         }
       ],
-      "fieldConfig": {
-        "defaults": {
-          "mappings": [],
-          "unit": "short",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "displayName": "${__field.labels.status}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto",
-        "showPercentChange": false
-      }
-    },
-    {
-      "id": 903,
-      "type": "timeseries",
-      "title": "VM 抓取跳过原因（本 vCenter）",
-      "datasource": {
-        "type": "victoriametrics-metrics-datasource",
-        "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 53
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "victoriametrics-metrics-datasource",
-            "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-          },
-          "expr": "sum by(reason)(vmware_scrape_entities_skipped{vcenter=~\"$vcenter\",collector=\"vm\"})",
-          "refId": "A",
-          "format": "time_series",
-          "instant": false,
-          "range": true,
-          "legendFormat": "{{reason}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "linear",
-            "fillOpacity": 12,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "showPoints": "never",
-            "spanNulls": false
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
+      "title": "生命周期 · Lifecycle",
+      "type": "row"
     }
   ],
-  "refresh": "20s",
-  "schemaVersion": 39,
-  "style": "dark",
+  "refresh": "1m",
+  "schemaVersion": 41,
   "tags": [
     "vmware",
     "vsphere",
@@ -3252,21 +3193,13 @@
   "templating": {
     "list": [
       {
-        "current": {
-          "selected": false,
-          "text": "VictoriaMetrics",
-          "value": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
-        },
-        "hide": 0,
+        "current": {},
         "includeAll": false,
-        "multi": false,
         "name": "datasource",
         "options": [],
         "query": "victoriametrics-metrics-datasource",
-        "queryValue": "",
         "refresh": 1,
         "regex": "",
-        "skipUrlSync": false,
         "type": "datasource"
       },
       {
@@ -3290,127 +3223,108 @@
         "type": "query"
       },
       {
+        "allValue": ".*",
+        "current": {},
         "datasource": {
           "type": "victoriametrics-metrics-datasource",
           "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
         },
         "definition": "label_values(vmware_cluster_info{vcenter=~\"$vcenter\"},vmwcluster)",
-        "name": "cluster",
-        "label": "集群 Cluster",
-        "options": [],
-        "hide": 0,
-        "multi": true,
         "includeAll": true,
-        "refresh": 2,
-        "regex": "",
-        "sort": 1,
-        "type": "query",
+        "label": "集群 Cluster",
+        "multi": true,
+        "name": "cluster",
+        "options": [],
         "query": {
           "query": "label_values(vmware_cluster_info{vcenter=~\"$vcenter\"},vmwcluster)",
           "refId": "StandardVariableQuery"
         },
-        "allValue": ".*",
-        "current": {
-          "selected": true,
-          "text": "All",
-          "value": "$__all"
-        }
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
       },
       {
+        "current": {},
         "datasource": {
           "type": "victoriametrics-metrics-datasource",
           "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
         },
         "definition": "label_values(vmware_cluster_info{vcenter=~\"$vcenter\",vmwcluster=~\"$cluster\"},cmo)",
-        "name": "clustermo",
-        "label": "",
-        "options": [],
         "hide": 2,
-        "multi": true,
         "includeAll": true,
-        "refresh": 2,
-        "regex": "",
-        "sort": 1,
-        "type": "query",
+        "multi": true,
+        "name": "clustermo",
+        "options": [],
         "query": {
           "query": "label_values(vmware_cluster_info{vcenter=~\"$vcenter\",vmwcluster=~\"$cluster\"},cmo)",
           "refId": "StandardVariableQuery"
         },
-        "allValue": "",
-        "current": {
-          "selected": true,
-          "text": "All",
-          "value": "$__all"
-        }
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
       },
       {
+        "current": {},
         "datasource": {
           "type": "victoriametrics-metrics-datasource",
           "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
         },
         "definition": "label_values(vmware_host_info{vcenter=~\"$vcenter\",cmo=~\"$clustermo\"},hostmo)",
-        "name": "hostmo",
-        "label": "",
-        "options": [],
         "hide": 2,
-        "multi": true,
         "includeAll": true,
-        "refresh": 2,
-        "regex": "",
-        "sort": 1,
-        "type": "query",
+        "multi": true,
+        "name": "hostmo",
+        "options": [],
         "query": {
           "query": "label_values(vmware_host_info{vcenter=~\"$vcenter\",cmo=~\"$clustermo\"},hostmo)",
           "refId": "StandardVariableQuery"
         },
-        "allValue": "",
-        "current": {
-          "selected": true,
-          "text": "All",
-          "value": "$__all"
-        }
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
       },
       {
+        "current": {},
         "datasource": {
           "type": "victoriametrics-metrics-datasource",
           "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
         },
         "definition": "label_values(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"},vm)",
-        "name": "vm",
-        "label": "虚拟机 VM",
-        "options": [],
-        "hide": 0,
-        "multi": false,
         "includeAll": false,
-        "refresh": 2,
-        "regex": "",
-        "sort": 1,
-        "type": "query",
+        "label": "虚拟机 VM",
+        "name": "vm",
+        "options": [],
         "query": {
           "query": "label_values(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\"},vm)",
           "refId": "StandardVariableQuery"
-        }
+        },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
       },
       {
+        "current": {},
         "datasource": {
           "type": "victoriametrics-metrics-datasource",
           "uid": "${DS_VICTORIAMETRICS-METRICS-DATASOURCE}"
         },
         "definition": "label_values(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\",vm=~\"$vm\"},vmmo)",
-        "name": "vmmo",
-        "label": "",
-        "options": [],
         "hide": 2,
-        "multi": false,
         "includeAll": false,
-        "refresh": 2,
-        "regex": "",
-        "sort": 1,
-        "type": "query",
+        "name": "vmmo",
+        "options": [],
         "query": {
           "query": "label_values(vmware_vm_info{vcenter=~\"$vcenter\",hostmo=~\"$hostmo\",vm=~\"$vm\"},vmmo)",
           "refId": "StandardVariableQuery"
-        }
+        },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
       }
     ]
   },

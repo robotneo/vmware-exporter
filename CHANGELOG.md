@@ -39,6 +39,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   predates the diagnostics code; this only affected builds between the
   diagnostics merge and this fix.)
 
+- **Re-exported Grafana dashboards for current Grafana / VictoriaMetrics
+  plugin versions.** All five dashboards (vCenter, Cluster, Datastore, Host
+  overviews and VM Detail) were re-saved from Grafana 12.1.1 with the
+  VictoriaMetrics datasource plugin 0.18.3, fixing the rendering / panel
+  compatibility problems seen after the Grafana and plugin upgrade (collapsed
+  row layout, field config and unit/threshold migration). The PromQL queries
+  and the panel counts are unchanged, and each dashboard keeps its original
+  `uid` (`vmw-vc-overview`, `vmw-cluster-overview`, `vmw-ds-overview`,
+  `vmw-host-overview`, `vmw-vm-detail`) so importing the files upgrades the
+  existing dashboards in place instead of creating duplicates. The exported
+  numeric `id` is dropped (`null`) to avoid colliding with an unrelated
+  dashboard on the target instance.
+
 ## [v0.2.0] - 2026-09-21
 
 ### ✨ Added
