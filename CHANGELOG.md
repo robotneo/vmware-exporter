@@ -22,6 +22,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   goroutine stacks and drive sampling overhead; enable it while reproducing the
   high-CPU condition, capture a profile, then disable it again.
 
+### 🔧 Fixed
+
+- **Startup panic when `-web.enable-pprof=true`.** Enabling the profiling
+  endpoint in `config.yaml` made the process fail to start at all. Importing
+  `net/http/pprof` registers its handlers on `http.DefaultServeMux` via an
+  `init()` using Go 1.22+ method-prefixed patterns (`GET /debug/pprof/…`); the
+  diagnostics code then registered method-less patterns for the same paths on
+  that same mux, and `ServeMux` rejected the conflicting patterns with a
+  startup panic. The exporter now serves a dedicated, freshly created
+  `ServeMux` that the `pprof` package's `init()` never touches, so the
+  endpoints exist only when `-web.enable-pprof=true` and enabling them no
+  longer crashes the process. (The shipped v0.2.0 binary is unaffected — it
+  predates the diagnostics code; this only affected builds between the
+  diagnostics merge and this fix.)
+
 ## [v0.2.0] - 2026-09-21
 
 ### ✨ Added
