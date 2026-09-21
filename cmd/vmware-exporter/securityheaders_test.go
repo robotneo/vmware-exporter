@@ -20,7 +20,7 @@ func TestSecurityHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if hits != 1 {
 		t.Fatalf("inner handler invoked %d times, want 1", hits)
