@@ -18,6 +18,7 @@ import (
 	"github.com/vmware/govmomi/view"
 	"github.com/vmware/govmomi/vim25"
 	"github.com/vmware/govmomi/vim25/soap"
+	"github.com/vmware/govmomi/vim25/types"
 )
 
 var (
@@ -48,6 +49,14 @@ var (
 	// /probe 多租户路径永不读缓存。
 	vmwCounterCacheTTL = flag.Duration("scrape.counter-cache-ttl", 10*time.Minute,
 		"How long the performance-counter metadata table (counter name to id/unit) is reused on the /metrics path. The cache key includes the target plus its vCenter About version/build, so an upgrade is picked up within one TTL. 0 fetches it on every login. Never used on the multi-tenant /probe path.")
+
+	// providerCacheTTL 控制 QueryPerfProviderSummary（按实体类型协商采样间隔）
+	// 在 /metrics 路径的复用时长。govmomi 的 ProviderSummary 名义按 entity.Type
+	// 缓存、实际每次都发 SOAP，而 host/vm/datastore 每轮各协商一次、Manager 又
+	// 每登录新建 —— 这个缓存把默认路径每轮约 3 次跨网络往返收成按类型一次。
+	// 边界同 counter/inventory 缓存：仅 /metrics，/probe 永不读缓存。
+	vmwProviderCacheTTL = flag.Duration("scrape.perf-interval-cache-ttl", 10*time.Minute,
+		"How long the per-entity-type QueryPerfProviderSummary result (used to negotiate the real-time/historical sampling interval) is reused on the /metrics path. govmomi's Manager.ProviderSummary is documented as cached by entity type but actually issues a SOAP call every time, and host/vm/datastore each negotiate once per scrape. Key includes target, vCenter About version/build and entity type. 0 queries it on every scrape. Never used on the multi-tenant /probe path.")
 
 	// vmwDenyPrivate 是 S-06 拨号侧 IP 复核的加严开关。
 	//
@@ -101,6 +110,11 @@ func ValidateFlags() error {
 		return fmt.Errorf("-scrape.counter-cache-ttl must be greater than or equal to 0, got %s", cfg.counterCacheTTL)
 	}
 
+	// 0 关闭采样间隔协商缓存，合法；拒负数。
+	if cfg.providerCacheTTL < 0 {
+		return fmt.Errorf("-scrape.perf-interval-cache-ttl must be greater than or equal to 0, got %s", cfg.providerCacheTTL)
+	}
+
 	if cfg.schema != "http" && cfg.schema != "https" {
 		return fmt.Errorf(`-vmware.schema must be either "http" or "https", got %q`, cfg.schema)
 	}
@@ -122,17 +136,18 @@ func ValidateFlags() error {
 // interval 取新值、granularity 取旧值，算出的 samples 是任何一份配置里
 // 都不存在的数。
 type settings struct {
-	user            string
-	passwd          string
-	vcenter         string
-	schema          string
-	insecureTLS     bool
-	interval        int
-	granularity     int
-	timeout         int
-	chunkSize       int
-	counterCacheTTL time.Duration
-	denyPrivate     bool
+	user             string
+	passwd           string
+	vcenter          string
+	schema           string
+	insecureTLS      bool
+	interval         int
+	granularity      int
+	timeout          int
+	chunkSize        int
+	counterCacheTTL  time.Duration
+	providerCacheTTL time.Duration
+	denyPrivate      bool
 }
 
 // currentSettings 在读锁保护下一次性拷出全部 vmware.* flag。
@@ -144,17 +159,18 @@ func currentSettings() settings {
 
 	config.Snapshot(func() {
 		s = settings{
-			user:            *vmwUser,
-			passwd:          *vmwPasswd,
-			vcenter:         *vCenter,
-			schema:          *vmwSchema,
-			insecureTLS:     *vmwTLS,
-			interval:        *vmwInterval,
-			granularity:     *vmGranularity,
-			timeout:         *vmwTimeout,
-			chunkSize:       *vmwPerfChunkSize,
-			counterCacheTTL: *vmwCounterCacheTTL,
-			denyPrivate:     *vmwDenyPrivate,
+			user:             *vmwUser,
+			passwd:           *vmwPasswd,
+			vcenter:          *vCenter,
+			schema:           *vmwSchema,
+			insecureTLS:      *vmwTLS,
+			interval:         *vmwInterval,
+			granularity:      *vmGranularity,
+			timeout:          *vmwTimeout,
+			chunkSize:        *vmwPerfChunkSize,
+			counterCacheTTL:  *vmwCounterCacheTTL,
+			providerCacheTTL: *vmwProviderCacheTTL,
+			denyPrivate:      *vmwDenyPrivate,
 		}
 	})
 
@@ -166,6 +182,12 @@ type VMware struct {
 	// 按 target+About 版本缓存计数器元数据（P-03）。/probe 与裸 NewAPI()
 	// 保持 nil，每请求实时拉取，与 InventoryCache 同一条越权读边界。
 	counterCache *CounterCache
+
+	// providerCache 非 nil 时（同上路径）把按实体类型协商采样间隔用的
+	// QueryPerfProviderSummary 结果缓存起来（govmomi 名义缓存、实际每次发
+	// SOAP）。登录成功后把绑定本缓存+key+TTL 的闭包装进 Scrape.ProviderSummary，
+	// 各 collector 经它协商；/probe 与 NewAPI() 保持 nil 实时协商。
+	providerCache *ProviderSummaryCache
 }
 
 // Credentials 存储每个 target 的凭证
@@ -183,17 +205,17 @@ type Credentials struct {
 // 框架的一个包级私有变量。现在 CollectorSet 通过 Options.Login 显式接收
 // 实现 —— 依赖关系从「藏在 init() 里的全局副作用」变成了构造参数。
 //
-// 不带计数器缓存：/probe 多租户路径与不想要缓存的调用方用它，计数器元数据
-// 每请求实时拉取。/metrics 路径用 NewAPIWithCounterCache。
+// 不带任何缓存：/probe 多租户路径与不想要缓存的调用方用它，计数器元数据与
+// 采样间隔协商都每请求实时进行。/metrics 路径用 NewAPIWithCaches。
 func NewAPI() *VMware {
 	return &VMware{}
 }
 
-// NewAPIWithCounterCache 构造一个带进程级计数器元数据缓存的工厂（P-03）。
-// 只应由使用单一服务级凭证的 /metrics 路径使用；cache 为 nil 或 TTL<=0 时
-// 自动回退为与 NewAPI 相同的实时行为。
-func NewAPIWithCounterCache(cache *CounterCache) *VMware {
-	return &VMware{counterCache: cache}
+// NewAPIWithCaches 构造带进程级计数器元数据缓存（P-03）与采样间隔协商缓存的
+// 工厂。只应由使用单一服务级凭证的 /metrics 路径使用；任一 cache 为 nil 或其
+// TTL<=0 时对应路径自动回退为与 NewAPI 相同的实时行为。
+func NewAPIWithCaches(counterCache *CounterCache, providerCache *ProviderSummaryCache) *VMware {
+	return &VMware{counterCache: counterCache, providerCache: providerCache}
 }
 
 func Load(logger *slog.Logger) {
@@ -385,6 +407,20 @@ func (vm *VMware) loginWithCredentials(ctx context.Context, creds Credentials,
 		// 分块大小是 vmware.* 侧配置，随会话一起注入；缓存由
 		// CollectorSet 在登录后注入（只有它分得清 /metrics 与 /probe）。
 		PerfChunkSize: cfg.chunkSize,
+	}
+
+	// 采样间隔协商缓存（仅 /metrics：NewAPI() 的 providerCache 为 nil）。
+	// 闭包按 entity.Type 补全缓存键：host/vm/datastore 在同一次登录里对同一
+	// 目标+版本查询，能力是目标级的，与具体实体无关。闭包只在 collector 协商
+	// 间隔时调用，那时 scrapeCtx 仍有效；cache 为 nil 或 TTL<=0 时 Get 内部
+	// 旁路，直接发 SOAP。/probe 路径这里整段不安装，s.ProviderSummary 保持 nil。
+	if vm.providerCache != nil {
+		providerTTL := cfg.providerCacheTTL
+		about := client.ServiceContent.About
+		s.ProviderSummary = func(ctx context.Context, entity types.ManagedObjectReference) (*types.PerfProviderSummary, error) {
+			key := providerCacheKey(creds.Target, about.Version, about.Build, entity.Type)
+			return vm.providerCache.Get(ctx, key, perf, entity, providerTTL, time.Now())
+		}
 	}
 
 	// 不记录 username：probe 端点的凭证来自请求参数或 Basic Auth，

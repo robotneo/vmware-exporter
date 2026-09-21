@@ -81,15 +81,41 @@ func syntheticLabels(base map[string]string) map[string]string {
 //
 // 因此 ESXi 上一律退到实时间隔：宁可拿到粒度更细的实时数据，也不要一个
 // 静默返回空值的请求。
+// perfSummaryQuerier 抽象 ProviderSummary 这一次调用。*performance.Manager
+// 天然满足；/metrics 路径用 providerFuncAdapter 把进程级缓存闭包包成同一接口。
+// 收窄成接口后协商逻辑不关心数据来自实时 SOAP 还是缓存。
+type perfSummaryQuerier interface {
+	ProviderSummary(ctx context.Context, entity types.ManagedObjectReference) (*types.PerfProviderSummary, error)
+}
+
+// providerFuncAdapter 把 collector.ProviderSummaryFunc（签名不带 receiver）适配
+// 成 perfSummaryQuerier，让缓存闭包与 *performance.Manager 可互换。
+type providerFuncAdapter func(ctx context.Context, entity types.ManagedObjectReference) (*types.PerfProviderSummary, error)
+
+func (f providerFuncAdapter) ProviderSummary(ctx context.Context, entity types.ManagedObjectReference) (*types.PerfProviderSummary, error) {
+	return f(ctx, entity)
+}
+
 func resolvePerfIntervalForTarget(
 	ctx context.Context,
 	perf *performance.Manager,
+	resolve collector.ProviderSummaryFunc,
 	entity types.ManagedObjectReference,
 	requested, fallback int32,
 	tType string,
 	logger *slog.Logger,
 ) int32 {
-	interval := resolvePerfInterval(ctx, perf, entity, requested, fallback, logger)
+	// resolve 非 nil（/metrics 注入了进程级缓存）时用它；否则（/probe、裸测试）
+	// 直接实时打 Manager。perf 为 nil 时保持 nil 接口，让 resolvePerfInterval
+	// 走它的 nil 兜底分支（包一层 typed-nil 会让 `== nil` 判断失效）。
+	var querier perfSummaryQuerier
+	if resolve != nil {
+		querier = providerFuncAdapter(resolve)
+	} else if perf != nil {
+		querier = perf
+	}
+
+	interval := resolvePerfInterval(ctx, querier, entity, requested, fallback, logger)
 
 	if tType == targetTypeESXi && interval == historicIntervalID {
 		// requested 是用户表达的期望采样窗口，在 ESXi 上它就是实时间隔的
@@ -129,7 +155,7 @@ func resolvePerfIntervalForTarget(
 // 致命错误：采集能力可能受限，但不该让整个 collector 中断。
 func resolvePerfInterval(
 	ctx context.Context,
-	perf *performance.Manager,
+	perf perfSummaryQuerier,
 	entity types.ManagedObjectReference,
 	requested, fallback int32,
 	logger *slog.Logger,

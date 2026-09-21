@@ -94,6 +94,13 @@ scrape.inventory-cache-ttl: 5m
 # 多租户 /probe 路径永远不使用本缓存。
 scrape.counter-cache-ttl: 10m
 
+# 按实体类型协商采样间隔（QueryPerfProviderSummary）结果的复用有效期。host、
+# vm、datastore 每轮各协商一次，而 govmomi 的 ProviderSummary 名义按
+# entity.Type 缓存、实际每次都发 SOAP；键含 target、vCenter About 版本/build
+# 与实体类型，命中后每种类型一个 TTL 内只发一次往返。填 0 表示每次抓取实时
+# 协商。多租户 /probe 路径永远不使用本缓存。
+scrape.perf-interval-cache-ttl: 10m
+
 
 # ── 采集器开关 ──────────────────────────────────────────────────────────
 #

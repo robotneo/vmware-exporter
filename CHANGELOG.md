@@ -521,6 +521,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before/after numbers) are recorded in
   `docs/perf/p08b1-streaming-decision.txt`. No production code changed.
 
+### ⚡ Performance — sampling-interval negotiation cached (per-entity-type)
+
+- **`QueryPerfProviderSummary` is now cached on `/metrics`.** host, VM and
+  datastore each negotiate the sampling interval once per scrape, and govmomi's
+  `performance.Manager.ProviderSummary` is documented as "caching the value
+  based on entity.Type" but actually issues a SOAP call every time (the Manager
+  is rebuilt on every login, so even a real govmomi cache would not help across
+  logins). A new process-level cache stores the raw
+  `*types.PerfProviderSummary` keyed by target + vCenter About version/build +
+  entity type; the negotiation and the ESXi force-realtime correction still run
+  every scrape, only the round-trip is cached (each entity type is fetched once
+  per TTL). Same boundary as the other caches: injected on `/metrics` only,
+  never on the multi-tenant `/probe` path; failures are not cached, concurrent
+  misses coalesce via singleflight, and storing sweeps expired entries. New flag
+  `-scrape.perf-interval-cache-ttl` (default `10m`, `0` disables), SIGHUP
+  reloadable. On vcsim the negotiation step goes from ~5.0 ms / 606 KiB / 5723
+  allocs to ~3.3 ms / 391 KiB / 4474 allocs per scrape (-33% / -35% / -22%);
+  the baseline already has the earlier CounterCache on, so the difference is
+  isolated to this change. Metric output is unchanged; see
+  `docs/perf/p-provider-summary-cache.txt`.
+
 ### 🔧 Fixed
 
 - **systemd unit no longer kills the service on reload.** The exporter used to

@@ -19,7 +19,14 @@ import (
 	"github.com/vmware/govmomi/vim25/soap"
 )
 
-func restoreVMwareFlags(t *testing.T) {
+// testHandle 是 *testing.T 与 *testing.B 的公共面，让同一套 flag 保存/恢复
+// 助手能被单测与基准共用。
+type testHandle interface {
+	Helper()
+	Cleanup(func())
+}
+
+func restoreVMwareFlags(t testHandle) {
 	t.Helper()
 
 	oldUser := *vmwUser
