@@ -462,6 +462,7 @@ scrape_configs:
 | `-file` | string | 指定配置文件的路径。 | - |
 | `-web.config.file` | string | Web 配置文件路径，用于给 exporter 自身的监听端口启用 TLS 与 HTTP Basic Auth。详见[安全加固](#安全加固)。 | - |
 | `-web.debug-console` | bool | 是否在 `/debug` 与 `/config` 提供交互式页面。传 `=false` 会让这两条路由彻底不存在（返回 404），而不是渲染一张空页面。详见[调试页](#调试页)与[配置生成页](#配置生成页)。 | `true` |
+| `-web.enable-pprof` | bool | 是否在 `/debug/pprof/` 暴露 Go 运行时剖析端点（CPU、堆、goroutine、执行轨迹）。默认 `false`。排查高 CPU/内存时临时开启——`go tool pprof http://<主机>:9169/debug/pprof/profile?seconds=30`——抓完即关。不要在不可信网络上长期开启：这些端点会暴露 goroutine 栈并产生采样开销。 | `false` |
 | `-disable.exporter.metrics` | bool | 是否**不**在 `/metrics` 中导出 exporter 自身的运行指标（`go_*`、`process_*`）。 | `true` |
 | `-disable.exporter.target` | bool | 是否禁用 `/metrics` 的默认采集目标。开启后 `/metrics` 只返回 exporter 自身指标，vCenter 数据改由 `/probe` 提供。 | `false` |
 | `-metrics.legacy` | bool | 是否在导出规范化指标名的同时，一并导出改名前的旧指标名。如果你自己的 dashboard 或告警规则还在用旧名，可以打开它过渡；详见[指标命名](#指标命名)。仓库自带的 Grafana dashboard 已改用新名，不需要这个开关。 | `false` |
