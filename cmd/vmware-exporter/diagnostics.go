@@ -7,6 +7,15 @@ import (
 
 // registerDiagnostics 按需挂载 Go 运行时的 profiling 端点（net/http/pprof）。
 //
+// 致命陷阱：传入的 mux 绝不能是 http.DefaultServeMux。
+//
+//	import net/http/pprof 会在包的 init() 里把 /debug/pprof/ 系列以 Go 1.22+
+//	的「带方法」模式（如 "GET /debug/pprof/cmdline"）注册进 DefaultServeMux。
+//	本函数又按 flag 在同一 mux 上注册「不带方法」的同名路径。两种模式一个
+//	路径更具体、一个方法更少，ServeMux 判定为冲突，在启动期直接 panic
+//	（"conflicts with pattern …"），进程无法启动。main 因此改用一个全新的
+//	ServeMux（pprof init 碰不到它），端点仍只由 -web.enable-pprof 精确控制。
+//
 // 为什么默认不挂载、要单独开一个 flag：
 //
 //	profiling 端点是强力的排障工具，也是一个不该对不可信网络敞开的面。
@@ -26,9 +35,9 @@ func registerDiagnostics(mux *http.ServeMux, enable bool) {
 	}
 
 	// net/http/pprof 没有提供一次性挂载全部处理器的辅助函数，它在自己的
-	// init() 里把处理器注册到 http.DefaultServeMux。这里不能依赖那个副作用
-	// （DefaultServeMux 是全局的，且测试要用隔离的 mux），所以用 Handler/
-	// HandlerFunc 显式逐个挂载，与 net/http/pprof 的 init 完全同源。
+	// init() 里把处理器注册到 http.DefaultServeMux（故必须传入非该 mux）。
+	// 这里用 Handler/HandlerFunc 显式逐个挂载，与 net/http/pprof 的 init
+	// 完全同源，使端点受 flag 控制而非 import 副作用。
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)

@@ -263,18 +263,28 @@ func main() {
 	vmware.Load(logger)
 	vmwareCollectors.Load(logger)
 
+	// 专用的 ServeMux，而不是 http.DefaultServeMux。
+	//
+	// 为什么不能用 DefaultServeMux：import net/http/pprof 会在它的 init() 里
+	// 把 /debug/pprof/ 系列以 Go 1.22+ 的「带方法」模式（GET /debug/pprof/…）
+	// 注册进 DefaultServeMux；而 registerDiagnostics 又要在同一个 mux 上按
+	// flag 显式注册不带方法的同名路径 —— 两者模式冲突，ServeMux 在启动时
+	// 直接 panic。换一个全新的、pprof init 碰不到的 mux 后，剖析端点完全由
+	// -web.enable-pprof 决定，默认保持真正关闭。
+	mux := http.NewServeMux()
+
 	// /metrics 端点 - 使用全局 flag 配置的默认凭证（单 vCenter 模式）
 	//
 	// 改动前这里是 exporter.CreateHandler(...)，由框架内部去查它自己的
 	// collector 注册表。现在两条路径（/metrics 与 /probe）都走
 	// internal/collector.CollectorSet，调度逻辑只有一份。
-	http.Handle("/metrics", metricsHandler(logger))
+	mux.Handle("/metrics", metricsHandler(logger))
 
 	// /probe 端点 - 支持多 target 和独立凭证（多 vCenter 模式）
-	http.HandleFunc("/probe", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/probe", func(w http.ResponseWriter, r *http.Request) {
 		probeHandler(w, r, logger)
 	})
-	if err := registerUI(http.DefaultServeMux, logger, *debugConsole); err != nil {
+	if err := registerUI(mux, logger, *debugConsole); err != nil {
 		logger.Error("could not register the web UI", "error", err)
 		os.Exit(1)
 	}
@@ -282,7 +292,7 @@ func main() {
 	// 运行时剖析端点（默认关闭）。启动期裸读 *enablePprof，与上面的
 	// *debugConsole 同属「只在启动读一次」的刻意用法；reload goroutine 在
 	// 这之后才启动（见下方 handleReloadSignals），故不构成竞争窗口。
-	registerDiagnostics(http.DefaultServeMux, *enablePprof)
+	registerDiagnostics(mux, *enablePprof)
 
 	// SIGHUP -> 重新读 -file 与环境变量。
 	//
@@ -321,7 +331,7 @@ func main() {
 
 	server := newHTTPServer()
 	// 统一安全响应头（S-08），包住整个 mux，/metrics、/probe、UI 全覆盖。
-	server.Handler = securityHeaders(http.DefaultServeMux)
+	server.Handler = securityHeaders(mux)
 
 	if err := web.ListenAndServe(server, webConfig(listenAddress), logger); err != nil {
 		logger.Error("listen and serve failed", "error", err)
