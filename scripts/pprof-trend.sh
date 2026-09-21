@@ -53,16 +53,22 @@ while :; do
   echo "==> [第 ${n} 轮] $(date '+%F %T') 已运行约 ${ELAPSED_MIN} 分钟"
 
   # 1) goroutine 总数：首行形如 "goroutine profile: total 37"。
-  GOROUTINES="$(curl -fsS "${BASE}/debug/pprof/goroutine?debug=1" \
-    | awk -F'total ' '/^goroutine profile:/{print $2; exit}')"
+  #
+  # 必须先把整个响应读进变量、再交给 awk，不能 curl | awk：awk 取到首行后
+  # 就 exit 关闭管道，而 curl 还在写后面的 goroutine 栈，会触发
+  # "curl: (23) Failure writing output to destination" 并在 pipefail 下中止。
+  GOROUTINE_TXT="$(curl -fsS "${BASE}/debug/pprof/goroutine?debug=1")"
+  GOROUTINES="$(printf '%s\n' "${GOROUTINE_TXT}" \
+    | awk -F'total ' '/^goroutine profile:/{print $2}')"
   GOROUTINES="${GOROUTINES:-NA}"
 
   # 2) 堆：debug=1 文本形如 "# HeapInuse = 3514368"（4 个字段），数字取第 4 列。
+  # awk 不提前 exit：让 printf 把整段写完，避免管道提前关闭。
   HEAP_TXT="$(curl -fsS "${BASE}/debug/pprof/heap?debug=1")"
   HEAP_INUSE="$(printf '%s\n' "${HEAP_TXT}" \
-    | awk '/^# HeapInuse/{print $4; exit}')"
+    | awk '/^# HeapInuse/{print $4}')"
   HEAP_OBJECTS="$(printf '%s\n' "${HEAP_TXT}" \
-    | awk '/^# HeapObjects/{print $4; exit}')"
+    | awk '/^# HeapObjects/{print $4}')"
   HEAP_INUSE="${HEAP_INUSE:-NA}"
   HEAP_OBJECTS="${HEAP_OBJECTS:-NA}"
 
