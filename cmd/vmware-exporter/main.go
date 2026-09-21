@@ -145,6 +145,12 @@ var inventoryCache = collector.NewInventoryCache()
 // 传入，因此 SIGHUP 改值立即生效。刻意不传给 probeHandler。
 var counterCache = vmware.NewCounterCache()
 
+// providerSummaryCache 是 /metrics 路径共享的进程级采样间隔协商缓存单例
+// （QueryPerfProviderSummary 按 target+About 版本/build+entity.Type 缓存）。
+// TTL 由 -scrape.perf-interval-cache-ttl 的配置快照在每次登录闭包里传入，
+// SIGHUP 改值立即生效。刻意不传给 probeHandler。
+var providerSummaryCache = vmware.NewProviderSummaryCache()
+
 // HTTP server 超时。不设 WriteTimeout：一次抓取可能跑满 -vmware.timeout
 // （默认 60s），WriteTimeout 会从读完请求头开始计时并掐断正常的慢响应；
 // 抓取时长本就由 -vmware.timeout 与请求 context 兜住。

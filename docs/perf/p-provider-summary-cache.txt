@@ -1,0 +1,50 @@
+采样间隔协商（QueryPerfProviderSummary）进程级缓存：before/after 对照
+================================================================
+
+日期：2026-09-21
+环境：darwin/amd64, Intel Core i5-7360U @ 2.30GHz。
+模型：simulator.VPX()，1 datacenter / 1 standalone host / 1 datastore
+      （setupPerfIntervalBench）。
+采集：
+
+  go test ./vmware/api/ -run '^$' \
+    -bench 'ProviderSummary' -benchmem -benchtime=100x
+
+场景复刻生产：每轮抓取都重新登录（performance.Manager 每登录新建），登录后
+对 HostSystem、VirtualMachine、Datastore 三类各协商一次采样间隔。
+
+------------------------------------------------------
+before  BenchmarkProviderSummaryLive     100  5012207 ns/op  606270 B/op  5723 allocs/op
+after   BenchmarkProviderSummaryCached   100  3338182 ns/op  391071 B/op  4474 allocs/op
+
+差异：时间 -33%，B/op -35%，allocs/op -22%。
+含义：三类实体的 QueryPerfProviderSummary 协商往返从「每轮 3 次跨网络 SOAP」
+收成「每种 entity.Type 一个 TTL 内只发一次」，之后命中进程级缓存、0 往返。
+
+------------------------------------------------------
+为什么需要它（一个 govmomi 名实不符的坑）
+------------------------------------------------------
+govmomi 的 performance.Manager.ProviderSummary 文档注释写着
+"caching the value based on entity.Type"，但 v0.56.0 的实现里**根本没有缓存**
+（performance/manager.go:170，每次都发 QueryPerfProviderSummary）。即便它将来
+补上缓存，本项目 Manager 每登录新建，per-Manager 缓存也救不了跨登录的重复
+往返。于是默认配置下每个 scrape 周期固定多花约 3 次跨网络往返。
+
+------------------------------------------------------
+缓存设计
+------------------------------------------------------
+- 缓存的是原始 *types.PerfProviderSummary，键 =
+  target|About.Version|About.Build|entity.Type。同一目标同一版本下，同类型实体
+  的能力（CurrentSupported/SummarySupported/RefreshRate）是目标级的，与具体
+  实体无关 —— 这正是 govmomi 注释里 "based on entity.Type" 的粒度。
+- 进程级缓存在 vmware/api，经 Scrape.ProviderSummary 闭包注入；协商与 ESXi
+  纠偏逻辑（delta/历史间隔/ESXi 强制退回实时）仍每轮实时运行，缓存只省 SOAP。
+- 边界与 CounterCache/InventoryCache 完全一致：仅单一服务级凭证的 /metrics 路径
+  注入；/probe 多租户走 NewAPI()、闭包为 nil、每请求实时协商。
+- 失败不缓存、并发未命中 singleflight 合并、store 时回收过期 entry（升级换
+  build 不会让 map 无限增长）。
+- 新 flag -scrape.perf-interval-cache-ttl（默认 10m，0 关闭），SIGHUP 热重载。
+
+公平性说明：before 基线也开着已交付的 P-03 CounterCache（NewAPIWithCaches
+counter, nil），因此上面的差异被精确隔离到「三次采样间隔协商」，没有重复
+计入计数器元数据缓存收益。指标输出（采样间隔与最终序列）逐字不变。

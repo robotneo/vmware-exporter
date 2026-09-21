@@ -128,6 +128,7 @@ func (c *datastoreCollector) Update(ctx context.Context, ch chan<- prometheus.Me
 		interval = resolvePerfIntervalForTarget(
 			ctx,
 			s.Perf,
+			s.ProviderSummary,
 			datastoreRefs[0],
 			s.Interval,
 			historicIntervalID,

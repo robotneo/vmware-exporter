@@ -211,7 +211,8 @@ func TestResolvePerfIntervalForTargetRejectsHistoricOnESXi(t *testing.T) {
 			plain, historicIntervalID)
 	}
 
-	got := resolvePerfIntervalForTarget(ctx, perf, dsRef, 20, historicIntervalID, targetTypeESXi, testLogger())
+	// resolve 传 nil：这些用例直接打 simulator 的实时 Manager，不接进程级缓存。
+	got := resolvePerfIntervalForTarget(ctx, perf, nil, dsRef, 20, historicIntervalID, targetTypeESXi, testLogger())
 
 	if got == historicIntervalID {
 		t.Fatalf("resolvePerfIntervalForTarget() returned the historic interval %d on ESXi; "+
@@ -232,7 +233,7 @@ func TestResolvePerfIntervalForTargetKeepsHistoricOnVCenter(t *testing.T) {
 
 	dsRef := findRef(t, ctx, client, "Datastore")
 
-	got := resolvePerfIntervalForTarget(ctx, perf, dsRef, 20, historicIntervalID, targetTypeVCenter, testLogger())
+	got := resolvePerfIntervalForTarget(ctx, perf, nil, dsRef, 20, historicIntervalID, targetTypeVCenter, testLogger())
 
 	if got != historicIntervalID {
 		t.Fatalf("resolvePerfIntervalForTarget(vCenter) = %d, want %d; "+
@@ -247,7 +248,7 @@ func TestResolvePerfIntervalForTargetGuardsAgainstZeroRequest(t *testing.T) {
 
 	dsRef := findRef(t, ctx, client, "Datastore")
 
-	got := resolvePerfIntervalForTarget(ctx, perf, dsRef, 0, historicIntervalID, targetTypeESXi, testLogger())
+	got := resolvePerfIntervalForTarget(ctx, perf, nil, dsRef, 0, historicIntervalID, targetTypeESXi, testLogger())
 
 	if got != realtimeFallbackInterval {
 		t.Fatalf("resolvePerfIntervalForTarget(requested=0) = %d, want the fallback %d",

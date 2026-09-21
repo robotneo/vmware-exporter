@@ -221,6 +221,7 @@ func (c *hostCollector) Update(ctx context.Context, ch chan<- prometheus.Metric,
 		interval := resolvePerfIntervalForTarget(
 			ctx,
 			s.Perf,
+			s.ProviderSummary,
 			hostRefs[0],
 			s.Interval,
 			s.Interval,

@@ -203,6 +203,7 @@ func (c *vmCollector) Update(ctx context.Context, ch chan<- prometheus.Metric, s
 		interval := resolvePerfIntervalForTarget(
 			ctx,
 			s.Perf,
+			s.ProviderSummary,
 			vmRefs[0],
 			s.Interval,
 			s.Interval,

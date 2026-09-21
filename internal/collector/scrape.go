@@ -122,7 +122,21 @@ type Scrape struct {
 	// ThrottleSOAP 安装，轮末 CollectorSet 冲入进程级 SOAPStats（P-09）。
 	// limit<=0 未装闸、或登录失败时为 nil，对应指标按零值导出。
 	soapRec *soapRecorder
+
+	// ProviderSummary 解析某类实体的 PerfProviderSummary（采样间隔协商用）。
+	//
+	// 为 nil 时协商直接走 performance.Manager.ProviderSummary 实时调用。
+	// /metrics 路径注入绑定了进程级 ProviderSummaryCache 的闭包（按
+	// target+About 版本/build+entity.Type 缓存，仅省掉跨轮的
+	// QueryPerfProviderSummary 往返；协商与 ESXi 纠偏逻辑本身仍每轮实时跑），
+	// /probe 多租户路径保持 nil 每请求实时 —— 与 Inventory/Counter 缓存同一条
+	// 越权读边界。闭包由 vmware/api 在登录成功后安装。
+	ProviderSummary ProviderSummaryFunc
 }
+
+// ProviderSummaryFunc 返回某实体类型的 PerfProviderSummary。
+// 实现由 api 层提供（进程级缓存或直接 SOAP），collectors 只消费结果。
+type ProviderSummaryFunc func(ctx context.Context, entity types.ManagedObjectReference) (*types.PerfProviderSummary, error)
 
 // IsESXi 报告本次抓取的目标是否为 ESXi 主机而非 vCenter。
 func (s *Scrape) IsESXi() bool {
