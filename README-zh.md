@@ -1,6 +1,24 @@
 ## vmware-exporter
 这是一个简单的 Prometheus 导出器，可从 vCenter 收集各种指标。
 
+## vSphere / vCenter 版本兼容性
+
+本项目基于 govmomi 构建（v0.56.0，vSphere API 9.1 绑定，向后兼容旧端点）。
+
+| vCenter / ESXi 版本 | 兼容结论 | 说明 |
+| --- | --- | --- |
+| **vSphere 8.x**（8.0 U1/U2/U3） | ✅ 完全支持 | 官方支持，推荐版本 |
+| **vSphere 7.x**（7.0 GA/U1/U2/U3） | ✅ 完全支持 | govmomi 官方支持下限即 7.0 |
+| **vSphere 6.7** | 🟡 尽力兼容（best-effort） | 核心 API 齐全，实测可正常出指标，但不在 govmomi 官方支持/测试范围内。vSAN resync 三条指标要求的最低版本正好是 6.7 |
+| **vSphere 6.5** | 🟡 尽力兼容（best-effort） | 通常仍能登录并输出基础指标，但未经官方测试；遇到较新字段/方法时旧端点可能返回 fault，建议先做 `/metrics` 冒烟验证 |
+| **vSphere 6.0** | ⚠️ 不保证 | 未测试、不在支持范围内；可能仍可出部分基础指标，但不建议作为受支持目标 |
+
+补充说明：
+
+- **「官方支持下限 7.0」不等于硬性拒绝 6.x**：客户端通过 `vimServiceVersions.xml` 动态协商端点版本，核心连接层没有版本拦截；6.7/6.5 多数情况下可直接使用，仅无官方承诺。
+- **唯一的显式版本门控**是 vSAN resync 三条指标（`vmware_vsan_resync_*`）需要 vSphere API **6.7+**，低版本上这三条序列会缺失，其余指标不受影响。
+- 直连单台 **ESXi** 主机时同样适用上表，能力边界见下文 [ESXi 模式的能力边界](#esxi-模式的能力边界)。
+
 ## 如何使用
 
 当使用 /metcis 路径时，Exporter 会采集单个 vCenter 主机。 使用 /probe 可以抓取多个 vCenter 主机，但这些 vCenter 主机必须共享凭据（用户名和密码必须相同）。
