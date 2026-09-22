@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔧 Fixed
+
+- **Idle keep-alive connections and their read goroutines lingered after every
+  scrape.** The exporter deliberately builds a fresh `vim25` client per scrape
+  and never reuses connections across scrapes, but the cleanup only called
+  `SessionManager.Logout`, which ends the vCenter session without closing the
+  underlying TCP connection. The idle connections — and each one's read-loop
+  goroutine — stayed alive until the transport's default `IdleConnTimeout`
+  (90s). With the default 20s scrape interval this steadily accumulated four
+  or five rounds' worth of idle connections and goroutines (bounded by the 90s
+  timeout, so not unbounded, but wasteful). A 200-VM simulated scrape showed
+  goroutines climbing by exactly the number of enabled collectors each round
+  (9→15→21…). Cleanup now calls `CloseIdleConnections` after logout, so the
+  connections and their goroutines are reclaimed immediately; goroutine count
+  and heap are flat across rounds. Output metrics are unchanged.
+
 ## [v0.2.1] - 2026-09-21
 
 ### 🩺 Diagnostics
