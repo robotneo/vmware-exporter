@@ -346,6 +346,14 @@ func (vm *VMware) loginWithCredentials(ctx context.Context, creds Credentials,
 		}
 		logoutCancel()
 
+		// 关闭本轮 HTTP transport 残留的空闲 keep-alive 连接。本项目刻意每轮抓取
+		// 新建 client、跨轮不复用连接，但 Logout 只结束 vCenter 会话、并不会断开
+		// 底层 TCP；空闲连接及其读循环 goroutine 会一直挂到 transport 默认的
+		// IdleConnTimeout（90s）才回收。短 scrape_interval（20s）下这会持续积压
+		// 4~5 轮的空闲连接与 goroutine（被 90s 封顶、有界但浪费）。登出后主动
+		// CloseIdleConnections，连接与其 goroutine 在 cleanup 当下即回收。
+		client.CloseIdleConnections()
+
 		cancel()
 	}
 
