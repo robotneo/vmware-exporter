@@ -7,6 +7,24 @@ This is a simple prometheus exporter that collects various metrics from a vCente
 
 [中文文档](./README-zh.md)
 
+## vSphere / vCenter version compatibility
+
+This project is built on govmomi (v0.56.0, vSphere API 9.1 bindings, negotiated down to older endpoints).
+
+| vCenter / ESXi release | Status | Notes |
+| --- | --- | --- |
+| **vSphere 8.x** (8.0 U1/U2/U3) | ✅ Fully supported | Officially supported, recommended |
+| **vSphere 7.x** (7.0 GA/U1/U2/U3) | ✅ Fully supported | govmomi's official floor is 7.0 |
+| **vSphere 6.7** | 🟡 Best-effort | The core APIs exist and it scrapes fine in practice, but it is outside govmomi's officially supported/tested range. The vSAN resync metrics require exactly 6.7 or later |
+| **vSphere 6.5** | 🟡 Best-effort | It usually still logs in and emits the base metrics, but it is untested by govmomi; newer fields/methods may return a fault on the older endpoint — smoke-test `/metrics` first |
+| **vSphere 6.0** | ⚠️ Not guaranteed | Untested and out of support scope; it may still emit some base metrics but should not be treated as a supported target |
+
+Notes:
+
+- **The "official floor of 7.0" is not a hard block on 6.x.** The client negotiates the endpoint version from `vimServiceVersions.xml` and the core connection layer performs no version check, so 6.7/6.5 generally work; they are simply not officially guaranteed.
+- The **only explicit version gate** is the vSAN resync metrics (`vmware_vsan_resync_*`), which require vSphere API **6.7+**. Those three series are absent on older releases; every other metric is unaffected.
+- The same table applies when connecting directly to a standalone **ESXi** host; see the ESXi capability section below.
+
 ## How to use
 
 Run the exporter in a docker container (or start as a process) with all the settings necessary. Scrape it..
